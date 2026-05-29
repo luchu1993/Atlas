@@ -51,9 +51,6 @@ class CellAppMgr : public ManagerApp {
     TimePoint registered_at{};
     TimePoint last_load_report_at{};
     bool is_retiring{false};
-    bool needs_reattach{false};
-    bool restored_from_snapshot{false};
-    TimePoint last_reattach_watchdog_log_at{};
   };
 
   struct SpacePartition {
@@ -82,29 +79,11 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto SpacesForTest() -> std::unordered_map<SpaceID, SpacePartition>& {
     return spaces_;
   }
-  void ApplyReattachRegistryAuditForTest(std::span<const machined::ProcessInfo> infos);
-  void OnReattachRegistryAuditForTest(std::vector<machined::ProcessInfo> infos);
-  void AuditReattachWatchdogForTest() { AuditReattachWatchdog(); }
   void BackdateCellAppRegistrationForTest(const Address& addr, Duration age) {
     if (auto it = cellapps_.find(addr); it != cellapps_.end()) {
       it->second.registered_at = Clock::now() - age;
     }
   }
-
-  [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
-  [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
-  void ResetSnapshotStateForTest() {
-    last_snapshot_attempt_at_ = {};
-    last_snapshot_save_at_ = {};
-    last_snapshot_save_path_.clear();
-    last_snapshot_save_error_.clear();
-    last_snapshot_save_warning_at_ = {};
-    snapshot_save_count_ = 0;
-    snapshot_save_failure_count_ = 0;
-    snapshot_failure_count_ = 0;
-  }
-  [[nodiscard]] auto SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void>;
-  [[nodiscard]] auto RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void>;
 
   void TickLoadBalance();
 
@@ -132,32 +111,7 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto BuildTopologyFingerprint() const -> std::string;
   [[nodiscard]] auto BuildPendingSpaceCreateSummary() const -> std::string;
   [[nodiscard]] auto BuildRetireStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildSnapshotStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildSnapshotRestoreStatusSummary() const -> std::string;
-  [[nodiscard]] auto SnapshotFilePathForWatcher() const -> std::string;
-  [[nodiscard]] auto SnapshotFilePresentForWatcher() const -> bool;
-  [[nodiscard]] auto SnapshotFileBytesForWatcher() const -> uint64_t;
-  [[nodiscard]] auto BuildSnapshotFileStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildSnapshotFileTopologyStatusSummary() const -> std::string;
-  [[nodiscard]] auto SnapshotBackupPathForWatcher() const -> std::string;
-  [[nodiscard]] auto SnapshotBackupPresentForWatcher() const -> bool;
-  [[nodiscard]] auto SnapshotBackupBytesForWatcher() const -> uint64_t;
-  [[nodiscard]] auto BuildSnapshotBackupStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildSnapshotBackupTopologyStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildSnapshotTopologyStatusSummary(const std::filesystem::path& path,
-                                                        const std::string& expected_topology) const
-      -> std::string;
-  [[nodiscard]] auto ReattachStateForWatcher() const -> std::string;
-  [[nodiscard]] auto BuildReattachStatusSummary() const -> std::string;
-  [[nodiscard]] auto RestoreGateActiveForWatcher() const -> bool;
-  // True while topology mutation (LB / grow / split-merge / retire) must stay
-  // frozen: either snapshot-seeded reattach is still pending, or we are inside
-  // the startup recovery window waiting for live workers to report their BSP.
-  [[nodiscard]] auto RestoreGateActive() const -> bool;
   [[nodiscard]] auto RecoveryWindowActive() const -> bool;
-  [[nodiscard]] auto PendingGeometryRestoreGateBlockedCount() const -> std::size_t;
-  [[nodiscard]] auto BuildRestoreGateStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildReattachRegistryStatusSummary() const -> std::string;
   [[nodiscard]] auto BuildLbDecisionSummary() const -> std::string;
   [[nodiscard]] auto BuildLbDecisionHistorySummary() const -> std::string;
   [[nodiscard]] auto FormatLbDecision(const LbDecision& decision) const -> std::string;
@@ -177,26 +131,12 @@ class CellAppMgr : public ManagerApp {
       -> std::string;
   [[nodiscard]] auto AppIdForAddress(const Address& addr) const -> uint32_t;
   [[nodiscard]] auto AssignableCellAppCount() const -> std::size_t;
-  [[nodiscard]] auto RestoredCellAppCount() const -> std::size_t;
-  [[nodiscard]] auto PendingReattachCellAppCount() const -> std::size_t;
-  [[nodiscard]] auto CompletedReattachCellAppCount() const -> std::size_t;
-  [[nodiscard]] auto StuckReattachCellAppCount() const -> std::size_t;
-  [[nodiscard]] auto ReattachCompleted() const -> bool;
   [[nodiscard]] auto StaleLoadReportCount() const -> std::size_t;
   [[nodiscard]] auto RetiringCellAppCount() const -> std::size_t;
   [[nodiscard]] auto RetireDrainCount() const -> std::size_t;
   [[nodiscard]] auto RetireStuckDrainCount() const -> std::size_t;
   [[nodiscard]] auto RetiringAppIdForWatcher() const -> uint32_t;
   [[nodiscard]] auto SetRetiringAppId(uint32_t app_id) -> bool;
-  [[nodiscard]] auto LastSnapshotAttemptAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotSaveAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotDirtyAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotRestoreAttemptAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotRestoreAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto SnapshotSaveStaleForWatcher() const -> bool;
-  [[nodiscard]] auto SnapshotSizeHighWaterPct() const -> uint32_t;
-  void MarkSnapshotDirty(const char* reason);
-  void SaveConfiguredSnapshot(const char* context);
   void RecordLbDecision(std::string action, std::string reason, SpaceID space_id,
                         cellappmgr::CellID cell_id, cellappmgr::CellID target_cell_id,
                         uint32_t source_app_id, uint32_t target_app_id,
@@ -204,19 +144,6 @@ class CellAppMgr : public ManagerApp {
   [[nodiscard]] auto HandleRetireDrainReport(
       const Address& source_addr, const cellappmgr::InformCellLoad::CellReport& rep) -> bool;
   [[nodiscard]] auto IsRetireDrainStuck(const RetireDrain& drain, TimePoint now) const -> bool;
-  [[nodiscard]] auto IsReattachStuck(const CellAppInfo& info, TimePoint now) const -> bool;
-  [[nodiscard]] auto CellAppOwnsAnyLeaf(const Address& addr) const -> bool;
-  [[nodiscard]] auto HasAssignableCellAppExcept(const Address& addr) const -> bool;
-  struct ReattachRegistryAuditResult {
-    std::size_t missing{0};
-    std::size_t blocked{0};
-    std::size_t reconciled{0};
-  };
-  void AuditReattachRegistry();
-  void OnReattachRegistryAudit(std::vector<machined::ProcessInfo> infos);
-  [[nodiscard]] auto ApplyReattachRegistryAudit(std::span<const machined::ProcessInfo> infos)
-      -> ReattachRegistryAuditResult;
-
   // Sorted ascending by (load, app_id) for deterministic multi-cell
   // bootstrap; retiring CellApps are excluded.
   [[nodiscard]] auto SortedHostsForBootstrap(std::size_t max) const
@@ -255,7 +182,6 @@ class CellAppMgr : public ManagerApp {
   // dead/slow receiver doesn't stall the cluster.
   void DrainPendingGeometryBroadcasts();
   void AuditRetireDrainWatchdog();
-  void AuditReattachWatchdog();
   void MarkRetireDrainGeometryPublished(SpaceID space_id, cellappmgr::CellID cell_id,
                                         const Address& target_addr);
   void SendRegisterCellAppAck(Channel* ch, const Address& addr, uint32_t app_id, bool success,
@@ -371,46 +297,6 @@ class CellAppMgr : public ManagerApp {
 
   std::unordered_map<Address, Channel*> baseapps_;
 
-  TimePoint last_snapshot_attempt_at_{};
-  TimePoint last_snapshot_save_at_{};
-  TimePoint last_snapshot_restore_attempt_at_{};
-  TimePoint last_snapshot_restore_at_{};
-  uint64_t snapshot_save_count_{0};
-  uint64_t snapshot_restore_count_{0};
-  uint64_t snapshot_fallback_restore_count_{0};
-  uint64_t snapshot_save_failure_count_{0};
-  uint64_t snapshot_restore_failure_count_{0};
-  uint64_t snapshot_failure_count_{0};
-  // Counts main file → .bak preservation skipped because the current main
-  // file failed envelope validation. Each skip means .bak lags the new main
-  // file by one save; ops watch for sustained non-zero growth.
-  uint64_t snapshot_backup_skip_count_{0};
-  std::size_t last_snapshot_bytes_{0};
-  std::filesystem::path last_snapshot_save_path_;
-  std::string last_snapshot_save_topology_;
-  std::size_t last_snapshot_save_topology_pending_ack_{0};
-  std::string last_snapshot_save_error_;
-  TimePoint last_snapshot_save_warning_at_{};
-  TimePoint last_snapshot_size_warning_at_{};
-  bool snapshot_dirty_{false};
-  TimePoint snapshot_dirty_at_{};
-  std::string snapshot_dirty_reason_;
-  std::string last_snapshot_restore_source_{"none"};
-  std::filesystem::path last_snapshot_restore_path_;
-  std::string last_snapshot_restore_topology_;
-  std::size_t last_snapshot_restore_topology_pending_ack_{0};
-  std::string last_snapshot_restore_error_;
-  std::string last_snapshot_restore_primary_error_;
-  TimePoint last_reattach_registry_audit_at_{};
-  bool reattach_registry_audit_pending_{false};
-  uint64_t reattach_registry_audit_count_{0};
-  uint64_t reattach_registry_reconciled_total_{0};
-  uint64_t reattach_force_resolved_total_{0};
-  std::size_t last_reattach_registry_missing_{0};
-  std::size_t last_reattach_registry_blocked_{0};
-  std::size_t last_reattach_registry_reconciled_{0};
-  std::string last_reattach_registry_error_;
-
   // EntityID high byte is app_id; app_id 0 remains invalid.
   uint32_t next_cellapp_app_id_{1};
 
@@ -429,8 +315,6 @@ class CellAppMgr : public ManagerApp {
   // Past this window we broadcast geometry without the ack; OnCellAppDeath
   // will rehome the leaf if the receiver is actually dead.
   static constexpr Duration kPendingGeometryTimeout = Milliseconds(500);
-  static constexpr Duration kDirtySnapshotFlushInterval = Milliseconds(1000);
-  static constexpr Duration kReattachRegistryAuditInterval = Milliseconds(1000);
   static constexpr Duration kStartupQuiescenceWindowDefault =
       std::chrono::duration_cast<Duration>(std::chrono::seconds(2));
   Duration startup_quiescence_window_{kStartupQuiescenceWindowDefault};

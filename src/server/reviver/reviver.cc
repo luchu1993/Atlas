@@ -81,9 +81,7 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.configured_name = Config().revive_cellappmgr_name;
     t.exe = Config().revive_cellappmgr_exe;
     t.internal_port = Config().revive_cellappmgr_internal_port;
-    t.snapshot_path = Config().revive_cellappmgr_snapshot_path;
     t.output_path = Config().revive_cellappmgr_output_path;
-    t.snapshot_interval_ms = Config().revive_cellappmgr_snapshot_interval_ms;
     t.update_hertz = Config().revive_cellappmgr_update_hertz;
     t.launch_timeout_ms = Config().revive_cellappmgr_launch_timeout_ms;
     t.health_interval_ms = Config().revive_cellappmgr_health_interval_ms;
@@ -98,9 +96,7 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.configured_name = Config().revive_baseappmgr_name;
     t.exe = Config().revive_baseappmgr_exe;
     t.internal_port = Config().revive_baseappmgr_internal_port;
-    t.snapshot_path = Config().revive_baseappmgr_snapshot_path;
     t.output_path = Config().revive_baseappmgr_output_path;
-    t.snapshot_interval_ms = Config().revive_baseappmgr_snapshot_interval_ms;
     t.update_hertz = Config().revive_baseappmgr_update_hertz;
     t.launch_timeout_ms = Config().revive_baseappmgr_launch_timeout_ms;
     // BaseAppMgr reuses CellAppMgr's per-target timing knobs for now;
@@ -258,17 +254,6 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
                    std::function<uint64_t()>([&t] { return t.heartbeat_timeout_count; }));
   wr.Add<uint64_t>(root + "/heartbeat_last_game_time",
                    std::function<uint64_t()>([&t] { return t.heartbeat_last_game_time; }));
-  wr.Add<uint64_t>(root + "/heartbeat_snapshot_saves",
-                   std::function<uint64_t()>([&t] { return t.heartbeat_snapshot_saves; }));
-  wr.Add<uint64_t>(root + "/heartbeat_snapshot_failures",
-                   std::function<uint64_t()>([&t] { return t.heartbeat_snapshot_failures; }));
-  wr.Add<bool>(root + "/heartbeat_snapshot_dirty",
-               std::function<bool()>([&t] { return t.heartbeat_snapshot_dirty; }));
-  wr.Add<bool>(root + "/heartbeat_snapshot_save_stale",
-               std::function<bool()>([&t] { return t.heartbeat_snapshot_save_stale; }));
-  wr.Add<std::string>(root + "/heartbeat_snapshot_status",
-                      std::function<std::string()>(
-                          [this, &t] { return TargetHeartbeatSnapshotStatus(t); }));
   wr.Add<uint64_t>(root + "/forced_terminations",
                    std::function<uint64_t()>([&t] { return t.forced_termination_count; }));
   wr.Add<uint64_t>(root + "/registry_audits",
@@ -376,10 +361,6 @@ void Reviver::RememberTarget(ManagedTarget& t, std::string_view name, const Addr
   t.manager_health_failure_streak = 0;
   t.registry_missing_streak = 0;
   t.heartbeat_last_game_time = 0;
-  t.heartbeat_snapshot_saves = 0;
-  t.heartbeat_snapshot_failures = 0;
-  t.heartbeat_snapshot_dirty = false;
-  t.heartbeat_snapshot_save_stale = false;
   t.last_error.clear();
   ATLAS_LOG_INFO("Reviver: {} active name={} pid={} addr={}", t.slug, name, pid, addr.ToString());
 }
@@ -647,9 +628,7 @@ void Reviver::AuditTargetHeartbeat(ManagedTarget& t) {
 }
 
 void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
-                                 uint64_t game_time, uint64_t snapshot_saves,
-                                 uint64_t snapshot_failures, bool snapshot_dirty,
-                                 bool snapshot_save_stale) {
+                                 uint64_t game_time) {
   if (!t.active) return;
   if (src != t.last_addr) return;
   if (!t.heartbeat_pending || nonce != t.heartbeat_pending_nonce) return;
@@ -661,23 +640,17 @@ void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t 
   t.last_error.clear();
   t.heartbeat_last_ack_at = Clock::now();
   t.heartbeat_last_game_time = game_time;
-  t.heartbeat_snapshot_saves = snapshot_saves;
-  t.heartbeat_snapshot_failures = snapshot_failures;
-  t.heartbeat_snapshot_dirty = snapshot_dirty;
-  t.heartbeat_snapshot_save_stale = snapshot_save_stale;
   ++t.heartbeat_ack_count;
 }
 
 void Reviver::OnCellAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const cellappmgr::HealthProbeAck& msg) {
-  RecordHeartbeatAck(cellappmgr_target_, src, msg.nonce, msg.game_time, msg.snapshot_saves,
-                     msg.snapshot_failures, msg.snapshot_dirty, msg.snapshot_save_stale);
+  RecordHeartbeatAck(cellappmgr_target_, src, msg.nonce, msg.game_time);
 }
 
 void Reviver::OnBaseAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const baseappmgr::HealthProbeAck& msg) {
-  RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time, msg.snapshot_saves,
-                     msg.snapshot_failures, msg.snapshot_dirty, msg.snapshot_save_stale);
+  RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time);
 }
 
 void Reviver::AuditTargetHealth(ManagedTarget& t) {
@@ -899,15 +872,6 @@ void Reviver::LaunchTarget(ManagedTarget& t) {
       "--internal-port", std::to_string(port),
       "--machined", Config().machined_address.ToString(),
       "--update-hertz", std::to_string(t.update_hertz)});
-  const auto snapshot_path = t.snapshot_path.empty() ? Config().snapshot_path : t.snapshot_path;
-  if (!snapshot_path.empty()) {
-    args.push_back("--snapshot-path");
-    args.push_back(snapshot_path.string());
-    const int snapshot_interval_ms =
-        t.snapshot_interval_ms >= 0 ? t.snapshot_interval_ms : Config().snapshot_interval_ms;
-    args.push_back("--snapshot-interval-ms");
-    args.push_back(std::to_string(std::max(0, snapshot_interval_ms)));
-  }
 
   ProcessLaunchOptions opts;
   opts.exe = exe;
@@ -951,14 +915,13 @@ auto Reviver::ResolveLeaderLockPath(const ManagedTarget& t) const -> std::filesy
     return std::filesystem::absolute(t.leader_lock_path);
   }
   // cellappmgr honors the legacy --revive-leader-lock-path top-level flag;
-  // baseappmgr requires --revive-baseappmgr-leader-lock-path (or snapshot dir).
+  // baseappmgr requires --revive-baseappmgr-leader-lock-path (or output dir).
   if (t.process_type == ProcessType::kCellAppMgr && !Config().revive_leader_lock_path.empty()) {
     return std::filesystem::absolute(Config().revive_leader_lock_path);
   }
   const auto target_name = SanitizeLockSegment(t.configured_name);
   const uint16_t port = t.internal_port;
-  auto base = t.snapshot_path.parent_path();
-  if (base.empty()) base = Config().snapshot_path.parent_path();
+  auto base = t.output_path.parent_path();
   if (base.empty()) base = fs::TempDirectory();
   return base / std::format("atlas_reviver_{}_{}.lock", target_name, port);
 }
@@ -979,29 +942,6 @@ auto Reviver::TargetStatus(const ManagedTarget& t) const -> std::string {
 
 auto Reviver::HeartbeatLastAckAgeMsForWatcher(const ManagedTarget& t) const -> int64_t {
   return AgeMsSince(t.heartbeat_last_ack_at);
-}
-
-auto Reviver::TargetHeartbeatSnapshotStatus(const ManagedTarget& t) const -> std::string {
-  const char* state = "unknown";
-  if (!t.active) {
-    state = "inactive";
-  } else if (t.heartbeat_last_ack_at.time_since_epoch() == Duration::zero()) {
-    state = "unknown";
-  } else if (t.heartbeat_snapshot_failures > 0) {
-    state = "failed";
-  } else if (t.heartbeat_snapshot_dirty) {
-    state = "dirty";
-  } else if (t.heartbeat_snapshot_save_stale) {
-    state = "stale";
-  } else {
-    state = "ready";
-  }
-  return std::format("state={} saves={} failures={} dirty={} stale={} game_time={} "
-                     "ack_age_ms={}",
-                     state, t.heartbeat_snapshot_saves, t.heartbeat_snapshot_failures,
-                     t.heartbeat_snapshot_dirty ? 1 : 0,
-                     t.heartbeat_snapshot_save_stale ? 1 : 0, t.heartbeat_last_game_time,
-                     HeartbeatLastAckAgeMsForWatcher(t));
 }
 
 }  // namespace atlas

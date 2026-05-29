@@ -71,15 +71,10 @@ struct ServerConfig {
 
   bool is_production = false;
 
-  std::filesystem::path snapshot_path;
-  int snapshot_interval_ms{1000};
-
   std::filesystem::path revive_cellappmgr_exe;
   std::string revive_cellappmgr_name{"cellappmgr"};
   uint16_t revive_cellappmgr_internal_port{0};
-  std::filesystem::path revive_cellappmgr_snapshot_path;
   std::filesystem::path revive_cellappmgr_output_path;
-  int revive_cellappmgr_snapshot_interval_ms{-1};
   int revive_cellappmgr_update_hertz{10};
   int revive_cellappmgr_launch_timeout_ms{5000};
 
@@ -89,9 +84,7 @@ struct ServerConfig {
   std::filesystem::path revive_baseappmgr_exe;
   std::string revive_baseappmgr_name{"baseappmgr"};
   uint16_t revive_baseappmgr_internal_port{0};
-  std::filesystem::path revive_baseappmgr_snapshot_path;
   std::filesystem::path revive_baseappmgr_output_path;
-  int revive_baseappmgr_snapshot_interval_ms{-1};
   int revive_baseappmgr_update_hertz{10};
   int revive_baseappmgr_launch_timeout_ms{5000};
   bool revive_baseappmgr_on_start{false};

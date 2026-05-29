@@ -290,13 +290,9 @@ static_assert(NetworkMessage<HealthProbe>);
 struct HealthProbeAck {
   uint64_t nonce{0};
   uint64_t game_time{0};
-  uint64_t snapshot_saves{0};
-  uint64_t snapshot_failures{0};
-  bool snapshot_dirty{false};
-  bool snapshot_save_stale{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    constexpr int kSerializedSize = static_cast<int>(4 * sizeof(uint64_t) + 2);
+    constexpr int kSerializedSize = static_cast<int>(2 * sizeof(uint64_t));
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck),
                                    "cellappmgr::HealthProbeAck",
                                    MessageLengthStyle::kFixed,
@@ -309,32 +305,17 @@ struct HealthProbeAck {
   void Serialize(BinaryWriter& w) const {
     w.Write(nonce);
     w.Write(game_time);
-    w.Write(snapshot_saves);
-    w.Write(snapshot_failures);
-    w.Write<uint8_t>(snapshot_dirty ? 1u : 0u);
-    w.Write<uint8_t>(snapshot_save_stale ? 1u : 0u);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<HealthProbeAck> {
     auto value = r.Read<uint64_t>();
     auto tick = r.Read<uint64_t>();
-    auto saves = r.Read<uint64_t>();
-    auto failures = r.Read<uint64_t>();
-    auto dirty = r.Read<uint8_t>();
-    auto stale = r.Read<uint8_t>();
-    if (!value || !tick || !saves || !failures || !dirty || !stale) {
+    if (!value || !tick) {
       return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: truncated"};
-    }
-    if (*dirty > 1 || *stale > 1) {
-      return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: bad flags"};
     }
     HealthProbeAck msg;
     msg.nonce = *value;
     msg.game_time = *tick;
-    msg.snapshot_saves = *saves;
-    msg.snapshot_failures = *failures;
-    msg.snapshot_dirty = *dirty != 0;
-    msg.snapshot_save_stale = *stale != 0;
     return msg;
   }
 };

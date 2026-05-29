@@ -130,22 +130,14 @@ TEST(ServerConfig, FromArgsParsesEntitydefBinPath) {
 
 TEST(ServerConfig, FromArgsParsesHaOptions) {
   FakeArgv args({"exe",
-                 "--snapshot-path",
-                 "snapshots/cellappmgr.bin",
-                 "--snapshot-interval-ms",
-                 "250",
                  "--revive-cellappmgr-exe",
                  "bin/atlas_cellappmgr.exe",
                  "--revive-cellappmgr-name",
                  "cellappmgr_a",
                  "--revive-cellappmgr-port",
                  "31000",
-                 "--revive-cellappmgr-snapshot-path",
-                 "snapshots/revived_cellappmgr.bin",
                  "--revive-cellappmgr-output-path",
                  "logs/revived_cellappmgr.log",
-                 "--revive-cellappmgr-snapshot-interval-ms",
-                 "1250",
                  "--revive-cellappmgr-update-hertz",
                  "25",
                  "--revive-cellappmgr-launch-timeout-ms",
@@ -186,12 +178,8 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "baseappmgr_a",
                  "--revive-baseappmgr-port",
                  "31100",
-                 "--revive-baseappmgr-snapshot-path",
-                 "snapshots/revived_baseappmgr.bin",
                  "--revive-baseappmgr-output-path",
                  "logs/revived_baseappmgr.log",
-                 "--revive-baseappmgr-snapshot-interval-ms",
-                 "1500",
                  "--revive-baseappmgr-update-hertz",
                  "30",
                  "--revive-baseappmgr-launch-timeout-ms",
@@ -202,16 +190,11 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "true"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
   ASSERT_TRUE(r.HasValue()) << r.Error().Message();
-  EXPECT_EQ(r->snapshot_path, std::filesystem::path("snapshots/cellappmgr.bin"));
-  EXPECT_EQ(r->snapshot_interval_ms, 250);
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
-  EXPECT_EQ(r->revive_cellappmgr_snapshot_path,
-            std::filesystem::path("snapshots/revived_cellappmgr.bin"));
   EXPECT_EQ(r->revive_cellappmgr_output_path,
             std::filesystem::path("logs/revived_cellappmgr.log"));
-  EXPECT_EQ(r->revive_cellappmgr_snapshot_interval_ms, 1250);
   EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
   EXPECT_EQ(r->revive_cellappmgr_launch_timeout_ms, 650);
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
@@ -232,11 +215,8 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
   EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
   EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
   EXPECT_EQ(r->revive_baseappmgr_internal_port, 31100);
-  EXPECT_EQ(r->revive_baseappmgr_snapshot_path,
-            std::filesystem::path("snapshots/revived_baseappmgr.bin"));
   EXPECT_EQ(r->revive_baseappmgr_output_path,
             std::filesystem::path("logs/revived_baseappmgr.log"));
-  EXPECT_EQ(r->revive_baseappmgr_snapshot_interval_ms, 1500);
   EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
   EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
   EXPECT_EQ(r->revive_baseappmgr_leader_lock_path,
@@ -257,10 +237,6 @@ TEST(ServerConfig, FromJsonFileParsesEntitydefBinPath) {
 
 TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   auto path = write_temp_json(R"({
-        "snapshot": {
-            "path": "snapshots/cellappmgr.bin",
-            "interval_ms": 250
-        },
         "reviver": {
             "restart_delay_ms": 75,
             "restart_backoff_cap_ms": 8000,
@@ -274,9 +250,7 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
                 "exe": "bin/atlas_cellappmgr.exe",
                 "name": "cellappmgr_a",
                 "internal_port": 31000,
-                "snapshot_path": "snapshots/revived_cellappmgr.bin",
                 "output_path": "logs/revived_cellappmgr.log",
-                "snapshot_interval_ms": 1250,
                 "update_hertz": 25,
                 "launch_timeout_ms": 650,
                 "health_interval_ms": 100,
@@ -291,9 +265,7 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
                 "exe": "bin/atlas_baseappmgr.exe",
                 "name": "baseappmgr_a",
                 "internal_port": 31100,
-                "snapshot_path": "snapshots/revived_baseappmgr.bin",
                 "output_path": "logs/revived_baseappmgr.log",
-                "snapshot_interval_ms": 1500,
                 "update_hertz": 30,
                 "launch_timeout_ms": 700,
                 "leader_lock_path": "run/reviver_baseappmgr.lock",
@@ -303,8 +275,6 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
     })");
   auto r = ServerConfig::FromJsonFile(path);
   ASSERT_TRUE(r.HasValue()) << r.Error().Message();
-  EXPECT_EQ(r->snapshot_path, std::filesystem::path("snapshots/cellappmgr.bin"));
-  EXPECT_EQ(r->snapshot_interval_ms, 250);
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
   EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
@@ -316,11 +286,8 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
-  EXPECT_EQ(r->revive_cellappmgr_snapshot_path,
-            std::filesystem::path("snapshots/revived_cellappmgr.bin"));
   EXPECT_EQ(r->revive_cellappmgr_output_path,
             std::filesystem::path("logs/revived_cellappmgr.log"));
-  EXPECT_EQ(r->revive_cellappmgr_snapshot_interval_ms, 1250);
   EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
   EXPECT_EQ(r->revive_cellappmgr_launch_timeout_ms, 650);
   EXPECT_EQ(r->revive_cellappmgr_health_interval_ms, 100);
@@ -333,11 +300,8 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
   EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
   EXPECT_EQ(r->revive_baseappmgr_internal_port, 31100);
-  EXPECT_EQ(r->revive_baseappmgr_snapshot_path,
-            std::filesystem::path("snapshots/revived_baseappmgr.bin"));
   EXPECT_EQ(r->revive_baseappmgr_output_path,
             std::filesystem::path("logs/revived_baseappmgr.log"));
-  EXPECT_EQ(r->revive_baseappmgr_snapshot_interval_ms, 1500);
   EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
   EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
   EXPECT_EQ(r->revive_baseappmgr_leader_lock_path,

@@ -31,7 +31,6 @@
 #include "serialization/binary_stream.h"
 #include "server/machined_client.h"
 #include "server/server_app_option.h"
-#include "server/snapshot_envelope.h"
 #include "server/watcher.h"
 
 namespace atlas {
@@ -77,17 +76,6 @@ ServerAppOption<uint32_t> s_lb_retire_drain_watchdog_ms{
 ServerAppOption<uint32_t> s_lb_load_report_stale_ms{
     3000u, "cellappmgr_lb_load_report_stale_ms",
     "cellappmgr/lb/load_report_stale_ms", WatcherMode::kReadWrite};
-ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
-    30000u, "cellappmgr_ha_reattach_watchdog_ms",
-    "cellappmgr/ha/reattach_watchdog_ms", WatcherMode::kReadWrite};
-// Deadline after which a reattach-pending CellApp that never reconnects is
-// treated as dead so the restore gate (which freezes LB/grow/split/retire
-// while PendingReattachCellAppCount()>0) cannot stall forever. 0 disables
-// the escape (infinite wait). Effective trigger is max(this, watchdog).
-ServerAppOption<uint32_t> s_ha_reattach_force_resolve_ms{
-    90000u, "cellappmgr_ha_reattach_force_resolve_ms",
-    "cellappmgr/ha/reattach_force_resolve_ms", WatcherMode::kReadWrite};
-
 auto NonNegative(float v) -> float {
   return std::isfinite(v) && v > 0.f ? v : 0.f;
 }
@@ -117,23 +105,15 @@ auto LastLoadReportAt(const CellAppMgr::CellAppInfo& info) -> TimePoint {
 }
 
 auto IsLoadReportStale(const CellAppMgr::CellAppInfo& info, TimePoint now) -> bool {
-  return !info.needs_reattach && now - LastLoadReportAt(info) >= LoadReportStaleWindow();
+  return now - LastLoadReportAt(info) >= LoadReportStaleWindow();
 }
 
 auto HasFreshLoadReport(const CellAppMgr::CellAppInfo& info, TimePoint now) -> bool {
-  return !info.needs_reattach && !IsLoadReportStale(info, now);
+  return !IsLoadReportStale(info, now);
 }
 
 auto IsAssignableForLb(const CellAppMgr::CellAppInfo& info, TimePoint now) -> bool {
   return !info.is_retiring && HasFreshLoadReport(info, now);
-}
-
-auto ReattachWatchdogWindow() -> Duration {
-  return Milliseconds{s_ha_reattach_watchdog_ms.Value()};
-}
-
-auto ReattachForceResolveWindow() -> Duration {
-  return Milliseconds{s_ha_reattach_force_resolve_ms.Value()};
 }
 
 auto MiB(uint64_t bytes) -> float {
@@ -262,150 +242,6 @@ auto BoundsMidpoint(const CellBounds& bounds) -> std::pair<float, float> {
   return {MidCoord(bounds.min_x, bounds.max_x), MidCoord(bounds.min_z, bounds.max_z)};
 }
 
-constexpr uint32_t kSnapshotMagic = 0x314D4143u;
-constexpr uint32_t kSnapshotVersion = 6;
-// 1 GiB ceiling — per-cell load buckets + pending-geometry blobs scale
-// with BSP topology; headroom for ~256 cellapps × ~64 cells/space.
-constexpr uint64_t kMaxSnapshotPayloadBytes = 1024ull * 1024ull * 1024ull;
-constexpr uint64_t kMaxSnapshotFileBytes =
-    kMaxSnapshotPayloadBytes + snapshot_envelope::kEnvelopeBytes;
-constexpr uint32_t kMaxSnapshotEntries = 1024 * 1024;
-constexpr uint32_t kMaxSnapshotBlobBytes = 16 * 1024 * 1024;
-constexpr std::size_t kMaxSnapshotStringBytes = 64 * 1024;
-constexpr std::string_view kSnapshotModuleName = "CellAppMgr";
-
-using snapshot_envelope::PayloadView;
-using snapshot_envelope::FileReadiness;
-using snapshot_envelope::WatcherErrorDetail;
-
-auto SnapshotPayload(std::span<const std::byte> bytes) -> Result<PayloadView> {
-  return snapshot_envelope::ReadPayload(bytes, kSnapshotMagic, kSnapshotVersion,
-                                        kMaxSnapshotPayloadBytes, kSnapshotModuleName);
-}
-
-auto SnapshotBackupPath(const std::filesystem::path& path) -> std::filesystem::path {
-  return snapshot_envelope::BackupPath(path);
-}
-
-auto SnapshotTempPath(const std::filesystem::path& path) -> std::filesystem::path {
-  return snapshot_envelope::TempPath(path);
-}
-
-auto SnapshotFileReadinessForPath(const std::filesystem::path& path, bool validate)
-    -> FileReadiness {
-  return snapshot_envelope::Readiness(path, validate, kSnapshotMagic, kSnapshotVersion,
-                                      kMaxSnapshotFileBytes, kMaxSnapshotPayloadBytes,
-                                      kSnapshotModuleName);
-}
-
-auto PreserveSnapshotBackup(const std::filesystem::path& path) -> Result<void> {
-  return snapshot_envelope::PreserveBackup(path, kSnapshotMagic, kSnapshotVersion,
-                                           kMaxSnapshotPayloadBytes, kSnapshotModuleName);
-}
-
-void WriteAddress(BinaryWriter& w, const Address& addr) {
-  w.Write(addr.Ip());
-  w.Write(addr.Port());
-}
-
-auto ReadAddress(BinaryReader& r, const char* context) -> Result<Address> {
-  auto ip = r.Read<uint32_t>();
-  auto port = r.Read<uint16_t>();
-  if (!ip || !port) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} address truncated", context)};
-  }
-  return Address(*ip, *port);
-}
-
-auto ReadCount(BinaryReader& r, const char* context) -> Result<uint32_t> {
-  auto count = r.ReadPackedInt();
-  if (!count) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} count truncated", context)};
-  }
-  if (*count > kMaxSnapshotEntries) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} count too large", context)};
-  }
-  return *count;
-}
-
-void WriteBlob(BinaryWriter& w, std::span<const std::byte> blob) {
-  w.WritePackedInt(static_cast<uint32_t>(blob.size()));
-  w.WriteBytes(blob);
-}
-
-auto ReadBlob(BinaryReader& r, const char* context) -> Result<std::vector<std::byte>> {
-  auto size = r.ReadPackedInt();
-  if (!size) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} size truncated", context)};
-  }
-  if (*size > kMaxSnapshotBlobBytes) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} blob too large", context)};
-  }
-  auto bytes = r.ReadBytes(*size);
-  if (!bytes) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} blob truncated", context)};
-  }
-  return std::vector<std::byte>(bytes->begin(), bytes->end());
-}
-
-auto ReadSnapshotString(BinaryReader& r, const char* context) -> Result<std::string> {
-  auto size = r.ReadPackedInt();
-  if (!size) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} string truncated", context)};
-  }
-  if (*size > kMaxSnapshotStringBytes) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} string too large", context)};
-  }
-  auto bytes = r.ReadBytes(*size);
-  if (!bytes) {
-    return Error{ErrorCode::kInvalidArgument,
-                 std::format("CellAppMgr snapshot: {} string body truncated", context)};
-  }
-  return std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size());
-}
-
-void WriteBuckets(BinaryWriter& w, const LoadBuckets& buckets) {
-  for (uint32_t bucket : buckets) w.Write(bucket);
-}
-
-void WriteLoadBuckets(BinaryWriter& w, const LoadCostBuckets& buckets) {
-  for (uint64_t bucket : buckets) w.Write(bucket);
-}
-
-auto ReadBuckets(BinaryReader& r, const char* context) -> Result<LoadBuckets> {
-  LoadBuckets buckets{};
-  for (auto& bucket : buckets) {
-    auto value = r.Read<uint32_t>();
-    if (!value) {
-      return Error{ErrorCode::kInvalidArgument,
-                   std::format("CellAppMgr snapshot: {} buckets truncated", context)};
-    }
-    bucket = *value;
-  }
-  return buckets;
-}
-
-auto ReadLoadBuckets(BinaryReader& r, const char* context) -> Result<LoadCostBuckets> {
-  LoadCostBuckets buckets{};
-  for (auto& bucket : buckets) {
-    auto value = r.Read<uint64_t>();
-    if (!value) {
-      return Error{ErrorCode::kInvalidArgument,
-                   std::format("CellAppMgr snapshot: {} load buckets truncated", context)};
-    }
-    bucket = *value;
-  }
-  return buckets;
-}
-
 }  // namespace
 
 auto CellAppMgr::Run(int argc, char* argv[]) -> int {
@@ -420,19 +256,6 @@ CellAppMgr::CellAppMgr(EventDispatcher& dispatcher, NetworkInterface& network)
 
 auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
   if (!ManagerApp::Init(argc, argv)) return false;
-
-  if (!Config().snapshot_path.empty()) {
-    if (auto restore = RestoreSnapshotFromFile(Config().snapshot_path); restore) {
-      ATLAS_LOG_INFO("CellAppMgr: restored HA snapshot source={} path={}",
-                     last_snapshot_restore_source_, last_snapshot_restore_path_.string());
-    } else if (restore.Error().Code() == ErrorCode::kNotFound) {
-      ATLAS_LOG_INFO("CellAppMgr: HA snapshot restore skipped: {}",
-                     restore.Error().Message());
-    } else {
-      ATLAS_LOG_ERROR("CellAppMgr: HA snapshot restore failed: {}", restore.Error().Message());
-      return false;
-    }
-  }
 
   auto& table = Network().InterfaceTable();
 
@@ -496,643 +319,7 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
 }
 
 void CellAppMgr::Fini() {
-  SaveConfiguredSnapshot("shutdown");
   ManagerApp::Fini();
-}
-
-auto CellAppMgr::Snapshot() const -> std::vector<std::byte> {
-  BinaryWriter payload_writer;
-  payload_writer.Write(next_cellapp_app_id_);
-  payload_writer.Write(next_cell_id_);
-  payload_writer.Write(last_balance_tick_);
-  payload_writer.Write(last_retire_app_id_);
-
-  payload_writer.WritePackedInt(static_cast<uint32_t>(cellapps_.size()));
-  for (const auto& [addr, info] : cellapps_) {
-    WriteAddress(payload_writer, addr);
-    payload_writer.Write(info.app_id);
-    payload_writer.Write(info.load);
-    payload_writer.Write(info.entity_count);
-    payload_writer.Write<uint8_t>(info.is_retiring ? 1u : 0u);
-    payload_writer.Write<uint8_t>(info.needs_reattach ? 1u : 0u);
-  }
-
-  payload_writer.WritePackedInt(static_cast<uint32_t>(spaces_.size()));
-  for (const auto& [space_id, partition] : spaces_) {
-    payload_writer.Write(space_id);
-    payload_writer.Write(partition.geometry_version);
-    payload_writer.Write(partition.freeze_epoch);
-    payload_writer.WriteString(partition.space_master_type);
-    BinaryWriter bsp_writer;
-    partition.bsp.Serialize(bsp_writer);
-    const auto bsp_blob = bsp_writer.Detach();
-    WriteBlob(payload_writer, bsp_blob);
-    WriteBlob(payload_writer, partition.last_broadcast_blob);
-    WriteBlob(payload_writer, partition.last_debug_geometry_blob);
-    payload_writer.Write(static_cast<uint64_t>(partition.last_debug_geometry_baseapp_count));
-  }
-
-  payload_writer.WritePackedInt(static_cast<uint32_t>(cell_distributions_.size()));
-  for (const auto& [cell_id, dist] : cell_distributions_) {
-    payload_writer.Write(cell_id);
-    payload_writer.Write(dist.entity_count);
-    payload_writer.Write(dist.median_x);
-    payload_writer.Write(dist.median_z);
-    payload_writer.Write(dist.weighted_load);
-    payload_writer.Write(dist.tick_load);
-    payload_writer.Write(dist.script_tick_us);
-    payload_writer.Write(dist.native_tick_us);
-    payload_writer.Write(dist.witness_count);
-    payload_writer.Write(dist.aoi_peer_count);
-    payload_writer.Write(dist.aoi_reliable_bytes);
-    payload_writer.Write(dist.aoi_unreliable_bytes);
-    payload_writer.Write(dist.backup_bytes);
-    WriteBuckets(payload_writer, dist.x_buckets);
-    WriteBuckets(payload_writer, dist.z_buckets);
-    WriteLoadBuckets(payload_writer, dist.x_load_buckets);
-    WriteLoadBuckets(payload_writer, dist.z_load_buckets);
-  }
-
-  auto write_ticks = [&payload_writer](const auto& ticks) {
-    payload_writer.WritePackedInt(static_cast<uint32_t>(ticks.size()));
-    for (const auto& [cell_id, value] : ticks) {
-      payload_writer.Write(cell_id);
-      payload_writer.Write(value);
-    }
-  };
-  write_ticks(hot_leaf_balance_ticks_);
-  write_ticks(idle_leaf_balance_ticks_);
-
-  payload_writer.WritePackedInt(static_cast<uint32_t>(pending_geometry_broadcasts_.size()));
-  for (const auto& pending : pending_geometry_broadcasts_) {
-    payload_writer.Write(pending.space_id);
-    payload_writer.Write(pending.awaiting_cell_id);
-    WriteAddress(payload_writer, pending.awaiting_addr);
-    payload_writer.Write<uint8_t>(pending.allow_timeout_broadcast ? 1u : 0u);
-    payload_writer.WritePackedInt(static_cast<uint32_t>(pending.extra_recipients.size()));
-    for (const auto& extra : pending.extra_recipients) {
-      WriteAddress(payload_writer, extra.addr);
-      payload_writer.Write(extra.cell_id);
-    }
-  }
-
-  payload_writer.WritePackedInt(static_cast<uint32_t>(retire_drains_.size()));
-  for (const auto& drain : retire_drains_) {
-    payload_writer.Write(drain.space_id);
-    payload_writer.Write(drain.cell_id);
-    WriteAddress(payload_writer, drain.source_addr);
-    WriteAddress(payload_writer, drain.target_addr);
-    payload_writer.Write(drain.last_entity_count);
-    payload_writer.Write<uint8_t>(drain.geometry_published ? 1u : 0u);
-  }
-
-  const auto payload = payload_writer.Detach();
-  return snapshot_envelope::WrapPayload(
-      std::span<const std::byte>(payload.data(), payload.size()), kSnapshotMagic,
-      kSnapshotVersion);
-}
-
-auto CellAppMgr::Restore(std::span<const std::byte> bytes) -> Result<void> {
-  auto snapshot_payload = SnapshotPayload(bytes);
-  if (!snapshot_payload) return snapshot_payload.Error();
-
-  BinaryReader r(snapshot_payload->payload);
-  auto next_app = r.Read<uint32_t>();
-  auto next_cell = r.Read<cellappmgr::CellID>();
-  auto last_balance = r.Read<uint64_t>();
-  auto last_retire = r.Read<uint32_t>();
-  if (!next_app || !next_cell || !last_balance || !last_retire) {
-    return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: header truncated"};
-  }
-
-  const auto now = Clock::now();
-  std::unordered_map<Address, CellAppInfo> restored_cellapps;
-  std::unordered_set<uint32_t> restored_app_ids;
-  uint32_t max_app_id = 0;
-  auto cellapp_count = ReadCount(r, "cellapps");
-  if (!cellapp_count) return cellapp_count.Error();
-  for (uint32_t i = 0; i < *cellapp_count; ++i) {
-    auto addr = ReadAddress(r, "cellapp");
-    auto app_id = r.Read<uint32_t>();
-    auto load = r.Read<float>();
-    auto entity_count = r.Read<uint32_t>();
-    auto retiring = r.Read<uint8_t>();
-    auto needs_reattach = r.Read<uint8_t>();
-    if (!addr || !app_id || !load || !entity_count || !retiring || !needs_reattach) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: cellapp truncated"};
-    }
-    if (*app_id == 0 || *app_id > kMaxCellAppAppId) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad cellapp app_id"};
-    }
-    if (!std::isfinite(*load)) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad cellapp load"};
-    }
-    if (*retiring > 1 || *needs_reattach > 1) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad cellapp flags"};
-    }
-    if (!restored_app_ids.insert(*app_id).second) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: duplicate app_id"};
-    }
-    CellAppInfo info;
-    info.internal_addr = *addr;
-    info.app_id = *app_id;
-    info.load = *load;
-    info.entity_count = *entity_count;
-    info.registered_at = now;
-    info.last_load_report_at = now;
-    info.is_retiring = *retiring != 0;
-    info.needs_reattach = true;
-    info.restored_from_snapshot = true;
-    max_app_id = std::max(max_app_id, info.app_id);
-    if (!restored_cellapps.emplace(*addr, info).second) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: duplicate cellapp"};
-    }
-  }
-
-  std::unordered_map<SpaceID, SpacePartition> restored_spaces;
-  std::unordered_set<uint64_t> restored_leaf_ids;
-  cellappmgr::CellID max_cell_id = 0;
-  auto space_count = ReadCount(r, "spaces");
-  if (!space_count) return space_count.Error();
-  for (uint32_t i = 0; i < *space_count; ++i) {
-    auto space_id = r.Read<uint32_t>();
-    auto geometry_version = r.Read<uint64_t>();
-    auto freeze_epoch = r.Read<uint64_t>();
-    auto master_type = ReadSnapshotString(r, "space master type");
-    auto bsp_blob = ReadBlob(r, "bsp");
-    auto last_broadcast = ReadBlob(r, "last_broadcast");
-    auto debug_geometry = ReadBlob(r, "debug_geometry");
-    auto debug_baseapps = r.Read<uint64_t>();
-    if (!space_id || !geometry_version || !freeze_epoch || !master_type || !bsp_blob ||
-        !last_broadcast || !debug_geometry || !debug_baseapps) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: space truncated"};
-    }
-    if (*space_id == kInvalidSpaceID) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad space id"};
-    }
-    BinaryReader bsp_reader(std::span<const std::byte>(bsp_blob->data(), bsp_blob->size()));
-    auto bsp = BSPTree::Deserialize(bsp_reader);
-    if (!bsp) return bsp.Error();
-    const auto leaves = bsp->Leaves();
-    if (leaves.empty() || bsp->FindCellById(bsp->PrimaryCellId()) == nullptr) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad space bsp"};
-    }
-    for (const auto* leaf : leaves) {
-      if (leaf->cell_id == 0) {
-        return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad leaf cell_id"};
-      }
-      if (!restored_leaf_ids.insert(leaf->cell_id).second) {
-        return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: duplicate leaf cell_id"};
-      }
-      if (!restored_cellapps.contains(leaf->cellapp_addr)) {
-        return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: unknown leaf cellapp"};
-      }
-      max_cell_id = std::max(max_cell_id, leaf->cell_id);
-    }
-    SpacePartition partition;
-    partition.space_id = *space_id;
-    partition.bsp = std::move(*bsp);
-    partition.geometry_version = *geometry_version;
-    partition.freeze_epoch = *freeze_epoch;
-    partition.space_master_type = std::move(*master_type);
-    partition.last_broadcast_blob = std::move(*last_broadcast);
-    partition.last_debug_geometry_blob = std::move(*debug_geometry);
-    partition.last_debug_geometry_baseapp_count = static_cast<std::size_t>(*debug_baseapps);
-    if (!restored_spaces.emplace(*space_id, std::move(partition)).second) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: duplicate space"};
-    }
-  }
-
-  auto pending_key = [](SpaceID space_id, cellappmgr::CellID cell_id) {
-    return (static_cast<uint64_t>(space_id) << 32) | static_cast<uint64_t>(cell_id);
-  };
-  auto find_leaf = [&restored_spaces](SpaceID space_id, cellappmgr::CellID cell_id)
-      -> const CellInfo* {
-    const auto space_it = restored_spaces.find(space_id);
-    if (space_it == restored_spaces.end()) return nullptr;
-    return space_it->second.bsp.FindCellById(cell_id);
-  };
-
-  std::unordered_map<cellappmgr::CellID, CellDistribution> restored_distributions;
-  auto dist_count = ReadCount(r, "cell distributions");
-  if (!dist_count) return dist_count.Error();
-  for (uint32_t i = 0; i < *dist_count; ++i) {
-    auto cell_id = r.Read<cellappmgr::CellID>();
-    auto entity_count = r.Read<uint32_t>();
-    auto median_x = r.Read<float>();
-    auto median_z = r.Read<float>();
-    auto weighted_load = r.Read<float>();
-    auto tick_load = r.Read<float>();
-    auto script_tick_us = r.Read<uint64_t>();
-    if (!cell_id || !entity_count || !median_x || !median_z || !weighted_load || !tick_load ||
-        !script_tick_us) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: cell distribution truncated"};
-    }
-    auto native_tick_us = r.Read<uint64_t>();
-    auto witness_count = r.Read<uint32_t>();
-    auto aoi_peer_count = r.Read<uint32_t>();
-    auto aoi_reliable_bytes = r.Read<uint64_t>();
-    auto aoi_unreliable_bytes = r.Read<uint64_t>();
-    auto backup_bytes = r.Read<uint64_t>();
-    auto x_buckets = ReadBuckets(r, "x");
-    auto z_buckets = ReadBuckets(r, "z");
-    auto x_load_buckets = ReadLoadBuckets(r, "x");
-    auto z_load_buckets = ReadLoadBuckets(r, "z");
-    if (!native_tick_us || !witness_count || !aoi_peer_count || !aoi_reliable_bytes ||
-        !aoi_unreliable_bytes || !backup_bytes || !x_buckets || !z_buckets ||
-        !x_load_buckets || !z_load_buckets) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: cell distribution truncated"};
-    }
-    if (!restored_leaf_ids.contains(*cell_id)) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: unknown cell distribution"};
-    }
-    if (!std::isfinite(*median_x) || !std::isfinite(*median_z) ||
-        !std::isfinite(*weighted_load) || !std::isfinite(*tick_load) ||
-        *weighted_load < 0.f || *tick_load < 0.f) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad cell distribution"};
-    }
-    CellDistribution dist;
-    dist.entity_count = *entity_count;
-    dist.median_x = *median_x;
-    dist.median_z = *median_z;
-    dist.weighted_load = *weighted_load;
-    dist.tick_load = *tick_load;
-    dist.script_tick_us = *script_tick_us;
-    dist.native_tick_us = *native_tick_us;
-    dist.witness_count = *witness_count;
-    dist.aoi_peer_count = *aoi_peer_count;
-    dist.aoi_reliable_bytes = *aoi_reliable_bytes;
-    dist.aoi_unreliable_bytes = *aoi_unreliable_bytes;
-    dist.backup_bytes = *backup_bytes;
-    dist.x_buckets = *x_buckets;
-    dist.z_buckets = *z_buckets;
-    dist.x_load_buckets = *x_load_buckets;
-    dist.z_load_buckets = *z_load_buckets;
-    if (!restored_distributions.emplace(*cell_id, dist).second) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: duplicate cell distribution"};
-    }
-  }
-
-  auto read_ticks = [&r, &restored_leaf_ids](const char* context)
-      -> Result<std::unordered_map<cellappmgr::CellID, uint32_t>> {
-    std::unordered_map<cellappmgr::CellID, uint32_t> ticks;
-    auto count = ReadCount(r, context);
-    if (!count) return count.Error();
-    for (uint32_t i = 0; i < *count; ++i) {
-      auto cell_id = r.Read<cellappmgr::CellID>();
-      auto value = r.Read<uint32_t>();
-      if (!cell_id || !value) {
-        return Error{ErrorCode::kInvalidArgument,
-                      std::format("CellAppMgr snapshot: {} ticks truncated", context)};
-      }
-      if (!restored_leaf_ids.contains(*cell_id)) {
-        return Error{ErrorCode::kInvalidArgument,
-                     std::format("CellAppMgr snapshot: unknown {} tick cell", context)};
-      }
-      if (!ticks.emplace(*cell_id, *value).second) {
-        return Error{ErrorCode::kInvalidArgument,
-                     std::format("CellAppMgr snapshot: duplicate {} tick cell", context)};
-      }
-    }
-    return ticks;
-  };
-  auto hot_ticks = read_ticks("hot");
-  if (!hot_ticks) return hot_ticks.Error();
-  auto idle_ticks = read_ticks("idle");
-  if (!idle_ticks) return idle_ticks.Error();
-
-  std::vector<PendingGeometryBroadcast> restored_pending;
-  std::unordered_map<uint64_t, Address> restored_pending_targets;
-  auto pending_count = ReadCount(r, "pending geometry");
-  if (!pending_count) return pending_count.Error();
-  for (uint32_t i = 0; i < *pending_count; ++i) {
-    auto space_id = r.Read<uint32_t>();
-    auto cell_id = r.Read<cellappmgr::CellID>();
-    auto addr = ReadAddress(r, "pending geometry");
-    auto allow_timeout = r.Read<uint8_t>();
-    auto extra_count = ReadCount(r, "extra geometry recipients");
-    if (!space_id || !cell_id || !addr || !allow_timeout || !extra_count) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: pending geometry truncated"};
-    }
-    if (*allow_timeout > 1) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: bad pending geometry flag"};
-    }
-    const auto* leaf = find_leaf(*space_id, *cell_id);
-    if (leaf == nullptr) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: unknown pending geometry cell"};
-    }
-    if (!restored_cellapps.contains(*addr)) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: unknown pending geometry cellapp"};
-    }
-    if (leaf->cellapp_addr != *addr) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: pending geometry owner mismatch"};
-    }
-    if (!restored_pending_targets.emplace(pending_key(*space_id, *cell_id), *addr).second) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: duplicate pending geometry"};
-    }
-    PendingGeometryBroadcast pending;
-    pending.space_id = *space_id;
-    pending.awaiting_cell_id = *cell_id;
-    pending.awaiting_addr = *addr;
-    pending.sent_at = now;
-    pending.allow_timeout_broadcast = *allow_timeout != 0;
-    pending.extra_recipients.reserve(*extra_count);
-    std::set<std::tuple<uint32_t, uint16_t, cellappmgr::CellID>> extra_keys;
-    for (uint32_t j = 0; j < *extra_count; ++j) {
-      auto extra_addr = ReadAddress(r, "extra geometry recipient");
-      auto extra_cell = r.Read<cellappmgr::CellID>();
-      if (!extra_addr || !extra_cell) {
-        return Error{ErrorCode::kInvalidArgument,
-                     "CellAppMgr snapshot: extra geometry recipient truncated"};
-      }
-      if (!restored_cellapps.contains(*extra_addr)) {
-        return Error{ErrorCode::kInvalidArgument,
-                     "CellAppMgr snapshot: unknown extra geometry cellapp"};
-      }
-      if (find_leaf(*space_id, *extra_cell) == nullptr) {
-        return Error{ErrorCode::kInvalidArgument,
-                     "CellAppMgr snapshot: unknown extra geometry cell"};
-      }
-      if (!extra_keys.emplace(extra_addr->Ip(), extra_addr->Port(), *extra_cell).second) {
-        return Error{ErrorCode::kInvalidArgument,
-                     "CellAppMgr snapshot: duplicate extra geometry recipient"};
-      }
-      pending.extra_recipients.push_back({*extra_addr, *extra_cell});
-    }
-    restored_pending.push_back(std::move(pending));
-  }
-
-  std::vector<RetireDrain> restored_retire_drains;
-  std::set<std::tuple<SpaceID, cellappmgr::CellID, uint32_t, uint16_t, uint32_t, uint16_t>>
-      restored_drain_keys;
-  auto drain_count = ReadCount(r, "retire drains");
-  if (!drain_count) return drain_count.Error();
-  restored_retire_drains.reserve(*drain_count);
-  for (uint32_t i = 0; i < *drain_count; ++i) {
-    auto space_id = r.Read<uint32_t>();
-    auto cell_id = r.Read<cellappmgr::CellID>();
-    auto source_addr = ReadAddress(r, "retire drain source");
-    auto target_addr = ReadAddress(r, "retire drain target");
-    auto entity_count = r.Read<uint32_t>();
-    auto geometry_published = r.Read<uint8_t>();
-    if (!space_id || !cell_id || !source_addr || !target_addr || !entity_count ||
-        !geometry_published) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: retire drain truncated"};
-    }
-    if (*geometry_published > 1) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: bad retire drain flag"};
-    }
-    if (*source_addr == *target_addr) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: bad retire drain endpoints"};
-    }
-    const auto source_it = restored_cellapps.find(*source_addr);
-    const auto target_it = restored_cellapps.find(*target_addr);
-    if (source_it == restored_cellapps.end() || target_it == restored_cellapps.end()) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: unknown retire drain cellapp"};
-    }
-    if (!source_it->second.is_retiring) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: retire drain source not retiring"};
-    }
-    const auto* leaf = find_leaf(*space_id, *cell_id);
-    if (leaf == nullptr) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: unknown retire drain cell"};
-    }
-    if (leaf->cellapp_addr != *target_addr) {
-      return Error{ErrorCode::kInvalidArgument,
-                   "CellAppMgr snapshot: retire drain owner mismatch"};
-    }
-    const auto key = pending_key(*space_id, *cell_id);
-    if (!*geometry_published) {
-      const auto pending_it = restored_pending_targets.find(key);
-      if (pending_it == restored_pending_targets.end() || pending_it->second != *target_addr) {
-        return Error{ErrorCode::kInvalidArgument,
-                     "CellAppMgr snapshot: retire drain missing pending geometry"};
-      }
-    }
-    if (!restored_drain_keys
-             .emplace(*space_id, *cell_id, source_addr->Ip(), source_addr->Port(),
-                      target_addr->Ip(), target_addr->Port())
-             .second) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: duplicate retire drain"};
-    }
-    RetireDrain drain;
-    drain.space_id = *space_id;
-    drain.cell_id = *cell_id;
-    drain.source_addr = *source_addr;
-    drain.target_addr = *target_addr;
-    drain.last_entity_count = *entity_count;
-    drain.started_at = now;
-    drain.last_progress_at = now;
-    drain.geometry_published = *geometry_published != 0;
-    restored_retire_drains.push_back(drain);
-  }
-  if (r.Remaining() != 0) {
-    return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: trailing bytes"};
-  }
-
-  for (auto& [_, partition] : restored_spaces) {
-    for (auto* leaf : partition.bsp.LeavesMutable()) {
-      auto dist_it = restored_distributions.find(leaf->cell_id);
-      if (dist_it == restored_distributions.end()) continue;
-      const auto& dist = dist_it->second;
-      leaf->entity_count = dist.entity_count;
-      leaf->load = dist.weighted_load;
-      leaf->tick_load = dist.tick_load;
-      leaf->script_tick_us = dist.script_tick_us;
-      leaf->native_tick_us = dist.native_tick_us;
-      leaf->witness_count = dist.witness_count;
-      leaf->aoi_peer_count = dist.aoi_peer_count;
-      leaf->aoi_reliable_bytes = dist.aoi_reliable_bytes;
-      leaf->aoi_unreliable_bytes = dist.aoi_unreliable_bytes;
-      leaf->backup_bytes = dist.backup_bytes;
-      leaf->x_buckets = dist.x_buckets;
-      leaf->z_buckets = dist.z_buckets;
-      leaf->x_load_buckets = dist.x_load_buckets;
-      leaf->z_load_buckets = dist.z_load_buckets;
-    }
-  }
-
-  cellapps_ = std::move(restored_cellapps);
-  spaces_ = std::move(restored_spaces);
-  cell_distributions_ = std::move(restored_distributions);
-  hot_leaf_balance_ticks_ = std::move(*hot_ticks);
-  idle_leaf_balance_ticks_ = std::move(*idle_ticks);
-  pending_geometry_broadcasts_ = std::move(restored_pending);
-  retire_drains_ = std::move(restored_retire_drains);
-  pending_space_creates_awaiting_cellapps_.clear();
-  baseapps_.clear();
-  next_cellapp_app_id_ = std::max(*next_app, max_app_id + 1);
-  next_cell_id_ = std::max(*next_cell, static_cast<cellappmgr::CellID>(max_cell_id + 1));
-  last_balance_tick_ = *last_balance;
-  last_retire_app_id_ = *last_retire;
-  snapshot_dirty_ = false;
-  snapshot_dirty_at_ = {};
-  snapshot_dirty_reason_.clear();
-  return {};
-}
-
-auto CellAppMgr::SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void> {
-  if (path.empty()) return {};
-  last_snapshot_attempt_at_ = Clock::now();
-  auto record_error = [this, &path](const Error& error) -> Error {
-    ++snapshot_save_failure_count_;
-    ++snapshot_failure_count_;
-    last_snapshot_save_path_ = path;
-    last_snapshot_save_error_ = std::string(error.Message());
-    return error;
-  };
-  if (auto parent = path.parent_path(); !parent.empty()) {
-    auto create = fs::CreateDirectories(parent);
-    if (!create) return record_error(create.Error());
-  }
-
-  const auto bytes = Snapshot();
-  const auto topology = BuildTopologyFingerprint();
-  const auto topology_pending_ack = TopologyPendingAckCount();
-  if (bytes.size() > kMaxSnapshotFileBytes) {
-    return record_error(
-        Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: file too large"});
-  }
-  if (auto backup = PreserveSnapshotBackup(path); !backup) {
-    if (backup.Error().Code() != ErrorCode::kInvalidArgument) {
-      return record_error(backup.Error());
-    }
-    ++snapshot_backup_skip_count_;
-    ATLAS_LOG_WARNING("CellAppMgr: HA snapshot backup skipped (.bak lags new main): {}",
-                      backup.Error().Message());
-  }
-  auto tmp = SnapshotTempPath(path);
-  auto write = fs::WriteFile(tmp, bytes);
-  if (!write) {
-    (void)fs::RemoveFile(tmp);
-    return record_error(write.Error());
-  }
-
-  auto replace = fs::AtomicReplaceFile(tmp, path);
-  if (!replace) {
-    (void)fs::RemoveFile(tmp);
-    return record_error(replace.Error());
-  }
-  last_snapshot_bytes_ = bytes.size();
-  last_snapshot_save_at_ = Clock::now();
-  last_snapshot_save_path_ = path;
-  last_snapshot_save_topology_ = topology;
-  last_snapshot_save_topology_pending_ack_ = topology_pending_ack;
-  last_snapshot_save_error_.clear();
-  snapshot_dirty_ = false;
-  snapshot_dirty_at_ = {};
-  snapshot_dirty_reason_.clear();
-  ++snapshot_save_count_;
-
-  const auto now = Clock::now();
-  const auto decision =
-      snapshot_envelope::EvaluateSizeWarning(SnapshotSizeHighWaterPct(), now,
-                                             last_snapshot_size_warning_at_);
-  if (decision.should_log) {
-    last_snapshot_size_warning_at_ = now;
-    ATLAS_LOG_WARNING(
-        "CellAppMgr: HA snapshot file size at {}% of {} byte ceiling ({} bytes) — "
-        "save will start rejecting writes once it crosses the ceiling",
-        SnapshotSizeHighWaterPct(), kMaxSnapshotFileBytes, bytes.size());
-  } else if (decision.should_reset) {
-    last_snapshot_size_warning_at_ = {};
-  }
-  return {};
-}
-
-auto CellAppMgr::RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void> {
-  if (path.empty()) return {};
-  last_snapshot_restore_attempt_at_ = Clock::now();
-  last_snapshot_restore_topology_.clear();
-  last_snapshot_restore_topology_pending_ack_ = 0;
-  auto restore_one = [this](const std::filesystem::path& candidate) -> Result<void> {
-    if (!fs::Exists(candidate)) {
-      return Error{ErrorCode::kNotFound,
-                   std::format("snapshot file not found: {}", candidate.string())};
-    }
-    auto size = fs::FileSize(candidate);
-    if (!size) return size.Error();
-    if (*size > kMaxSnapshotFileBytes) {
-      return Error{ErrorCode::kInvalidArgument, "CellAppMgr snapshot: file too large"};
-    }
-    auto bytes = fs::ReadFile(candidate);
-    if (!bytes) return bytes.Error();
-    auto restore = Restore(std::span<const std::byte>(bytes->data(), bytes->size()));
-    if (!restore) return restore;
-    ++snapshot_restore_count_;
-    last_snapshot_bytes_ = bytes->size();
-    last_snapshot_restore_at_ = Clock::now();
-    last_snapshot_restore_topology_ = BuildTopologyFingerprint();
-    last_snapshot_restore_topology_pending_ack_ = TopologyPendingAckCount();
-    return {};
-  };
-
-  auto primary = restore_one(path);
-  if (primary) {
-    last_snapshot_restore_source_ = "primary";
-    last_snapshot_restore_path_ = path;
-    last_snapshot_restore_error_.clear();
-    last_snapshot_restore_primary_error_.clear();
-    return {};
-  }
-
-  const auto backup_path = SnapshotBackupPath(path);
-  auto backup = restore_one(backup_path);
-  if (backup) {
-    ++snapshot_fallback_restore_count_;
-    last_snapshot_restore_source_ = "backup";
-    last_snapshot_restore_path_ = backup_path;
-    last_snapshot_restore_error_.clear();
-    last_snapshot_restore_primary_error_ = primary.Error().Message();
-    ATLAS_LOG_WARNING("CellAppMgr: restored HA snapshot backup {} after primary failed: {}",
-                      backup_path.string(), primary.Error().Message());
-    return {};
-  }
-  if (primary.Error().Code() == ErrorCode::kNotFound &&
-      backup.Error().Code() == ErrorCode::kNotFound) {
-    last_snapshot_restore_source_ = "none";
-    last_snapshot_restore_path_.clear();
-    last_snapshot_restore_topology_.clear();
-    last_snapshot_restore_topology_pending_ack_ = 0;
-    last_snapshot_restore_error_.clear();
-    last_snapshot_restore_primary_error_.clear();
-    return primary.Error();
-  }
-  ++snapshot_restore_failure_count_;
-  ++snapshot_failure_count_;
-  last_snapshot_restore_source_ = "none";
-  last_snapshot_restore_path_.clear();
-  last_snapshot_restore_topology_.clear();
-  last_snapshot_restore_topology_pending_ack_ = 0;
-  last_snapshot_restore_primary_error_ = primary.Error().Message();
-  if (primary.Error().Code() == ErrorCode::kNotFound) {
-    last_snapshot_restore_error_ = backup.Error().Message();
-    return backup.Error();
-  }
-  if (backup.Error().Code() == ErrorCode::kNotFound) {
-    last_snapshot_restore_error_ = primary.Error().Message();
-    return primary.Error();
-  }
-  auto error = Error{primary.Error().Code(),
-                     std::format("{}; backup failed: {}", primary.Error().Message(),
-                                 backup.Error().Message())};
-  last_snapshot_restore_error_ = error.Message();
-  return error;
 }
 
 void CellAppMgr::RegisterWatchers() {
@@ -1191,228 +378,32 @@ void CellAppMgr::RegisterWatchers() {
                          [this] { return RetiringAppIdForWatcher(); }),
                      std::function<bool(uint32_t)>(
                          [this](uint32_t app_id) { return SetRetiringAppId(app_id); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_path",
-                      std::function<std::string()>(
-                          [this] { return Config().snapshot_path.string(); }));
-  wr.Add<int>("cellappmgr/ha/snapshot_interval_ms",
-              std::function<int()>([this] { return Config().snapshot_interval_ms; }));
-  wr.Add<std::size_t>("cellappmgr/ha/snapshot_bytes",
-                      std::function<std::size_t()>(
-                          [this] { return last_snapshot_bytes_; }));
-  wr.Add<bool>("cellappmgr/ha/snapshot_file_present",
-               std::function<bool()>(
-                   [this] { return SnapshotFilePresentForWatcher(); }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_file_bytes",
-                   std::function<uint64_t()>(
-                       [this] { return SnapshotFileBytesForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_file_status",
-                      std::function<std::string()>(
-                          [this] { return BuildSnapshotFileStatusSummary(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_file_topology_status",
-                      std::function<std::string()>(
-                          [this] { return BuildSnapshotFileTopologyStatusSummary(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_backup_path",
-                      std::function<std::string()>(
-                          [this] { return SnapshotBackupPathForWatcher(); }));
-  wr.Add<bool>("cellappmgr/ha/snapshot_backup_present",
-               std::function<bool()>(
-                   [this] { return SnapshotBackupPresentForWatcher(); }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_backup_bytes",
-                   std::function<uint64_t()>(
-                       [this] { return SnapshotBackupBytesForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_backup_status",
-                      std::function<std::string()>(
-                          [this] { return BuildSnapshotBackupStatusSummary(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_backup_topology_status",
-                      std::function<std::string()>(
-                          [this] { return BuildSnapshotBackupTopologyStatusSummary(); }));
-  wr.Add<int64_t>("cellappmgr/ha/snapshot_last_save_attempt_age_ms",
-                  std::function<int64_t()>(
-                      [this] { return LastSnapshotAttemptAgeMsForWatcher(); }));
-  wr.Add<int64_t>("cellappmgr/ha/snapshot_last_save_age_ms",
-                  std::function<int64_t()>(
-                      [this] { return LastSnapshotSaveAgeMsForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_save_path",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_save_path_.string(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_save_topology",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_save_topology_; }));
-  wr.Add<std::size_t>("cellappmgr/ha/snapshot_last_save_topology_pending_ack",
-                      std::function<std::size_t()>(
-                          [this] { return last_snapshot_save_topology_pending_ack_; }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_save_error",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_save_error_; }));
-  wr.Add<bool>("cellappmgr/ha/snapshot_dirty",
-               std::function<bool()>([this] { return snapshot_dirty_; }));
-  wr.Add<int64_t>("cellappmgr/ha/snapshot_dirty_age_ms",
-                  std::function<int64_t()>(
-                      [this] { return LastSnapshotDirtyAgeMsForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_dirty_reason",
+  wr.Add<bool>("cellappmgr/ha/recovery_window_active",
+               std::function<bool()>([this] { return RecoveryWindowActive(); }));
+  wr.Add<std::string>("cellappmgr/ha/recovery_window_status",
                       std::function<std::string()>([this] {
-                        return snapshot_dirty_ ? snapshot_dirty_reason_ : std::string{};
+                        const bool active = RecoveryWindowActive();
+                        const int64_t remaining_ms =
+                            active ? std::max<int64_t>(
+                                         0, DurationMs(recovery_deadline_ - Clock::now()))
+                                   : 0;
+                        return std::format(
+                            "state={} active={} remaining_ms={} pending_geometry={}",
+                            active ? "closed" : "open", active ? 1 : 0, remaining_ms,
+                            pending_geometry_broadcasts_.size());
                       }));
-  wr.Add<bool>("cellappmgr/ha/snapshot_save_stale",
-               std::function<bool()>(
-                   [this] { return SnapshotSaveStaleForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_status",
-                      std::function<std::string()>(
-                          [this] { return BuildSnapshotStatusSummary(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_restore_source",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_restore_source_; }));
-  wr.Add<int64_t>("cellappmgr/ha/snapshot_last_restore_attempt_age_ms",
-                  std::function<int64_t()>(
-                      [this] { return LastSnapshotRestoreAttemptAgeMsForWatcher(); }));
-  wr.Add<int64_t>("cellappmgr/ha/snapshot_last_restore_age_ms",
-                  std::function<int64_t()>(
-                      [this] { return LastSnapshotRestoreAgeMsForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_restore_path",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_restore_path_.string(); }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_restore_topology",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_restore_topology_; }));
-  wr.Add<std::size_t>("cellappmgr/ha/snapshot_last_restore_topology_pending_ack",
-                      std::function<std::size_t()>(
-                          [this] { return last_snapshot_restore_topology_pending_ack_; }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_restore_error",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_restore_error_; }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_last_restore_primary_error",
-                      std::function<std::string()>(
-                          [this] { return last_snapshot_restore_primary_error_; }));
-  wr.Add<std::string>("cellappmgr/ha/snapshot_restore_status",
-                      std::function<std::string()>(
-                          [this] { return BuildSnapshotRestoreStatusSummary(); }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_saves",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_save_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_restores",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_restore_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_fallback_restores",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_fallback_restore_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_save_failures",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_save_failure_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_restore_failures",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_restore_failure_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_failures",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_failure_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_backup_skips",
-                   std::function<uint64_t()>(
-                       [this] { return snapshot_backup_skip_count_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/snapshot_max_bytes",
-                   std::function<uint64_t()>(
-                       [] { return kMaxSnapshotFileBytes; }));
-  wr.Add<uint32_t>("cellappmgr/ha/snapshot_size_high_water_pct",
-                   std::function<uint32_t()>(
-                       [this] { return SnapshotSizeHighWaterPct(); }));
-  wr.Add<std::size_t>("cellappmgr/ha/restored_cellapps",
-                      std::function<std::size_t()>(
-                          [this] { return RestoredCellAppCount(); }));
-  wr.Add<std::size_t>("cellappmgr/ha/reattach_pending",
-                      std::function<std::size_t()>(
-                          [this] { return PendingReattachCellAppCount(); }));
-  wr.Add<std::size_t>("cellappmgr/ha/reattach_completed_count",
-                      std::function<std::size_t()>(
-                          [this] { return CompletedReattachCellAppCount(); }));
-  wr.Add<std::size_t>("cellappmgr/ha/reattach_stuck",
-                      std::function<std::size_t()>(
-                          [this] { return StuckReattachCellAppCount(); }));
-  wr.Add<bool>("cellappmgr/ha/reattach_completed",
-               std::function<bool()>([this] { return ReattachCompleted(); }));
-  wr.Add<std::string>("cellappmgr/ha/reattach_state",
-                      std::function<std::string()>(
-                          [this] { return ReattachStateForWatcher(); }));
-  wr.Add<std::string>("cellappmgr/ha/reattach_status",
-                      std::function<std::string()>(
-                          [this] { return BuildReattachStatusSummary(); }));
-  wr.Add<bool>("cellappmgr/ha/restore_gate_active",
-               std::function<bool()>([this] { return RestoreGateActiveForWatcher(); }));
-  wr.Add<std::size_t>("cellappmgr/ha/restore_gate_blocked_pending_geometry",
-                      std::function<std::size_t()>(
-                          [this] { return PendingGeometryRestoreGateBlockedCount(); }));
-  wr.Add<std::string>("cellappmgr/ha/restore_gate_status",
-                      std::function<std::string()>(
-                          [this] { return BuildRestoreGateStatusSummary(); }));
-  wr.Add<uint64_t>("cellappmgr/ha/reattach_registry_audits",
-                   std::function<uint64_t()>(
-                       [this] { return reattach_registry_audit_count_; }));
-  wr.Add<std::size_t>("cellappmgr/ha/reattach_registry_last_missing",
-                      std::function<std::size_t()>(
-                          [this] { return last_reattach_registry_missing_; }));
-  wr.Add<std::size_t>("cellappmgr/ha/reattach_registry_last_blocked",
-                      std::function<std::size_t()>(
-                          [this] { return last_reattach_registry_blocked_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/reattach_registry_reconciled_total",
-                   std::function<uint64_t()>(
-                       [this] { return reattach_registry_reconciled_total_; }));
-  wr.Add<uint64_t>("cellappmgr/ha/reattach_force_resolved_total",
-                   std::function<uint64_t()>(
-                       [this] { return reattach_force_resolved_total_; }));
-  wr.Add<std::string>("cellappmgr/ha/reattach_registry_status",
-                      std::function<std::string()>(
-                          [this] { return BuildReattachRegistryStatusSummary(); }));
 }
 
 void CellAppMgr::OnTickComplete() {
   ManagerApp::OnTickComplete();
   DrainPendingGeometryBroadcasts();
   AuditRetireDrainWatchdog();
-  AuditReattachWatchdog();
-  AuditReattachRegistry();
   DrainExpiredCreateSpaceRequests();
   const auto tick = GameTime();
   if (tick - last_balance_tick_ >= kBalanceTickInterval) {
     last_balance_tick_ = tick;
     TickLoadBalance();
   }
-  if (!Config().snapshot_path.empty() && Config().snapshot_interval_ms > 0) {
-    const auto now = Clock::now();
-    const auto interval =
-        std::chrono::duration_cast<Duration>(Milliseconds(Config().snapshot_interval_ms));
-    const auto dirty_interval = std::min(interval, kDirtySnapshotFlushInterval);
-    const bool never_attempted =
-        last_snapshot_attempt_at_.time_since_epoch() == Duration::zero();
-    const auto since_attempt = now - last_snapshot_attempt_at_;
-    if (snapshot_dirty_ && (never_attempted || since_attempt >= dirty_interval)) {
-      SaveConfiguredSnapshot("dirty");
-    } else if (never_attempted || since_attempt >= interval) {
-      SaveConfiguredSnapshot("periodic");
-    }
-  }
-}
-
-void CellAppMgr::MarkSnapshotDirty(const char* reason) {
-  if (!snapshot_dirty_) snapshot_dirty_at_ = Clock::now();
-  snapshot_dirty_ = true;
-  snapshot_dirty_reason_ = reason == nullptr ? "unknown" : reason;
-}
-
-void CellAppMgr::SaveConfiguredSnapshot(const char* context) {
-  if (Config().snapshot_path.empty()) return;
-  auto save = SaveSnapshotToFile(Config().snapshot_path);
-  if (save) {
-    last_snapshot_save_warning_at_ = {};
-    return;
-  }
-  // Bad path (disk full, permission, env corruption) repeats every tick at
-  // snapshot_interval_ms; throttle the WARNING line so logs stay readable.
-  const auto now = Clock::now();
-  const auto throttle = std::chrono::duration_cast<Duration>(Milliseconds{5000});
-  if (last_snapshot_save_warning_at_ != TimePoint{} &&
-      now - last_snapshot_save_warning_at_ < throttle) {
-    return;
-  }
-  last_snapshot_save_warning_at_ = now;
-  ATLAS_LOG_WARNING("CellAppMgr: HA snapshot {} save failed: {}", context,
-                    save.Error().Message());
 }
 
 auto CellAppMgr::AppIdForAddress(const Address& addr) const -> uint32_t {
@@ -1451,10 +442,6 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
     }
     existing.channel = ch;
     existing.registered_at = Clock::now();
-    existing.needs_reattach = false;
-    // restored_from_snapshot stays sticky until OnCellAppDeath so verify
-    // scripts can assert restored_cellapps >= min_cellapps after a takeover.
-    existing.last_reattach_watchdog_log_at = {};
     SendRegisterCellAppAck(ch, kInternalAddr, existing.app_id, /*success=*/true, "reattach");
     ReplayCellAppTopology(existing);
     SendRequestCellAppState(existing);
@@ -1492,7 +479,6 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
   info.channel = ch;
   info.registered_at = Clock::now();
   cellapps_.emplace(kInternalAddr, std::move(info));
-  MarkSnapshotDirty("cellapp-register");
 
   SendRegisterCellAppAck(ch, kInternalAddr, app_id, /*success=*/true, register_reason);
 
@@ -1532,10 +518,6 @@ void CellAppMgr::OnHealthProbe(const Address&, Channel* ch,
   cellappmgr::HealthProbeAck ack;
   ack.nonce = msg.nonce;
   ack.game_time = GameTime();
-  ack.snapshot_saves = snapshot_save_count_;
-  ack.snapshot_failures = snapshot_failure_count_;
-  ack.snapshot_dirty = snapshot_dirty_;
-  ack.snapshot_save_stale = SnapshotSaveStaleForWatcher();
   (void)ch->SendMessage(ack);
 }
 
@@ -1618,7 +600,6 @@ void CellAppMgr::OnRecoverCellAppState(const Address& /*src*/, Channel* /*ch*/,
     partition.geometry_version = sg.geometry_version;
     spaces_[sg.space_id] = std::move(partition);
     next_cell_id_ = std::max(next_cell_id_, static_cast<cellappmgr::CellID>(max_cell + 1));
-    MarkSnapshotDirty("recover-cellapp-state");
     ATLAS_LOG_INFO("CellAppMgr: rebuilt space={} from worker report (version={}, leaves={})",
                    sg.space_id, sg.geometry_version, leaves.size());
   }
@@ -1635,11 +616,6 @@ void CellAppMgr::OnInformCellLoad(const Address& src, Channel* ch,
       ATLAS_LOG_WARNING(
           "CellAppMgr: ignoring InformCellLoad from {} for app_id={} expected={}",
           src.ToString(), msg.app_id, addr.ToString());
-      return;
-    }
-    if (info.needs_reattach) {
-      ATLAS_LOG_DEBUG("CellAppMgr: ignoring InformCellLoad for reattach-pending app_id={}",
-                      msg.app_id);
       return;
     }
     info.load = std::clamp(msg.load, 0.f, 1.f);
@@ -2011,7 +987,6 @@ auto CellAppMgr::SplitLeafToHost(SpacePartition& partition, const CellInfo& targ
   }
   pending_geometry_broadcasts_.push_back({space_id, new_cell_id, new_app.internal_addr,
                                           Clock::now()});
-  MarkSnapshotDirty("split-pending-geometry");
   hot_leaf_balance_ticks_.erase(target_cell_id);
   hot_leaf_balance_ticks_.erase(new_cell_id);
 
@@ -2030,7 +1005,7 @@ auto CellAppMgr::SplitLeafToHost(SpacePartition& partition, const CellInfo& targ
 }
 
 void CellAppMgr::GrowSpacesForNewCellApp(const CellAppInfo& new_app) {
-  if (RestoreGateActive()) return;
+  if (RecoveryWindowActive()) return;
   if (!IsAssignableForLb(new_app, Clock::now())) return;
   const auto assignable_count = AssignableCellAppCount();
   for (auto& [_, partition] : spaces_) {
@@ -2330,7 +1305,6 @@ auto CellAppMgr::TryRetireHandoffLeaf(SpacePartition& partition) -> bool {
   drain.started_at = Clock::now();
   drain.last_progress_at = drain.started_at;
   retire_drains_.push_back(drain);
-  MarkSnapshotDirty("retire-handoff");
   hot_leaf_balance_ticks_.erase(cell_id);
   idle_leaf_balance_ticks_.erase(cell_id);
 
@@ -2366,11 +1340,6 @@ void CellAppMgr::OnAddCellToSpaceAck(const Address& src, Channel* ch,
         msg.space_id, msg.cell_id, pending_ref.awaiting_addr.ToString());
     return;
   }
-  if (app_it->second.needs_reattach) {
-    ATLAS_LOG_DEBUG("CellAppMgr: ignoring AddCellToSpaceAck for reattach-pending app_id={}",
-                    app_it->second.app_id);
-    return;
-  }
   const bool channel_matches = app_it->second.channel != nullptr && app_it->second.channel == ch;
   if (src != pending_ref.awaiting_addr && !channel_matches) {
     ATLAS_LOG_WARNING(
@@ -2386,7 +1355,6 @@ void CellAppMgr::OnAddCellToSpaceAck(const Address& src, Channel* ch,
   auto pending = std::move(*it);
   const SpaceID space_id = pending.space_id;
   pending_geometry_broadcasts_.erase(it);
-  MarkSnapshotDirty("pending-geometry-ack");
 
   auto sp_it = spaces_.find(space_id);
   if (sp_it == spaces_.end()) return;
@@ -2402,20 +1370,10 @@ void CellAppMgr::DrainPendingGeometryBroadcasts() {
       ++it;
       continue;
     }
-    const auto pending_app = cellapps_.find(it->awaiting_addr);
-    if (pending_app != cellapps_.end() && pending_app->second.needs_reattach) {
-      ATLAS_LOG_WARNING(
-          "CellAppMgr: AddCellToSpaceAck timeout space={} cell={} addr={}:{} - "
-          "holding geometry until restored target reattaches",
-          it->space_id, it->awaiting_cell_id, it->awaiting_addr.Ip(), it->awaiting_addr.Port());
-      it->sent_at = now;
-      ++it;
-      continue;
-    }
     if (!it->allow_timeout_broadcast) {
       ATLAS_LOG_WARNING(
           "CellAppMgr: AddCellToSpaceAck timeout space={} cell={} addr={}:{} - "
-          "holding geometry until snapshot-gated primary handoff acks",
+          "holding geometry until primary handoff acks",
           it->space_id, it->awaiting_cell_id, it->awaiting_addr.Ip(), it->awaiting_addr.Port());
       it->sent_at = now;
       ++it;
@@ -2432,7 +1390,6 @@ void CellAppMgr::DrainPendingGeometryBroadcasts() {
     if (sp_it != spaces_.end()) BroadcastGeometry(sp_it->second, it->extra_recipients);
     MarkRetireDrainGeometryPublished(space_id, cell_id, target_addr);
     it = pending_geometry_broadcasts_.erase(it);
-    MarkSnapshotDirty("pending-geometry-timeout");
   }
 }
 
@@ -2445,12 +1402,10 @@ void CellAppMgr::MarkRetireDrainGeometryPublished(SpaceID space_id,
         drain.target_addr != target_addr) {
       continue;
     }
-    const bool changed = !drain.geometry_published;
     drain.geometry_published = true;
     drain.started_at = now;
     drain.last_progress_at = now;
     drain.last_watchdog_log_at = {};
-    if (changed) MarkSnapshotDirty("retire-geometry-published");
   }
 }
 
@@ -2482,50 +1437,6 @@ void CellAppMgr::AuditRetireDrainWatchdog() {
   }
 }
 
-auto CellAppMgr::IsReattachStuck(const CellAppInfo& info, TimePoint now) const -> bool {
-  if (!info.restored_from_snapshot || !info.needs_reattach) return false;
-  return now - info.registered_at >= ReattachWatchdogWindow();
-}
-
-void CellAppMgr::AuditReattachWatchdog() {
-  if (cellapps_.empty()) return;
-  const auto now = Clock::now();
-  const auto watchdog_window = ReattachWatchdogWindow();
-  const auto min_repeat_window = std::chrono::duration_cast<Duration>(Milliseconds{1000});
-  const auto repeat_window =
-      watchdog_window < min_repeat_window ? min_repeat_window : watchdog_window;
-  const auto force_window = ReattachForceResolveWindow();
-  std::vector<Address> force_resolve;
-  for (auto& [addr, info] : cellapps_) {
-    if (!IsReattachStuck(info, now)) continue;
-    if (info.last_reattach_watchdog_log_at == TimePoint{} ||
-        now - info.last_reattach_watchdog_log_at >= repeat_window) {
-      ATLAS_LOG_WARNING("CellAppMgr: restored CellApp reattach stuck app_id={} addr={} age_ms={}",
-                        info.app_id, info.internal_addr.ToString(),
-                        DurationMs(now - info.registered_at));
-      info.last_reattach_watchdog_log_at = now;
-    }
-    // A CellApp that stays registered in machined but never re-sends
-    // RegisterCellApp would keep the restore gate closed forever (machined
-    // reconciliation only prunes hosts machined reports GONE). After
-    // force_window, treat it as dead so leaves rehome and LB resumes —
-    // skip when no other assignable host exists, since rehoming would just
-    // strand its leaves (a single-CellApp cluster has nothing to balance).
-    if (force_window != Duration::zero() && now - info.registered_at >= force_window &&
-        HasAssignableCellAppExcept(addr)) {
-      force_resolve.push_back(addr);
-    }
-  }
-  for (const auto& addr : force_resolve) {
-    ATLAS_LOG_WARNING(
-        "CellAppMgr: force-resolving stuck reattach addr={} after {}ms — rehoming leaves "
-        "so load balancing can resume",
-        addr.ToString(), DurationMs(force_window));
-    OnCellAppDeath(addr, /*reason=*/2);
-    ++reattach_force_resolved_total_;
-  }
-}
-
 void CellAppMgr::OnCellAppDeath(const Address& internal_addr, uint8_t reason) {
   auto it = cellapps_.find(internal_addr);
   if (it == cellapps_.end()) return;
@@ -2552,7 +1463,6 @@ void CellAppMgr::OnCellAppDeath(const Address& internal_addr, uint8_t reason) {
     pending_it->extra_recipients.end());
     ++pending_it;
   }
-  MarkSnapshotDirty("cellapp-death");
 
   // BaseApp restores Reals from backup; mgr only re-points BSP leaves
   // so future CreateCellEntity / Offload traffic reaches a survivor.
@@ -2670,7 +1580,7 @@ auto CellAppMgr::HasPendingGeometryBroadcast(SpaceID space_id) const -> bool {
 
 void CellAppMgr::TickLoadBalance() {
   if (spaces_.empty()) return;
-  if (RestoreGateActive()) return;
+  if (RecoveryWindowActive()) return;
   for (auto& [space_id, partition] : spaces_) {
     if (HasPendingGeometryBroadcast(space_id)) continue;
     const auto before_blob = partition.last_broadcast_blob;
@@ -2711,7 +1621,6 @@ auto CellAppMgr::BuildCellAppLoadSummary() const -> std::string {
                        app->app_id, app->internal_addr.ToString(), app->load,
                        app->entity_count, app->is_retiring ? 1 : 0,
                        DurationMs(load_age), load_stale ? 1 : 0);
-    if (app->needs_reattach) out += " reattach=1";
   }
   return out;
 }
@@ -2897,294 +1806,6 @@ auto CellAppMgr::BuildRetireStatusSummary() const -> std::string {
   return out;
 }
 
-auto CellAppMgr::LastSnapshotAttemptAgeMsForWatcher() const -> int64_t {
-  return AgeMsSince(last_snapshot_attempt_at_);
-}
-
-auto CellAppMgr::LastSnapshotSaveAgeMsForWatcher() const -> int64_t {
-  return AgeMsSince(last_snapshot_save_at_);
-}
-
-auto CellAppMgr::LastSnapshotDirtyAgeMsForWatcher() const -> int64_t {
-  return snapshot_dirty_ ? AgeMsSince(snapshot_dirty_at_) : -1;
-}
-
-auto CellAppMgr::LastSnapshotRestoreAttemptAgeMsForWatcher() const -> int64_t {
-  return AgeMsSince(last_snapshot_restore_attempt_at_);
-}
-
-auto CellAppMgr::LastSnapshotRestoreAgeMsForWatcher() const -> int64_t {
-  return AgeMsSince(last_snapshot_restore_at_);
-}
-
-auto CellAppMgr::SnapshotSaveStaleForWatcher() const -> bool {
-  if (Config().snapshot_path.empty() || Config().snapshot_interval_ms <= 0) return false;
-  const bool attempted = last_snapshot_attempt_at_.time_since_epoch() != Duration::zero();
-  const bool saved = last_snapshot_save_at_.time_since_epoch() != Duration::zero();
-  if (!saved) return attempted;
-  return LastSnapshotSaveAgeMsForWatcher() >
-         static_cast<int64_t>(Config().snapshot_interval_ms) * 2;
-}
-
-auto CellAppMgr::SnapshotSizeHighWaterPct() const -> uint32_t {
-  if (last_snapshot_bytes_ == 0) return 0;
-  const auto pct = (static_cast<uint64_t>(last_snapshot_bytes_) * 100u) / kMaxSnapshotFileBytes;
-  return static_cast<uint32_t>(std::min<uint64_t>(pct, 100));
-}
-
-auto CellAppMgr::SnapshotFilePathForWatcher() const -> std::string {
-  const auto& configured = Config().snapshot_path;
-  const auto& base_path = configured.empty() ? last_snapshot_save_path_ : configured;
-  return base_path.string();
-}
-
-auto CellAppMgr::SnapshotFilePresentForWatcher() const -> bool {
-  return SnapshotFileReadinessForPath(SnapshotFilePathForWatcher(), false).present;
-}
-
-auto CellAppMgr::SnapshotFileBytesForWatcher() const -> uint64_t {
-  return SnapshotFileReadinessForPath(SnapshotFilePathForWatcher(), false).bytes;
-}
-
-auto CellAppMgr::BuildSnapshotFileStatusSummary() const -> std::string {
-  const auto path = SnapshotFilePathForWatcher();
-  const auto readiness = SnapshotFileReadinessForPath(path, true);
-  return std::format(
-      "state={} path={} present={} bytes={} valid={} error_present={} error_detail={}",
-      readiness.state, path, readiness.present ? 1 : 0, readiness.bytes,
-      readiness.valid ? 1 : 0, readiness.error_present ? 1 : 0, readiness.error_detail);
-}
-
-auto CellAppMgr::BuildSnapshotFileTopologyStatusSummary() const -> std::string {
-  return BuildSnapshotTopologyStatusSummary(SnapshotFilePathForWatcher(),
-                                            last_snapshot_save_topology_);
-}
-
-auto CellAppMgr::SnapshotBackupPathForWatcher() const -> std::string {
-  const auto& configured = Config().snapshot_path;
-  const auto& base_path = configured.empty() ? last_snapshot_save_path_ : configured;
-  if (base_path.empty()) return "";
-  return SnapshotBackupPath(base_path).string();
-}
-
-auto CellAppMgr::SnapshotBackupPresentForWatcher() const -> bool {
-  return SnapshotFileReadinessForPath(SnapshotBackupPathForWatcher(), false).present;
-}
-
-auto CellAppMgr::SnapshotBackupBytesForWatcher() const -> uint64_t {
-  return SnapshotFileReadinessForPath(SnapshotBackupPathForWatcher(), false).bytes;
-}
-
-auto CellAppMgr::BuildSnapshotBackupStatusSummary() const -> std::string {
-  const auto path = SnapshotBackupPathForWatcher();
-  const auto readiness = SnapshotFileReadinessForPath(path, true);
-  return std::format(
-      "state={} path={} present={} bytes={} valid={} error_present={} error_detail={}",
-      readiness.state, path, readiness.present ? 1 : 0, readiness.bytes,
-      readiness.valid ? 1 : 0, readiness.error_present ? 1 : 0, readiness.error_detail);
-}
-
-auto CellAppMgr::BuildSnapshotBackupTopologyStatusSummary() const -> std::string {
-  return BuildSnapshotTopologyStatusSummary(SnapshotBackupPathForWatcher(), "");
-}
-
-auto CellAppMgr::BuildSnapshotTopologyStatusSummary(const std::filesystem::path& path,
-                                                    const std::string& expected_topology) const
-    -> std::string {
-  const auto path_text = path.string();
-  if (path.empty()) {
-    return std::format(
-        "state=disabled path={} present=0 bytes=0 valid=0 restorable=0 topology_present=0 "
-        "topology_pending_ack=0 matches_expected=0 error_present=0 error_detail=none",
-        path_text);
-  }
-  if (!fs::Exists(path)) {
-    return std::format(
-        "state=missing path={} present=0 bytes=0 valid=0 restorable=0 topology_present=0 "
-        "topology_pending_ack=0 matches_expected=0 error_present=0 error_detail=none",
-        path_text);
-  }
-  auto size = fs::FileSize(path);
-  if (!size) {
-    return std::format(
-        "state=unreadable path={} present=1 bytes=0 valid=0 restorable=0 "
-        "topology_present=0 topology_pending_ack=0 matches_expected=0 error_present=1 "
-        "error_detail={}",
-        path_text, WatcherErrorDetail(size.Error().Message()));
-  }
-  const auto bytes_size = static_cast<uint64_t>(*size);
-  if (bytes_size == 0) {
-    return std::format(
-        "state=empty path={} present=1 bytes=0 valid=0 restorable=0 topology_present=0 "
-        "topology_pending_ack=0 matches_expected=0 error_present=0 error_detail=none",
-        path_text);
-  }
-  if (*size > kMaxSnapshotFileBytes) {
-    return std::format(
-        "state=too_large path={} present=1 bytes={} valid=0 restorable=0 "
-        "topology_present=0 topology_pending_ack=0 matches_expected=0 error_present=1 "
-        "error_detail=file_too_large",
-        path_text, bytes_size);
-  }
-
-  auto bytes = fs::ReadFile(path);
-  if (!bytes) {
-    return std::format(
-        "state=unreadable path={} present=1 bytes={} valid=0 restorable=0 "
-        "topology_present=0 topology_pending_ack=0 matches_expected=0 error_present=1 "
-        "error_detail={}",
-        path_text, bytes_size, WatcherErrorDetail(bytes.Error().Message()));
-  }
-  auto payload = SnapshotPayload(std::span<const std::byte>(bytes->data(), bytes->size()));
-  if (!payload) {
-    return std::format(
-        "state=invalid path={} present=1 bytes={} valid=0 restorable=0 topology_present=0 "
-        "topology_pending_ack=0 matches_expected=0 error_present=1 error_detail={}",
-        path_text, bytes_size, WatcherErrorDetail(payload.Error().Message()));
-  }
-
-  EventDispatcher dispatcher{"cellappmgr-snapshot-topology"};
-  NetworkInterface network{dispatcher};
-  CellAppMgr verifier{dispatcher, network};
-  auto restore = verifier.Restore(std::span<const std::byte>(bytes->data(), bytes->size()));
-  if (!restore) {
-    return std::format(
-        "state=unrestorable path={} present=1 bytes={} valid=1 restorable=0 "
-        "topology_present=0 topology_pending_ack=0 matches_expected=0 error_present=1 "
-        "error_detail={}",
-        path_text, bytes_size, WatcherErrorDetail(restore.Error().Message()));
-  }
-
-  const auto topology = verifier.BuildTopologyFingerprint();
-  const auto pending_ack = verifier.TopologyPendingAckCount();
-  const bool matches_expected = !expected_topology.empty() && topology == expected_topology;
-  return std::format(
-      "state=ready path={} present=1 bytes={} valid=1 restorable=1 topology_present=1 "
-      "topology_pending_ack={} matches_expected={} error_present=0 error_detail=none",
-      path_text, bytes_size, pending_ack, matches_expected ? 1 : 0);
-}
-
-auto CellAppMgr::BuildSnapshotStatusSummary() const -> std::string {
-  const bool configured = !Config().snapshot_path.empty();
-  const bool attempted = last_snapshot_attempt_at_.time_since_epoch() != Duration::zero();
-  const bool saved = last_snapshot_save_at_.time_since_epoch() != Duration::zero();
-  const bool stale = SnapshotSaveStaleForWatcher();
-
-  const char* state = "disabled";
-  if (configured) {
-    if (stale) {
-      state = "stale";
-    } else if (!saved && !attempted) {
-      state = "pending";
-    } else if (!saved) {
-      state = "failing";
-    } else if (!last_snapshot_save_error_.empty()) {
-      state = "degraded";
-    } else if (snapshot_dirty_) {
-      state = "dirty";
-    } else {
-      state = "healthy";
-    }
-  }
-  const bool error_present = !last_snapshot_save_error_.empty();
-  const auto error_detail =
-      error_present ? WatcherErrorDetail(last_snapshot_save_error_) : std::string{"none"};
-  const auto dirty_reason =
-      snapshot_dirty_ ? WatcherErrorDetail(snapshot_dirty_reason_) : std::string{"none"};
-
-  return std::format(
-      "state={} configured={} interval_ms={} saves={} save_failures={} "
-      "restore_failures={} failures={} stale={} last_attempt_age_ms={} "
-      "last_save_age_ms={} last_restore_attempt_age_ms={} last_restore_age_ms={} "
-      "bytes={} topology_present={} topology_pending_ack={} dirty={} dirty_age_ms={} "
-      "dirty_reason={} error_present={} error_detail={}",
-      state, configured ? 1 : 0, Config().snapshot_interval_ms, snapshot_save_count_,
-      snapshot_save_failure_count_, snapshot_restore_failure_count_, snapshot_failure_count_,
-      stale ? 1 : 0, LastSnapshotAttemptAgeMsForWatcher(), LastSnapshotSaveAgeMsForWatcher(),
-      LastSnapshotRestoreAttemptAgeMsForWatcher(), LastSnapshotRestoreAgeMsForWatcher(),
-      last_snapshot_bytes_, last_snapshot_save_topology_.empty() ? 0 : 1,
-      last_snapshot_save_topology_pending_ack_, snapshot_dirty_ ? 1 : 0,
-      LastSnapshotDirtyAgeMsForWatcher(), dirty_reason, error_present ? 1 : 0,
-      error_detail);
-}
-
-auto CellAppMgr::BuildSnapshotRestoreStatusSummary() const -> std::string {
-  const bool attempted =
-      last_snapshot_restore_attempt_at_.time_since_epoch() != Duration::zero();
-  const bool restored = last_snapshot_restore_at_.time_since_epoch() != Duration::zero();
-
-  const char* state = "not_attempted";
-  if (attempted) {
-    if (!last_snapshot_restore_error_.empty()) {
-      state = "failed";
-    } else if (last_snapshot_restore_source_ == "primary") {
-      state = "primary";
-    } else if (last_snapshot_restore_source_ == "backup") {
-      state = "fallback";
-    } else {
-      state = "missing";
-    }
-  }
-  const bool error_present = !last_snapshot_restore_error_.empty();
-  const bool primary_error_present = !last_snapshot_restore_primary_error_.empty();
-  const auto error_detail =
-      error_present ? WatcherErrorDetail(last_snapshot_restore_error_) : std::string{"none"};
-  const auto primary_error_detail = primary_error_present
-                                        ? WatcherErrorDetail(last_snapshot_restore_primary_error_)
-                                        : std::string{"none"};
-
-  return std::format(
-      "state={} source={} restored={} restores={} fallback_restores={} "
-      "restore_failures={} failures={} last_attempt_age_ms={} last_restore_age_ms={} "
-      "error_present={} error_detail={} primary_error_present={} primary_error_detail={} "
-      "topology_present={} topology_pending_ack={}",
-      state, last_snapshot_restore_source_, restored ? 1 : 0, snapshot_restore_count_,
-      snapshot_fallback_restore_count_, snapshot_restore_failure_count_, snapshot_failure_count_,
-      LastSnapshotRestoreAttemptAgeMsForWatcher(), LastSnapshotRestoreAgeMsForWatcher(),
-      error_present ? 1 : 0, error_detail, primary_error_present ? 1 : 0,
-      primary_error_detail,
-      last_snapshot_restore_topology_.empty() ? 0 : 1,
-      last_snapshot_restore_topology_pending_ack_);
-}
-
-auto CellAppMgr::ReattachStateForWatcher() const -> std::string {
-  if (RestoredCellAppCount() == 0) return "idle";
-  if (StuckReattachCellAppCount() != 0) return "stuck";
-  if (PendingReattachCellAppCount() == 0) return "complete";
-  return "pending";
-}
-
-auto CellAppMgr::BuildReattachStatusSummary() const -> std::string {
-  std::vector<const CellAppInfo*> apps;
-  apps.reserve(cellapps_.size());
-  for (const auto& [_, info] : cellapps_) {
-    if (info.restored_from_snapshot) apps.push_back(&info);
-  }
-  std::sort(apps.begin(), apps.end(), [](const CellAppInfo* a, const CellAppInfo* b) {
-    return a->app_id < b->app_id;
-  });
-
-  const auto now = Clock::now();
-  const auto pending = PendingReattachCellAppCount();
-  const auto stuck = StuckReattachCellAppCount();
-  const auto completed_count = apps.size() - pending;
-  const auto state = ReattachStateForWatcher();
-  std::string out = std::format(
-      "state={} restored={} pending={} completed={} stuck={} completed_count={}", state,
-      apps.size(), pending, pending == 0 ? 1 : 0, stuck, completed_count);
-  for (const auto* app : apps) {
-    const bool app_stuck = IsReattachStuck(*app, now);
-    const char* app_state =
-        app->needs_reattach ? (app_stuck ? "stuck" : "pending") : "attached";
-    out += std::format(" app={} addr={} state={}", app->app_id,
-                       app->internal_addr.ToString(), app_state);
-    if (app->needs_reattach) {
-      out += std::format(" age_ms={}", DurationMs(now - app->registered_at));
-    }
-  }
-  return out;
-}
-
 auto CellAppMgr::RecoveryWindowActive() const -> bool {
   // Mirrors BigWorld startRecovery: a freshly (re)started mgr holds topology
   // mutation until recovery_deadline_ so live workers can report their BSP
@@ -3192,167 +1813,6 @@ auto CellAppMgr::RecoveryWindowActive() const -> bool {
   // Set in Init from startup_quiescence_window_; stays unset (open) for
   // harness tests that don't run Init.
   return recovery_deadline_ != TimePoint{} && Clock::now() < recovery_deadline_;
-}
-
-auto CellAppMgr::RestoreGateActive() const -> bool {
-  return RecoveryWindowActive() || PendingReattachCellAppCount() != 0;
-}
-
-auto CellAppMgr::RestoreGateActiveForWatcher() const -> bool { return RestoreGateActive(); }
-
-auto CellAppMgr::PendingGeometryRestoreGateBlockedCount() const -> std::size_t {
-  return static_cast<std::size_t>(
-      std::count_if(pending_geometry_broadcasts_.begin(), pending_geometry_broadcasts_.end(),
-                    [this](const PendingGeometryBroadcast& pending) {
-                      const auto app = cellapps_.find(pending.awaiting_addr);
-                      return app != cellapps_.end() && app->second.needs_reattach;
-                    }));
-}
-
-auto CellAppMgr::BuildRestoreGateStatusSummary() const -> std::string {
-  const auto pending_reattach = PendingReattachCellAppCount();
-  const auto blocked_pending_geometry = PendingGeometryRestoreGateBlockedCount();
-  const bool recovery_window = RecoveryWindowActive();
-  const bool lb_frozen = pending_reattach != 0 || recovery_window;
-  const bool active = lb_frozen || blocked_pending_geometry != 0;
-  const char* state = active ? "closed" : "open";
-  return std::format(
-      "state={} active={} lb_frozen={} recovery_window={} pending_reattach={} "
-      "pending_geometry={} blocked_pending_geometry={}",
-      state, active ? 1 : 0, lb_frozen ? 1 : 0, recovery_window ? 1 : 0, pending_reattach,
-      pending_geometry_broadcasts_.size(), blocked_pending_geometry);
-}
-
-auto CellAppMgr::BuildReattachRegistryStatusSummary() const -> std::string {
-  std::string state = "healthy";
-  if (PendingReattachCellAppCount() == 0) {
-    state = "idle";
-  } else if (reattach_registry_audit_pending_) {
-    state = "querying";
-  } else if (!last_reattach_registry_error_.empty()) {
-    state = "error";
-  } else if (last_reattach_registry_blocked_ != 0) {
-    state = "blocked";
-  } else if (last_reattach_registry_reconciled_ != 0) {
-    state = "reconciled";
-  }
-  const auto error_detail = last_reattach_registry_error_.empty()
-                                ? std::string{"none"}
-                                : WatcherErrorDetail(last_reattach_registry_error_);
-  return std::format(
-      "state={} audits={} query_pending={} pending_reattach={} last_missing={} "
-      "last_blocked={} last_reconciled={} reconciled_total={} error_detail={}",
-      state, reattach_registry_audit_count_, reattach_registry_audit_pending_ ? 1 : 0,
-      PendingReattachCellAppCount(), last_reattach_registry_missing_,
-      last_reattach_registry_blocked_, last_reattach_registry_reconciled_,
-      reattach_registry_reconciled_total_, error_detail);
-}
-
-auto CellAppMgr::CellAppOwnsAnyLeaf(const Address& addr) const -> bool {
-  for (const auto& [_, partition] : spaces_) {
-    for (const auto* leaf : partition.bsp.Leaves()) {
-      if (leaf->cellapp_addr == addr) return true;
-    }
-  }
-  return false;
-}
-
-auto CellAppMgr::HasAssignableCellAppExcept(const Address& addr) const -> bool {
-  const auto now = Clock::now();
-  return std::any_of(cellapps_.begin(), cellapps_.end(), [&](const auto& entry) {
-    return entry.first != addr && IsAssignableForLb(entry.second, now);
-  });
-}
-
-void CellAppMgr::AuditReattachRegistry() {
-  if (PendingReattachCellAppCount() == 0) {
-    reattach_registry_audit_pending_ = false;
-    last_reattach_registry_missing_ = 0;
-    last_reattach_registry_blocked_ = 0;
-    last_reattach_registry_reconciled_ = 0;
-    last_reattach_registry_error_.clear();
-    return;
-  }
-  if (reattach_registry_audit_pending_) return;
-  const auto now = Clock::now();
-  if (last_reattach_registry_audit_at_ != TimePoint{} &&
-      now - last_reattach_registry_audit_at_ < kReattachRegistryAuditInterval) {
-    return;
-  }
-  if (!GetMachinedClient().IsConnected()) {
-    last_reattach_registry_error_ = "machined disconnected";
-    return;
-  }
-
-  reattach_registry_audit_pending_ = true;
-  last_reattach_registry_audit_at_ = now;
-  ++reattach_registry_audit_count_;
-  GetMachinedClient().QueryAsync(ProcessType::kCellApp,
-                                 [this](std::vector<machined::ProcessInfo> infos) {
-                                   OnReattachRegistryAudit(std::move(infos));
-                                 });
-}
-
-void CellAppMgr::OnReattachRegistryAudit(std::vector<machined::ProcessInfo> infos) {
-  reattach_registry_audit_pending_ = false;
-  if (infos.empty() && PendingReattachCellAppCount() != 0) {
-    last_reattach_registry_missing_ = 0;
-    last_reattach_registry_blocked_ = 0;
-    last_reattach_registry_reconciled_ = 0;
-    last_reattach_registry_error_ = "cellapp registry query returned empty";
-    return;
-  }
-  (void)ApplyReattachRegistryAudit(std::span<const machined::ProcessInfo>(infos.data(),
-                                                                          infos.size()));
-}
-
-auto CellAppMgr::ApplyReattachRegistryAudit(std::span<const machined::ProcessInfo> infos)
-    -> ReattachRegistryAuditResult {
-  std::vector<Address> live_cellapps;
-  live_cellapps.reserve(infos.size());
-  for (const auto& info : infos) {
-    if (info.process_type == ProcessType::kCellApp) live_cellapps.push_back(info.internal_addr);
-  }
-
-  std::vector<Address> missing;
-  for (const auto& [addr, info] : cellapps_) {
-    if (!info.restored_from_snapshot || !info.needs_reattach) continue;
-    const auto found = std::find(live_cellapps.begin(), live_cellapps.end(), addr);
-    if (found == live_cellapps.end()) missing.push_back(addr);
-  }
-
-  ReattachRegistryAuditResult result;
-  result.missing = missing.size();
-  last_reattach_registry_error_.clear();
-  for (const auto& addr : missing) {
-    if (!CellAppOwnsAnyLeaf(addr)) {
-      cellapps_.erase(addr);
-      MarkSnapshotDirty("reattach-registry-prune");
-      ++result.reconciled;
-      continue;
-    }
-    if (!HasAssignableCellAppExcept(addr)) {
-      ++result.blocked;
-      continue;
-    }
-    OnCellAppDeath(addr, /*reason=*/2);
-    ++result.reconciled;
-  }
-
-  last_reattach_registry_missing_ = result.missing;
-  last_reattach_registry_blocked_ = result.blocked;
-  last_reattach_registry_reconciled_ = result.reconciled;
-  reattach_registry_reconciled_total_ += result.reconciled;
-  return result;
-}
-
-void CellAppMgr::ApplyReattachRegistryAuditForTest(
-    std::span<const machined::ProcessInfo> infos) {
-  (void)ApplyReattachRegistryAudit(infos);
-}
-
-void CellAppMgr::OnReattachRegistryAuditForTest(std::vector<machined::ProcessInfo> infos) {
-  OnReattachRegistryAudit(std::move(infos));
 }
 
 auto CellAppMgr::BuildLbDecisionSummary() const -> std::string {
@@ -3484,35 +1944,6 @@ auto CellAppMgr::AssignableCellAppCount() const -> std::size_t {
                     }));
 }
 
-auto CellAppMgr::RestoredCellAppCount() const -> std::size_t {
-  return static_cast<std::size_t>(
-      std::count_if(cellapps_.begin(), cellapps_.end(),
-                    [](const auto& entry) { return entry.second.restored_from_snapshot; }));
-}
-
-auto CellAppMgr::PendingReattachCellAppCount() const -> std::size_t {
-  return static_cast<std::size_t>(std::count_if(
-      cellapps_.begin(), cellapps_.end(), [](const auto& entry) {
-        return entry.second.restored_from_snapshot && entry.second.needs_reattach;
-      }));
-}
-
-auto CellAppMgr::CompletedReattachCellAppCount() const -> std::size_t {
-  return RestoredCellAppCount() - PendingReattachCellAppCount();
-}
-
-auto CellAppMgr::StuckReattachCellAppCount() const -> std::size_t {
-  const auto now = Clock::now();
-  return static_cast<std::size_t>(
-      std::count_if(cellapps_.begin(), cellapps_.end(), [&](const auto& entry) {
-        return IsReattachStuck(entry.second, now);
-      }));
-}
-
-auto CellAppMgr::ReattachCompleted() const -> bool {
-  return PendingReattachCellAppCount() == 0;
-}
-
 auto CellAppMgr::StaleLoadReportCount() const -> std::size_t {
   const auto now = Clock::now();
   return static_cast<std::size_t>(
@@ -3552,21 +1983,16 @@ auto CellAppMgr::RetiringAppIdForWatcher() const -> uint32_t {
 
 auto CellAppMgr::SetRetiringAppId(uint32_t app_id) -> bool {
   if (app_id == 0) {
-    bool changed = last_retire_app_id_ != 0;
     for (auto& [_, info] : cellapps_) {
-      changed = changed || info.is_retiring;
       info.is_retiring = false;
     }
     last_retire_app_id_ = 0;
-    if (changed) MarkSnapshotDirty("retire-clear");
     return true;
   }
   for (auto& [_, info] : cellapps_) {
     if (info.app_id != app_id) continue;
-    const bool changed = !info.is_retiring || last_retire_app_id_ != app_id;
     info.is_retiring = true;
     last_retire_app_id_ = app_id;
-    if (changed) MarkSnapshotDirty("retire-mark");
     return true;
   }
   return false;
@@ -3601,7 +2027,6 @@ auto CellAppMgr::HandleRetireDrainReport(
   ATLAS_LOG_INFO("CellAppMgr: retire drain completed space={} cell={}", it->space_id,
                  it->cell_id);
   retire_drains_.erase(it);
-  MarkSnapshotDirty("retire-drain-complete");
   return true;
 }
 
@@ -3742,7 +2167,6 @@ void CellAppMgr::BroadcastGeometry(
 
     fan_should_offload(true);
     partition.last_broadcast_blob = std::move(blob);
-    MarkSnapshotDirty("geometry-broadcast");
   }
 
   if (debug_changed) {

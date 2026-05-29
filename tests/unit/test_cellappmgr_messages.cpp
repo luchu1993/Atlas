@@ -189,48 +189,21 @@ TEST(CellAppMgrMessages, HealthProbeAck_RoundTrip) {
   HealthProbeAck msg;
   msg.nonce = 0x1122334455667788ull;
   msg.game_time = 0x8877665544332211ull;
-  msg.snapshot_saves = 11;
-  msg.snapshot_failures = 2;
-  msg.snapshot_dirty = true;
-  msg.snapshot_save_stale = true;
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
   EXPECT_EQ(rt->nonce, 0x1122334455667788ull);
   EXPECT_EQ(rt->game_time, 0x8877665544332211ull);
-  EXPECT_EQ(rt->snapshot_saves, 11u);
-  EXPECT_EQ(rt->snapshot_failures, 2u);
-  EXPECT_TRUE(rt->snapshot_dirty);
-  EXPECT_TRUE(rt->snapshot_save_stale);
 }
 
-TEST(CellAppMgrMessages, HealthProbeAck_RejectsTruncatedSnapshotSummary) {
+TEST(CellAppMgrMessages, HealthProbeAck_RejectsTruncated) {
   HealthProbeAck msg;
   msg.nonce = 1;
   msg.game_time = 2;
-  msg.snapshot_saves = 3;
-  msg.snapshot_failures = 4;
-  msg.snapshot_dirty = true;
-  msg.snapshot_save_stale = false;
   BinaryWriter w;
   msg.Serialize(w);
   auto buf = w.Detach();
   ASSERT_FALSE(buf.empty());
   buf.pop_back();
-  BinaryReader r(buf);
-  auto parsed = HealthProbeAck::Deserialize(r);
-  EXPECT_FALSE(parsed.HasValue());
-  EXPECT_EQ(parsed.Error().Code(), ErrorCode::kInvalidArgument);
-}
-
-TEST(CellAppMgrMessages, HealthProbeAck_RejectsBadSnapshotFlags) {
-  BinaryWriter w;
-  w.Write<uint64_t>(1);  // nonce
-  w.Write<uint64_t>(2);  // game_time
-  w.Write<uint64_t>(3);  // snapshot_saves
-  w.Write<uint64_t>(4);  // snapshot_failures
-  w.Write<uint8_t>(2);
-  w.Write<uint8_t>(0);
-  auto buf = w.Detach();
   BinaryReader r(buf);
   auto parsed = HealthProbeAck::Deserialize(r);
   EXPECT_FALSE(parsed.HasValue());

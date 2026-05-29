@@ -61,9 +61,7 @@ class Reviver : public ManagerApp {
 
     std::filesystem::path exe;
     uint16_t internal_port{0};
-    std::filesystem::path snapshot_path;
     std::filesystem::path output_path;
-    int snapshot_interval_ms{-1};
     std::filesystem::path leader_lock_path;
 
     // "local" → leader_lock owns a ScopedFileLock; "machined" → leader_lock
@@ -121,10 +119,6 @@ class Reviver : public ManagerApp {
     uint64_t heartbeat_timeout_count{0};
     TimePoint heartbeat_last_ack_at{};
     uint64_t heartbeat_last_game_time{0};
-    uint64_t heartbeat_snapshot_saves{0};
-    uint64_t heartbeat_snapshot_failures{0};
-    bool heartbeat_snapshot_dirty{false};
-    bool heartbeat_snapshot_save_stale{false};
     uint64_t forced_termination_count{0};
     uint64_t leader_lock_acquires{0};
     uint64_t leader_lock_failures{0};
@@ -171,9 +165,8 @@ class Reviver : public ManagerApp {
                                 const cellappmgr::HealthProbeAck& msg);
   void OnBaseAppMgrHeartbeatAck(const Address& src, Channel* ch,
                                 const baseappmgr::HealthProbeAck& msg);
-  void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce, uint64_t game_time,
-                          uint64_t snapshot_saves, uint64_t snapshot_failures, bool snapshot_dirty,
-                          bool snapshot_save_stale);
+  void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
+                          uint64_t game_time);
 
   [[nodiscard]] auto HasLeadership(const ManagedTarget& t) const -> bool;
   [[nodiscard]] auto MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool;
@@ -182,7 +175,6 @@ class Reviver : public ManagerApp {
   [[nodiscard]] auto LeaderLockContent() const -> std::string;
   [[nodiscard]] auto TargetStatus(const ManagedTarget& t) const -> std::string;
   [[nodiscard]] auto HeartbeatLastAckAgeMsForWatcher(const ManagedTarget& t) const -> int64_t;
-  [[nodiscard]] auto TargetHeartbeatSnapshotStatus(const ManagedTarget& t) const -> std::string;
 
   void RegisterTargetWatchers(ManagedTarget& t);
 

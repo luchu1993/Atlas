@@ -362,14 +362,12 @@ auto LaunchCellAppMgrWithRetry(const std::filesystem::path& cellappmgr_exe,
 auto LaunchReviver(const std::filesystem::path& reviver_exe,
                    const std::filesystem::path& cellappmgr_exe,
                    const std::wstring& machined_addr, uint16_t cellappmgr_port,
-                   const std::filesystem::path& snapshot_path,
                    const std::filesystem::path& leader_lock_path,
                    const std::wstring& reviver_name = L"reviver_process_test",
                    uint32_t max_restarts = 3,
                    uint32_t health_failure_threshold = 2,
                    uint32_t manager_health_timeout_ms = 5000,
                    uint32_t launch_timeout_ms = 5000,
-                   uint32_t snapshot_interval_ms = 250,
                    const std::filesystem::path& config_path = {},
                    const std::filesystem::path& output_path = {},
                    uint32_t heartbeat_timeout_ms = 500) -> Child {
@@ -378,8 +376,6 @@ auto LaunchReviver(const std::filesystem::path& reviver_exe,
       L"--machined", machined_addr, L"--revive-cellappmgr-exe", cellappmgr_exe.wstring(),
       L"--revive-cellappmgr-name", L"cellappmgr_revived", L"--revive-cellappmgr-port",
       std::to_wstring(cellappmgr_port), L"--revive-cellappmgr-on-start", L"true",
-      L"--revive-cellappmgr-snapshot-path", snapshot_path.wstring(),
-      L"--revive-cellappmgr-snapshot-interval-ms", std::to_wstring(snapshot_interval_ms),
       L"--revive-leader-lock-path", leader_lock_path.wstring(),
       L"--revive-cellappmgr-update-hertz", L"100",
       L"--revive-cellappmgr-launch-timeout-ms", std::to_wstring(launch_timeout_ms),
@@ -678,8 +674,8 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
-                                L"reviver_process_test", 3, 2, 5000, 5000, 250,
+                                cellappmgr_port, leader_lock_path,
+                                L"reviver_process_test", 3, 2, 5000, 5000,
                                 reviver_config_path, revived_output_path);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
 
@@ -701,11 +697,6 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
   ASSERT_NE(first_mgr.pid, 0u);
   revived_mgr.Reset(first_mgr.pid);
 
-  const auto snapshot_interval = QueryWatcherValue(client, disp, ProcessType::kCellAppMgr,
-                                                   "cellappmgr_revived",
-                                                   "cellappmgr/ha/snapshot_interval_ms");
-  ASSERT_TRUE(snapshot_interval.has_value());
-  EXPECT_EQ(*snapshot_interval, "250");
   const auto tick_load_weight = QueryWatcherValue(client, disp, ProcessType::kCellAppMgr,
                                                   "cellappmgr_revived",
                                                   "cellappmgr/lb/weights/tick_load");
@@ -781,38 +772,6 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
                                                "reviver/cellappmgr/heartbeat_last_ack_age_ms");
   ASSERT_TRUE(first_ack_age.has_value());
   EXPECT_GE(std::stoll(*first_ack_age), 0);
-  ASSERT_TRUE(PollUntil(disp, [&] {
-    const auto saves = QueryWatcherValue(client, disp, ProcessType::kReviver,
-                                         "reviver_process_test",
-                                         "reviver/cellappmgr/heartbeat_snapshot_saves");
-    if (!saves) return false;
-    return std::stoull(*saves) > 0;
-  })) << machined.Diagnostic() << "\n"
-      << reviver.Diagnostic();
-  const auto heartbeat_snapshot_dirty =
-      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
-                        "reviver/cellappmgr/heartbeat_snapshot_dirty");
-  ASSERT_TRUE(heartbeat_snapshot_dirty.has_value());
-  EXPECT_EQ(*heartbeat_snapshot_dirty, "false");
-  const auto heartbeat_snapshot_stale =
-      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
-                        "reviver/cellappmgr/heartbeat_snapshot_save_stale");
-  ASSERT_TRUE(heartbeat_snapshot_stale.has_value());
-  EXPECT_EQ(*heartbeat_snapshot_stale, "false");
-  const auto heartbeat_snapshot_failures =
-      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
-                        "reviver/cellappmgr/heartbeat_snapshot_failures");
-  ASSERT_TRUE(heartbeat_snapshot_failures.has_value());
-  EXPECT_EQ(*heartbeat_snapshot_failures, "0");
-  const auto heartbeat_snapshot_status =
-      QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
-                        "reviver/cellappmgr/heartbeat_snapshot_status");
-  ASSERT_TRUE(heartbeat_snapshot_status.has_value());
-  EXPECT_NE(heartbeat_snapshot_status->find("state=ready"), std::string::npos);
-  EXPECT_NE(heartbeat_snapshot_status->find("failures=0"), std::string::npos);
-  EXPECT_NE(heartbeat_snapshot_status->find("dirty=0"), std::string::npos);
-  EXPECT_NE(heartbeat_snapshot_status->find("stale=0"), std::string::npos);
-  EXPECT_NE(heartbeat_snapshot_status->find("ack_age_ms="), std::string::npos);
   const auto first_restart_attempts =
       QueryWatcherValue(client, disp, ProcessType::kReviver, "reviver_process_test",
                         "reviver/cellappmgr/restart_attempts");
@@ -973,7 +932,7 @@ TEST(CellAppMgrProcess, ReviverAttachesToExistingCellAppMgrWithoutColdStart) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                cellappmgr_port, leader_lock_path,
                                 L"reviver_attach");
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver, "reviver_attach"))
@@ -1087,7 +1046,7 @@ TEST(CellAppMgrProcess, ReviverStartsNewCellAppMgrAfterTargetDiedBeforeSubscribe
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                cellappmgr_port, leader_lock_path,
                                 L"reviver_missed_death");
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
@@ -1190,7 +1149,7 @@ TEST(CellAppMgrProcess, ReviverRestartsCellAppMgrWhenDirectHeartbeatDoesNotAck) 
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                cellappmgr_port, leader_lock_path,
                                 L"reviver_heartbeat");
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
@@ -1328,7 +1287,7 @@ TEST(CellAppMgrProcess, ReviverTimesOutPendingManagerHealthWatcher) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, machined_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                cellappmgr_port, leader_lock_path,
                                 L"reviver_manager_timeout", 3, 20, 500);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, registry_disp, ProcessType::kReviver,
@@ -1394,7 +1353,7 @@ TEST(CellAppMgrProcess, ReviverStopsAfterRestartLimitWithoutHeartbeatAck) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, machined_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                cellappmgr_port, leader_lock_path,
                                 L"reviver_limit", 2);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
 
@@ -1488,7 +1447,7 @@ TEST(CellAppMgrProcess, ReviverStopsAfterLaunchedProcessDoesNotRegister) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, atlas_tool_exe, machined_addr,
-                                cellappmgr_port, snapshot_path, leader_lock_path,
+                                cellappmgr_port, leader_lock_path,
                                 L"reviver_launch_timeout", 2, 2, 5000, 300);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
 
@@ -1567,10 +1526,10 @@ TEST(CellAppMgrProcess, ReviverLeaderLockAllowsOnlyOneColdStartOwner) {
 
   PidGuard revived_mgr;
   Child reviver_a = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                  cellappmgr_port, snapshot_path, leader_lock_path,
+                                  cellappmgr_port, leader_lock_path,
                                   L"reviver_lock_a");
   Child reviver_b = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                  cellappmgr_port, snapshot_path, leader_lock_path,
+                                  cellappmgr_port, leader_lock_path,
                                   L"reviver_lock_b");
   ASSERT_TRUE(reviver_a.IsRunning()) << reviver_a.Diagnostic();
   ASSERT_TRUE(reviver_b.IsRunning()) << reviver_b.Diagnostic();

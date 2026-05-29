@@ -109,15 +109,10 @@ static const CliField kCliFields[] = {
     {"hot-reload-debounce-ms",      &ServerConfig::hot_reload_debounce_ms},
     {"hot-reload-unload-timeout-ms",&ServerConfig::hot_reload_unload_timeout_ms},
     {"hot-reload-auto-compile",     &ServerConfig::hot_reload_auto_compile},
-    {"snapshot-path",               &ServerConfig::snapshot_path},
-    {"snapshot-interval-ms",        &ServerConfig::snapshot_interval_ms},
     {"revive-cellappmgr-exe",       &ServerConfig::revive_cellappmgr_exe},
     {"revive-cellappmgr-name",      &ServerConfig::revive_cellappmgr_name},
     {"revive-cellappmgr-port",      &ServerConfig::revive_cellappmgr_internal_port},
-    {"revive-cellappmgr-snapshot-path", &ServerConfig::revive_cellappmgr_snapshot_path},
     {"revive-cellappmgr-output-path", &ServerConfig::revive_cellappmgr_output_path},
-    {"revive-cellappmgr-snapshot-interval-ms",
-        &ServerConfig::revive_cellappmgr_snapshot_interval_ms},
     {"revive-cellappmgr-update-hertz",  &ServerConfig::revive_cellappmgr_update_hertz},
     {"revive-cellappmgr-launch-timeout-ms",
         &ServerConfig::revive_cellappmgr_launch_timeout_ms},
@@ -146,10 +141,7 @@ static const CliField kCliFields[] = {
     {"revive-baseappmgr-exe",       &ServerConfig::revive_baseappmgr_exe},
     {"revive-baseappmgr-name",      &ServerConfig::revive_baseappmgr_name},
     {"revive-baseappmgr-port",      &ServerConfig::revive_baseappmgr_internal_port},
-    {"revive-baseappmgr-snapshot-path", &ServerConfig::revive_baseappmgr_snapshot_path},
     {"revive-baseappmgr-output-path", &ServerConfig::revive_baseappmgr_output_path},
-    {"revive-baseappmgr-snapshot-interval-ms",
-        &ServerConfig::revive_baseappmgr_snapshot_interval_ms},
     {"revive-baseappmgr-update-hertz",  &ServerConfig::revive_baseappmgr_update_hertz},
     {"revive-baseappmgr-launch-timeout-ms",
         &ServerConfig::revive_baseappmgr_launch_timeout_ms},
@@ -238,11 +230,6 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
     cfg.hot_reload_auto_compile = hr->ReadBool("auto_compile", cfg.hot_reload_auto_compile);
   }
 
-  if (auto* snapshot = root->Child("snapshot")) {
-    cfg.snapshot_path = snapshot->ReadString("path", cfg.snapshot_path.string());
-    cfg.snapshot_interval_ms = snapshot->ReadInt("interval_ms", cfg.snapshot_interval_ms);
-  }
-
   if (auto* reviver = root->Child("reviver")) {
     cfg.revive_restart_delay_ms =
         reviver->ReadInt("restart_delay_ms", cfg.revive_restart_delay_ms);
@@ -266,12 +253,8 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           cellappmgr->ReadString("name", cfg.revive_cellappmgr_name);
       cfg.revive_cellappmgr_internal_port = static_cast<uint16_t>(
           cellappmgr->ReadUint("internal_port", cfg.revive_cellappmgr_internal_port));
-      cfg.revive_cellappmgr_snapshot_path =
-          cellappmgr->ReadString("snapshot_path", cfg.revive_cellappmgr_snapshot_path.string());
       cfg.revive_cellappmgr_output_path =
           cellappmgr->ReadString("output_path", cfg.revive_cellappmgr_output_path.string());
-      cfg.revive_cellappmgr_snapshot_interval_ms = cellappmgr->ReadInt(
-          "snapshot_interval_ms", cfg.revive_cellappmgr_snapshot_interval_ms);
       cfg.revive_cellappmgr_update_hertz =
           cellappmgr->ReadInt("update_hertz", cfg.revive_cellappmgr_update_hertz);
       cfg.revive_cellappmgr_launch_timeout_ms =
@@ -299,13 +282,8 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           baseappmgr->ReadString("name", cfg.revive_baseappmgr_name);
       cfg.revive_baseappmgr_internal_port = static_cast<uint16_t>(
           baseappmgr->ReadUint("internal_port", cfg.revive_baseappmgr_internal_port));
-      cfg.revive_baseappmgr_snapshot_path =
-          baseappmgr->ReadString("snapshot_path",
-                                 cfg.revive_baseappmgr_snapshot_path.string());
       cfg.revive_baseappmgr_output_path =
           baseappmgr->ReadString("output_path", cfg.revive_baseappmgr_output_path.string());
-      cfg.revive_baseappmgr_snapshot_interval_ms = baseappmgr->ReadInt(
-          "snapshot_interval_ms", cfg.revive_baseappmgr_snapshot_interval_ms);
       cfg.revive_baseappmgr_update_hertz =
           baseappmgr->ReadInt("update_hertz", cfg.revive_baseappmgr_update_hertz);
       cfg.revive_baseappmgr_launch_timeout_ms =

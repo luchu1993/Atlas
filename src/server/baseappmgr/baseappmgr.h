@@ -39,25 +39,7 @@ class BaseAppMgr : public ManagerApp {
   void OnTickComplete() override;
 
  public:
-  // Serialise the authoritative BaseAppMgr state (BaseApp table,
-  // next_app_id_, dbid_affinity) into a checksummed envelope. Used by
-  // SaveSnapshotToFile and by Reviver-driven recovery.
-  [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
-
-  // Replace this instance's authoritative state from a snapshot blob.
-  // Restored BaseApps come back in needs_reattach state until the real
-  // process reconnects via OnRegisterBaseapp.
-  [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
-
-  [[nodiscard]] auto SaveSnapshotToFile(const std::filesystem::path& path) -> Result<void>;
-  [[nodiscard]] auto RestoreSnapshotFromFile(const std::filesystem::path& path) -> Result<void>;
-
   void RegisterWatchersForTest() { RegisterWatchers(); }
-  void ApplyReattachRegistryAuditForTest(std::span<const machined::ProcessInfo> infos);
-  void OnReattachRegistryAuditForTest(std::vector<machined::ProcessInfo> infos);
-  // Seeds a reattach-pending BaseApp as Restore would, without needing a live
-  // Channel (OnRegisterBaseapp derefs ch on the fresh-register path).
-  void SeedRestoredBaseAppForTest(const Address& internal_addr, uint32_t app_id);
 
  private:
   struct BaseAppInfo {
@@ -76,12 +58,9 @@ class BaseAppMgr : public ManagerApp {
     uint32_t pending_login_allocations{0};
     bool is_ready{false};
     bool is_retiring{false};
-    bool needs_reattach{false};
-    bool restored_from_snapshot{false};
     Channel* channel{nullptr};
     TimePoint last_load_report_at{};
     TimePoint registered_at{};
-    TimePoint last_reattach_watchdog_log_at{};
 
     void ApplyLoadReport(float load, uint32_t reported_entity_count, uint32_t reported_proxy_count,
                          uint32_t reported_pending_prepare_count,
@@ -158,79 +137,6 @@ class BaseAppMgr : public ManagerApp {
   mutable TimePoint overload_start_{};
   mutable int logins_since_overload_{0};
   DbidAffinityTable dbid_affinity_;
-
-  // Snapshot machinery (mirrors CellAppMgr; share via snapshot_envelope.h
-  // in a follow-up refactor).
-  void MarkSnapshotDirty(const char* reason);
-  void SaveConfiguredSnapshot(const char* context);
-  void AuditReattachWatchdog();
-  // Reconcile reattach-pending BaseApps against machined truth: a host that
-  // died during mgr downtime never re-registers, so the watchdog would log it
-  // forever and its dbid_affinity entries would dangle. Prune the ones
-  // machined reports gone (mirrors CellAppMgr, minus the leaf-rehome path —
-  // BaseApps own no topology, so pruning is always safe).
-  void AuditReattachRegistry();
-  void OnReattachRegistryAudit(std::vector<machined::ProcessInfo> infos);
-  [[nodiscard]] auto ApplyReattachRegistryAudit(std::span<const machined::ProcessInfo> infos)
-      -> std::size_t;
-  [[nodiscard]] auto BuildReattachRegistryStatusSummary() const -> std::string;
-  [[nodiscard]] auto ReattachWatchdogWindow() const -> Duration;
-  [[nodiscard]] auto IsReattachStuck(const BaseAppInfo& info, TimePoint now) const -> bool;
-  [[nodiscard]] auto RestoredBaseAppCount() const -> std::size_t;
-  [[nodiscard]] auto PendingReattachBaseAppCount() const -> std::size_t;
-  [[nodiscard]] auto CompletedReattachBaseAppCount() const -> std::size_t;
-  [[nodiscard]] auto StuckReattachBaseAppCount() const -> std::size_t;
-  [[nodiscard]] auto ReattachCompleted() const -> bool;
-  [[nodiscard]] auto ReattachStateForWatcher() const -> std::string;
-  [[nodiscard]] auto BuildReattachStatusSummary() const -> std::string;
-  [[nodiscard]] auto SnapshotFilePathForWatcher() const -> std::string;
-  [[nodiscard]] auto SnapshotFilePresentForWatcher() const -> bool;
-  [[nodiscard]] auto SnapshotFileBytesForWatcher() const -> uint64_t;
-  [[nodiscard]] auto BuildSnapshotFileStatusSummary() const -> std::string;
-  [[nodiscard]] auto SnapshotBackupPathForWatcher() const -> std::string;
-  [[nodiscard]] auto SnapshotBackupPresentForWatcher() const -> bool;
-  [[nodiscard]] auto SnapshotBackupBytesForWatcher() const -> uint64_t;
-  [[nodiscard]] auto BuildSnapshotBackupStatusSummary() const -> std::string;
-  [[nodiscard]] auto LastSnapshotAttemptAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotSaveAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotDirtyAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotRestoreAttemptAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto LastSnapshotRestoreAgeMsForWatcher() const -> int64_t;
-  [[nodiscard]] auto SnapshotSaveStaleForWatcher() const -> bool;
-  [[nodiscard]] auto SnapshotSizeHighWaterPct() const -> uint32_t;
-  [[nodiscard]] auto BuildSnapshotStatusSummary() const -> std::string;
-  [[nodiscard]] auto BuildSnapshotRestoreStatusSummary() const -> std::string;
-
-  TimePoint last_snapshot_attempt_at_{};
-  TimePoint last_snapshot_save_at_{};
-  TimePoint last_snapshot_restore_attempt_at_{};
-  TimePoint last_snapshot_restore_at_{};
-  uint64_t snapshot_save_count_{0};
-  uint64_t snapshot_restore_count_{0};
-  uint64_t snapshot_fallback_restore_count_{0};
-  uint64_t snapshot_save_failure_count_{0};
-  uint64_t snapshot_restore_failure_count_{0};
-  uint64_t snapshot_failure_count_{0};
-  uint64_t snapshot_backup_skip_count_{0};
-  std::size_t last_snapshot_bytes_{0};
-  std::filesystem::path last_snapshot_save_path_;
-  std::string last_snapshot_save_error_;
-  TimePoint last_snapshot_save_warning_at_{};
-  TimePoint last_snapshot_size_warning_at_{};
-  bool snapshot_dirty_{false};
-  TimePoint snapshot_dirty_at_{};
-  std::string snapshot_dirty_reason_;
-  std::string last_snapshot_restore_source_{"none"};
-  std::filesystem::path last_snapshot_restore_path_;
-  std::string last_snapshot_restore_error_;
-  std::string last_snapshot_restore_primary_error_;
-
-  TimePoint last_reattach_registry_audit_at_{};
-  bool reattach_registry_audit_pending_{false};
-  uint64_t reattach_registry_audit_count_{0};
-  uint64_t reattach_registry_reconciled_total_{0};
-  std::size_t last_reattach_registry_missing_{0};
-  std::string last_reattach_registry_error_;
 };
 
 }  // namespace atlas
