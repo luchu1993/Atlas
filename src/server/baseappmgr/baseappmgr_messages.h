@@ -14,14 +14,18 @@ namespace atlas::baseappmgr {
 struct RegisterBaseApp {
   Address internal_addr;
   Address external_addr;
+  // Echo of the BaseApp's current app_id (0 if never assigned). A manager that
+  // restarted without our entry keeps it so InformLoad routing stays stable.
+  uint32_t known_app_id{0};
 
   static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseApp),
-                                   "baseappmgr::RegisterBaseApp",
-                                   MessageLengthStyle::kFixed,
-                                   static_cast<int>((sizeof(uint32_t) + sizeof(uint16_t)) * 2),
-                                   MessageReliability::kReliable,
-                                   MessageUrgency::kImmediate};
+    static const MessageDesc kDesc{
+        msg_id::Id(msg_id::BaseAppMgr::kRegisterBaseApp),
+        "baseappmgr::RegisterBaseApp",
+        MessageLengthStyle::kFixed,
+        static_cast<int>((sizeof(uint32_t) + sizeof(uint16_t)) * 2 + sizeof(uint32_t)),
+        MessageReliability::kReliable,
+        MessageUrgency::kImmediate};
     return kDesc;
   }
 
@@ -30,6 +34,7 @@ struct RegisterBaseApp {
     w.Write(internal_addr.Port());
     w.Write(external_addr.Ip());
     w.Write(external_addr.Port());
+    w.Write(known_app_id);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<RegisterBaseApp> {
@@ -37,11 +42,13 @@ struct RegisterBaseApp {
     auto iport = r.Read<uint16_t>();
     auto eip = r.Read<uint32_t>();
     auto eport = r.Read<uint16_t>();
-    if (!iip || !iport || !eip || !eport)
+    auto known = r.Read<uint32_t>();
+    if (!iip || !iport || !eip || !eport || !known)
       return Error{ErrorCode::kInvalidArgument, "RegisterBaseApp: truncated"};
     RegisterBaseApp msg;
     msg.internal_addr = Address(*iip, *iport);
     msg.external_addr = Address(*eip, *eport);
+    msg.known_app_id = *known;
     return msg;
   }
 };

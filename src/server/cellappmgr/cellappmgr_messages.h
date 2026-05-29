@@ -241,25 +241,6 @@ struct InformCellLoad {
 };
 static_assert(NetworkMessage<InformCellLoad>);
 
-struct RequestCellAppState {
-  static auto Descriptor() -> const MessageDesc& {
-    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kRequestCellAppState),
-                                   "cellappmgr::RequestCellAppState",
-                                   MessageLengthStyle::kFixed,
-                                   0,
-                                   MessageReliability::kReliable,
-                                   MessageUrgency::kImmediate};
-    return kDesc;
-  }
-
-  void Serialize(BinaryWriter&) const {}
-
-  static auto Deserialize(BinaryReader&) -> Result<RequestCellAppState> {
-    return RequestCellAppState{};
-  }
-};
-static_assert(NetworkMessage<RequestCellAppState>);
-
 struct HealthProbe {
   uint64_t nonce{0};
 

@@ -177,6 +177,62 @@ TEST(BaseAppMgrIntegration, RejectsDuplicateInternalAddressWithoutConsumingAppId
   app_thread.join();
 }
 
+TEST(BaseAppMgrIntegration, PreservesEchoedKnownAppIdAndFallsBackOnCollision) {
+  const uint16_t port = reserve_udp_port();
+  ASSERT_NE(port, 0u);
+
+  std::promise<Address> addr_promise;
+  auto addr_future = addr_promise.get_future();
+  std::atomic<bool> stop_flag{false};
+
+  std::thread app_thread([&]() {
+    EventDispatcher dispatcher{"baseappmgr_server"};
+    dispatcher.SetMaxPollWait(Milliseconds(1));
+    NetworkInterface network(dispatcher);
+    TestBaseAppMgr app(dispatcher, network, addr_promise, stop_flag);
+    BaseAppMgrArgv args(port);
+    EXPECT_EQ(app.RunApp(args.argc(), args.argv()), 0);
+  });
+
+  const Address server_addr = addr_future.get();
+  ASSERT_NE(server_addr.Port(), 0u);
+
+  BaseAppMgrClient client1{"baseappmgr_known1"};
+  BaseAppMgrClient client2{"baseappmgr_known2"};
+  auto ch1 = client1.network.ConnectRudp(server_addr);
+  auto ch2 = client2.network.ConnectRudp(server_addr);
+  ASSERT_TRUE(ch1.HasValue()) << ch1.Error().Message();
+  ASSERT_TRUE(ch2.HasValue()) << ch2.Error().Message();
+
+  // A surviving BaseApp re-registering after a manager restart echoes the id
+  // it already owns; the manager keeps it so InformLoad routing stays stable.
+  RegisterBaseApp reg1;
+  reg1.internal_addr = Address(0, 7411);
+  reg1.external_addr = Address(0, 17411);
+  reg1.known_app_id = 99;
+  ASSERT_TRUE((*ch1)->SendMessage(reg1).HasValue());
+  ASSERT_TRUE(poll_until(client1.dispatcher, [&] {
+    return client1.register_ack_received.load(std::memory_order_acquire);
+  }));
+  EXPECT_TRUE(client1.register_ack.success);
+  EXPECT_EQ(client1.register_ack.app_id, 99u);
+
+  // A second BaseApp echoing the now-live id collides, so it gets a fresh one.
+  RegisterBaseApp reg2;
+  reg2.internal_addr = Address(0, 7412);
+  reg2.external_addr = Address(0, 17412);
+  reg2.known_app_id = 99;
+  ASSERT_TRUE((*ch2)->SendMessage(reg2).HasValue());
+  ASSERT_TRUE(poll_until(client2.dispatcher, [&] {
+    return client2.register_ack_received.load(std::memory_order_acquire);
+  }));
+  EXPECT_TRUE(client2.register_ack.success);
+  EXPECT_NE(client2.register_ack.app_id, 99u);
+
+  stop_flag.store(true, std::memory_order_release);
+  app_thread.join();
+}
+
 TEST(BaseAppMgrIntegration, IgnoresSpoofedFollowUpMessagesFromWrongBaseApp) {
   const uint16_t port = reserve_udp_port();
   ASSERT_NE(port, 0u);

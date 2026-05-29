@@ -345,10 +345,6 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::RegisterCellAppAck& msg) {
         OnRegisterCellAppAck(src, ch, msg);
       });
-  (void)table.RegisterTypedHandler<cellappmgr::RequestCellAppState>(
-      [this](const Address& src, Channel* ch, const cellappmgr::RequestCellAppState& msg) {
-        OnRequestCellAppState(src, ch, msg);
-      });
   (void)table.RegisterTypedHandler<dbapp::GetEntityIdsAck>(
       [this](const Address& /*src*/, Channel* ch, const dbapp::GetEntityIdsAck& msg) {
         OnGetEntityIdsAck(*ch, msg);
@@ -2818,13 +2814,6 @@ void CellApp::SendRecoverCellAppState() {
   }
   if (msg.spaces.empty()) return;
   (void)cellappmgr_channel_->SendMessage(msg);
-}
-
-void CellApp::OnRequestCellAppState(const Address& /*src*/, Channel* ch,
-                                    const cellappmgr::RequestCellAppState& /*msg*/) {
-  if (ch != nullptr) cellappmgr_channel_ = ch;
-  last_sent_load_time_ = TimePoint{};
-  SendInformCellLoad();
 }
 
 auto CellApp::BuildOffloadMessage(const CellEntity& entity,

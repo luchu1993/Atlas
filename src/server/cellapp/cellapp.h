@@ -156,8 +156,6 @@ class CellApp : public EntityApp, public CellMovementHost {
   void OnShouldOffload(const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg);
   void OnRegisterCellAppAck(const Address& src, Channel* ch,
                             const cellappmgr::RegisterCellAppAck& msg);
-  void OnRequestCellAppState(const Address& src, Channel* ch,
-                             const cellappmgr::RequestCellAppState& msg);
 
   // Drops any mgr-control message arriving through a channel other than our
   // current CellAppMgr (a straggler from a dead mgr after takeover).
@@ -503,6 +501,13 @@ class CellApp : public EntityApp, public CellMovementHost {
   [[nodiscard]] auto MovementSystemForTest() -> CellMovementSystem& { return movement_system_; }
   [[nodiscard]] auto MovementPhysicsQueryForTest(SpaceID space_id)
       -> physics::StaticPhysicsQuery*;
+
+  // Test-only - forces an immediate load report; production cadence is the
+  // periodic OnTickComplete timer.
+  void FlushLoadReportForTest() {
+    last_sent_load_time_ = {};
+    SendInformCellLoad();
+  }
 
   // Test-only - production code receives IDs via DBApp's GetEntityIdsAck.
   [[nodiscard]] auto GetIdClientForTest() const -> const IDClient& { return id_client_; }

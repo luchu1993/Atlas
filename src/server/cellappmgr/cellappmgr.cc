@@ -442,10 +442,10 @@ void CellAppMgr::OnRegisterCellApp(const Address& src, Channel* ch,
     }
     existing.channel = ch;
     existing.registered_at = Clock::now();
-    SendRegisterCellAppAck(ch, kInternalAddr, existing.app_id, /*success=*/true, "reattach");
-    ReplayCellAppTopology(existing);
-    SendRequestCellAppState(existing);
-    ATLAS_LOG_INFO("CellAppMgr: CellApp reattached app_id={} internal={}:{}",
+    // Idempotent re-register: the worker re-reports its held BSP via
+    // RecoverCellAppState right after this ack, so the mgr needs no replay.
+    SendRegisterCellAppAck(ch, kInternalAddr, existing.app_id, /*success=*/true, "re-register");
+    ATLAS_LOG_INFO("CellAppMgr: CellApp re-registered app_id={} internal={}:{}",
                    existing.app_id, kInternalAddr.Ip(), kInternalAddr.Port());
     return;
   }
@@ -519,47 +519,6 @@ void CellAppMgr::OnHealthProbe(const Address&, Channel* ch,
   ack.nonce = msg.nonce;
   ack.game_time = GameTime();
   (void)ch->SendMessage(ack);
-}
-
-void CellAppMgr::ReplayCellAppTopology(const CellAppInfo& info) {
-  for (auto& [_, partition] : spaces_) {
-    bool participates = false;
-    for (const auto* leaf : partition.bsp.Leaves()) {
-      if (leaf->cellapp_addr != info.internal_addr) continue;
-      participates = true;
-      const bool is_primary = leaf->cell_id == partition.bsp.PrimaryCellId();
-      SendAddCell(info, partition.space_id, leaf->cell_id, leaf->bounds, is_primary,
-                  partition.space_master_type);
-    }
-    if (participates && !HasPendingGeometryBroadcast(partition.space_id)) {
-      SendGeometryToCellApp(info, partition);
-    }
-  }
-}
-
-void CellAppMgr::SendGeometryToCellApp(const CellAppInfo& target,
-                                       const SpacePartition& partition) {
-  if (target.channel == nullptr) return;
-  BinaryWriter w;
-  partition.bsp.Serialize(w);
-  cellappmgr::UpdateGeometry msg;
-  msg.space_id = partition.space_id;
-  msg.geometry_version = partition.geometry_version;
-  const auto blob = w.Detach();
-  msg.bsp_blob.assign(blob.begin(), blob.end());
-  if (auto r = target.channel->SendMessage(msg); !r) {
-    ATLAS_LOG_WARNING("CellAppMgr: geometry replay failed space={} app_id={}: {}",
-                      partition.space_id, target.app_id, r.Error().Message());
-  }
-}
-
-void CellAppMgr::SendRequestCellAppState(const CellAppInfo& target) {
-  if (target.channel == nullptr) return;
-  cellappmgr::RequestCellAppState msg;
-  if (auto r = target.channel->SendMessage(msg); !r) {
-    ATLAS_LOG_WARNING("CellAppMgr: state request failed app_id={}: {}",
-                      target.app_id, r.Error().Message());
-  }
 }
 
 void CellAppMgr::OnRecoverCellAppState(const Address& /*src*/, Channel* /*ch*/,

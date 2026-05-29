@@ -22,10 +22,12 @@ TEST(BaseAppMgrMessages, RegisterBaseApp_RoundTrip) {
   RegisterBaseApp msg;
   msg.internal_addr = Address(0x7F000001u, 9000);
   msg.external_addr = Address(0x0A000001u, 20100);
+  msg.known_app_id = 42u;
 
   auto out = round_trip(msg);
   EXPECT_EQ(out.internal_addr.Port(), 9000u);
   EXPECT_EQ(out.external_addr.Port(), 20100u);
+  EXPECT_EQ(out.known_app_id, 42u);
 }
 
 TEST(BaseAppMgrMessages, RegisterBaseAppAck_RoundTrip) {

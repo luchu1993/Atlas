@@ -190,15 +190,6 @@ auto RegisterCellAppAcks(const RecordingChannel& ch)
   return out;
 }
 
-auto RequestCellAppStateCount(const RecordingChannel& ch) -> std::size_t {
-  std::size_t count = 0;
-  for (const auto& frame : ch.Sends()) {
-    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
-    const auto id = reader.ReadPackedInt();
-    if (id && *id == cellappmgr::RequestCellAppState::Descriptor().id) ++count;
-  }
-  return count;
-}
 
 // ============================================================================
 // Register / Ack

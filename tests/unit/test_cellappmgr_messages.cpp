@@ -171,12 +171,6 @@ TEST(CellAppMgrMessages, InformCellLoad_RoundTrip) {
   EXPECT_EQ(rt->cells[1].backup_bytes, 32768u);
 }
 
-TEST(CellAppMgrMessages, RequestCellAppState_RoundTrip) {
-  RequestCellAppState msg;
-  auto rt = RoundTrip(msg);
-  ASSERT_TRUE(rt.has_value());
-}
-
 TEST(CellAppMgrMessages, HealthProbe_RoundTrip) {
   HealthProbe msg;
   msg.nonce = 0x1122334455667788ull;
@@ -319,7 +313,6 @@ TEST(CellAppMgrMessages, MessageIdsAreStable) {
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kSpaceCreatedResult), 7007u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kAddCellToSpaceAck), 7008u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRemoveCellFromSpace), 7009u);
-  EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRequestCellAppState), 7010u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kHealthProbe), 7011u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck), 7012u);
   EXPECT_EQ(msg_id::Id(msg_id::CellAppMgr::kRecoverCellAppState), 7013u);

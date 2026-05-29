@@ -242,7 +242,15 @@ void BaseAppMgr::OnRegisterBaseapp(const Address& src, Channel* ch,
     return;
   }
 
-  uint32_t app_id = next_app_id_++;
+  // Snapshot-less recovery: a surviving BaseApp echoes the id it already owns;
+  // keep it so InformLoad routing stays stable across a manager restart.
+  uint32_t app_id;
+  if (msg.known_app_id != 0 && !app_id_index_.contains(msg.known_app_id)) {
+    app_id = msg.known_app_id;
+    next_app_id_ = std::max(next_app_id_, app_id + 1);
+  } else {
+    app_id = next_app_id_++;
+  }
   BaseAppInfo info;
   info.internal_addr = kInternalAddr;
   info.external_addr = kExternalAddr;

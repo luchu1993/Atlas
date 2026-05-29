@@ -186,9 +186,6 @@ class CellAppMgr : public ManagerApp {
                                         const Address& target_addr);
   void SendRegisterCellAppAck(Channel* ch, const Address& addr, uint32_t app_id, bool success,
                               const char* context);
-  void ReplayCellAppTopology(const CellAppInfo& info);
-  void SendGeometryToCellApp(const CellAppInfo& target, const SpacePartition& partition);
-  void SendRequestCellAppState(const CellAppInfo& target);
 
   void SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg, const Address& src,
                             Channel* ch, bool ok, cellappmgr::CellID cell_id, Address host_addr);

@@ -2107,7 +2107,7 @@ auto MakeGhostSpace(CellApp& app, SpaceID space_id, cellappmgr::CellID primary_c
 
 }  // namespace
 
-TEST_F(CellAppHandlersTest, RequestCellAppStateForcesImmediateLoadReport) {
+TEST_F(CellAppHandlersTest, FlushLoadReportSendsImmediateReport) {
   InterfaceTable table;
   RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
 
@@ -2117,8 +2117,7 @@ TEST_F(CellAppHandlersTest, RequestCellAppStateForcesImmediateLoadReport) {
   app_.OnRegisterCellAppAck({}, &mgr_ch, ack);
   MakeOwnerSpace(app_, 7, 1, 30001, /*geometry_version=*/12);
 
-  cellappmgr::RequestCellAppState req;
-  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  app_.FlushLoadReportForTest();
   auto loads = InformCellLoads(mgr_ch);
   ASSERT_EQ(loads.size(), 1u);
   EXPECT_EQ(loads.back().app_id, 7u);
@@ -2126,7 +2125,7 @@ TEST_F(CellAppHandlersTest, RequestCellAppStateForcesImmediateLoadReport) {
   EXPECT_EQ(loads.back().cells[0].cell_id, 1u);
   EXPECT_EQ(loads.back().cells[0].geometry_version, 12u);
 
-  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  app_.FlushLoadReportForTest();
   loads = InformCellLoads(mgr_ch);
   EXPECT_EQ(loads.size(), 2u);
 }
@@ -2145,8 +2144,7 @@ TEST_F(CellAppHandlersTest, ReportScriptTickContributesToCellLoadReport) {
   native_provider_holder_ = app_.CreateNativeProviderForTest();
   app_.NativeProvider()->ReportScriptTick(900, 20000);
 
-  cellappmgr::RequestCellAppState req;
-  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  app_.FlushLoadReportForTest();
   const auto loads = InformCellLoads(mgr_ch);
   ASSERT_EQ(loads.size(), 1u);
   ASSERT_EQ(loads.back().cells.size(), 1u);
@@ -2171,21 +2169,20 @@ TEST_F(CellAppHandlersTest, FailedInformCellLoadPreservesTickCountersForRetry) {
   native_provider_holder_ = app_.CreateNativeProviderForTest();
   app_.NativeProvider()->ReportScriptTick(900, 20000);
 
-  cellappmgr::RequestCellAppState req;
   app_.RegisterWatchersForTest();
   EXPECT_EQ(app_.GetWatcherRegistry()
                 .Get("cellapp/inform_cell_load_send_failures_total")
                 .value_or(""),
             "0");
   mgr_ch.FailNextSend();
-  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  app_.FlushLoadReportForTest();
   EXPECT_TRUE(InformCellLoads(mgr_ch).empty());
   EXPECT_EQ(app_.GetWatcherRegistry()
                 .Get("cellapp/inform_cell_load_send_failures_total")
                 .value_or(""),
             "1");
 
-  app_.OnRequestCellAppState({}, &mgr_ch, req);
+  app_.FlushLoadReportForTest();
   const auto loads = InformCellLoads(mgr_ch);
   ASSERT_EQ(loads.size(), 1u);
   ASSERT_EQ(loads.back().cells.size(), 1u);

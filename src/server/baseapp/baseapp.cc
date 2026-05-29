@@ -316,6 +316,7 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
           reg.internal_addr = Network().RudpAddress();
           reg.external_addr =
               Address(Network().RudpAddress().Ip(), external_network_.RudpAddress().Port());
+          reg.known_app_id = app_id_;  // echo our id so a restarted mgr keeps it
           if (auto r = baseappmgr_channel_->SendMessage(reg); !r) {
             // No ack: baseapp stays orphaned until reconnect retry.
             ATLAS_LOG_WARNING("BaseApp: RegisterBaseApp send failed: {}", r.Error().Message());

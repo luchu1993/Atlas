@@ -144,7 +144,6 @@ enum class CellAppMgr : uint16_t {
   kSpaceCreatedResult = 7007,
   kAddCellToSpaceAck = 7008,
   kRemoveCellFromSpace = 7009,
-  kRequestCellAppState = 7010,
   kHealthProbe = 7011,
   kHealthProbeAck = 7012,
   kRecoverCellAppState = 7013,
@@ -284,7 +283,6 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kShouldOffload, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kSpaceCreatedResult, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kAddCellToSpaceAck, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRemoveCellFromSpace, 7000, 7099);
-ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRequestCellAppState, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbe, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbeAck, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRecoverCellAppState, 7000, 7099);
