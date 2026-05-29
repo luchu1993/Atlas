@@ -9,6 +9,7 @@ add_library(atlas_cellapp_lib STATIC
   cellapp_native_provider.cc
   controller_codec.cc
   ghost_maintainer.cc
+  lag_compensation.cc
   movement_command_store.cc
   movement_input_buffer.cc
   movement_input_rate_limiter.cc

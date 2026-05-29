@@ -48,6 +48,13 @@
 - Position history ring buffer 在 tick 写回后记录，watcher 暴露样本数。
 - 脚本可通过 `CellServerEntity.TryGetMovementHistorySample` 读插值后样本。
 - Offload 会迁移最近 history 窗口；reject / timeout 回滚同样恢复。
+- position history 的首个消费者：服务端 lag-compensation 原型 primitive
+  （`lag_compensation.{h,cc}`）。`ComputeRewindTick` 把射手 RTT 换成 clamped
+  rewind tick（`RTT/2 + interp_delay + 1 tick`，封顶 200ms favor-the-shooter
+  窗口）；`RewindSphereHit` 按 rewind tick 采样目标历史位置做球形命中，无样本
+  回退当前位置（跨 cell 边界）。gameplay-agnostic（PvP gating / iframe 状态
+  回溯 / favor-the-shooter 容忍是消费者与后续里程碑的事）。
+  设计见 `docs/gameplay/02_sync/LAG_COMPENSATION.md`。
 
 ### Physics query 契约（14.2 前置）
 

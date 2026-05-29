@@ -327,6 +327,11 @@ atlas_add_test(NAME test_space
   DEPS atlas_cellapp_lib atlas_space
 )
 
+atlas_add_test(NAME test_lag_compensation
+  SOURCES test_lag_compensation.cpp
+  DEPS atlas_cellapp_lib
+)
+
 atlas_add_test(NAME test_cell_entity
   SOURCES test_cell_entity.cpp
   DEPS atlas_cellapp_lib atlas_space
