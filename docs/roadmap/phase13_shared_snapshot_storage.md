@@ -24,9 +24,19 @@ F1(machined-backed lease)已经解决了 leader lock 跨机问题:Reviver 可以
   文件**,新 mgr 启动后丢掉了 BSP / cellapp registry 等权威状态,只能
   等所有 CellApp / BaseApp 重新注册 — 失去了 reattach 带来的快速收敛。
 
-要让 Phase 13 的 Reviver 在真实跨机场景下保留 BigWorld 风格的 "mgr 持久
-化 + reattach" 能力,snapshot 必须放在**任何一台 Reviver 候选机都能访问
-的位置**。本 RFC 评估几条路径并给出建议。
+要让 Phase 13 的 Reviver 在真实跨机场景下保留 "mgr 持久化 + reattach"
+的快速收敛,snapshot 必须放在**任何一台 Reviver 候选机都能访问的位置**。
+本 RFC 评估几条路径并给出建议。
+
+> **源码实证（BigWorld 把这个问题设计掉了）**：BigWorld 的 manager **不**
+> 持久化自身协调态——`server/cellappmgr/cellappmgr.cpp startRecovery()` 仅等
+> 存活 CellApp 经 `recoverCellApp()` 重报,从 worker 报告重建拓扑(无 snapshot
+> 文件)。因此 BigWorld 没有"跨机 snapshot"问题:换机接管的新 mgr 直接由存活
+> worker 重建。Atlas 的本地 snapshot 是为"全集群重启可恢复 + 冷启动加速"
+> **有意引入**的偏离(见 `phase13_high_availability.md` 的对齐表),代价就是本
+> RFC 要解的跨机存储难题。**云兼容对齐方向**:把恢复语义收敛到 reattach-first
+> (worker 重报为权威、snapshot 仅作全集群重启 fallback),可显著**削弱甚至消除**
+> 本 RFC 的紧迫性——届时只有"全员同时重启"才需要共享 snapshot。
 
 ## 2. 现状回顾
 

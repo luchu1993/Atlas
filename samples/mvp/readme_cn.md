@@ -86,12 +86,14 @@ tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.js
 
 `--scene` 必填 —— batch mode 启动的是无标题空场景，不传它 exporter 会直接报错而
 非静默导出 0 个对象。exporter 扫描 `exportToServer = true` 的
-`ServerColliderAuthoring`。MVP 范围有意收窄：
+`ServerColliderAuthoring`：
 
-- 与世界轴对齐的 `BoxCollider` → `{shape: box, min, max, layer}`。
-- 旋转的 `BoxCollider`、`SphereCollider`、`CapsuleCollider`、
-  `MeshCollider`、`TerrainCollider` 与负缩放都会打 warning 并跳过——
-  Atlas `StaticBox` 是 AABB，asset schema 目前只建模 box/plane/mesh。
+- `BoxCollider`（轴对齐）→ `{shape: box, min, max, layer}`。
+- `SphereCollider`（uniform scale）→ `{shape: sphere, center, radius, layer}`。
+- `CapsuleCollider`（Y 轴 + uniform scale）→ `{shape: capsule, center,
+  radius, half_height, layer}`。
+- 旋转的 box、非 uniform / 非 Y 轴 capsule、`MeshCollider`、`TerrainCollider`
+  与负缩放都会打 warning 并跳过。
 
 `run_mvp_cluster` 启动时会把 `samples/mvp/maps/main.collision.json` cook 成
 `.collisioncache`，`MvpSpace.OnSpaceInit` 通过 Jolt backend 加载它；cache 缺失

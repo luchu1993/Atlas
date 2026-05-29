@@ -28,6 +28,8 @@ auto JoltCollisionBackendFactory::BuildFromCache(const LoadedCollisionCache& cac
   auto query = std::make_unique<JoltPhysicsQuery>();
   for (const auto& box : cache.asset.boxes) query->AddBox(box);
   for (const auto& plane : cache.asset.planes) query->AddPlane(plane);
+  for (const auto& sphere : cache.asset.spheres) query->AddSphere(sphere);
+  for (const auto& capsule : cache.asset.capsules) query->AddCapsule(capsule);
   if (!cache.cooked.empty()) {
     auto restored = query->RestoreCookedMeshes(cache.cooked);
     if (!restored) return restored.Error();

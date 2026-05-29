@@ -231,6 +231,50 @@ TEST(CollisionAsset, V1AssetStillLoadsAfterVersionBump) {
   EXPECT_EQ(asset->version, 1u);
 }
 
+TEST(CollisionAsset, LoadsSphereAndCapsule) {
+  auto asset = LoadCollisionAssetFromJson(R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [
+      {"shape": "sphere", "center": [1, 2, 3], "radius": 0.5, "layer": 4},
+      {"shape": "capsule", "center": [0, 1, 0], "radius": 0.4, "half_height": 1.2, "layer": 5}
+    ]
+  })");
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+  ASSERT_EQ(asset->spheres.size(), 1u);
+  ASSERT_EQ(asset->capsules.size(), 1u);
+  EXPECT_FLOAT_EQ(asset->spheres[0].center.y, 2.0f);
+  EXPECT_FLOAT_EQ(asset->spheres[0].radius_m, 0.5f);
+  EXPECT_EQ(asset->spheres[0].layer, 4u);
+  EXPECT_FLOAT_EQ(asset->capsules[0].radius_m, 0.4f);
+  EXPECT_FLOAT_EQ(asset->capsules[0].half_height_m, 1.2f);
+  EXPECT_EQ(asset->capsules[0].layer, 5u);
+}
+
+TEST(CollisionAsset, RejectsSphereWithNonPositiveRadius) {
+  auto asset = LoadCollisionAssetFromJson(R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [{"shape": "sphere", "center": [0, 0, 0], "radius": 0, "layer": 0}]
+  })");
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
+TEST(CollisionAsset, RejectsCapsuleWithHalfHeightBelowRadius) {
+  auto asset = LoadCollisionAssetFromJson(R"({
+    "version": 2,
+    "coordinate_system": "x_right_y_up_z_forward_meters",
+    "source_hash": "unit",
+    "objects": [{"shape": "capsule", "center": [0, 0, 0], "radius": 1.0,
+                 "half_height": 0.5, "layer": 0}]
+  })");
+  ASSERT_FALSE(asset.HasValue());
+  EXPECT_EQ(asset.Error().Code(), ErrorCode::kInvalidArgument);
+}
+
 TEST(CollisionAsset, CacheRoundTripBoxesPlanes) {
   const std::string source_hash = "unit";
   auto bytes = WriteCollisionCacheBytes(kValidAsset, {}, source_hash);

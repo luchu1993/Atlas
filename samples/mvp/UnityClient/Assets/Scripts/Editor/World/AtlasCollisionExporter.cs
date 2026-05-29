@@ -21,6 +21,8 @@ namespace Atlas.Mvp.Editor
         public sealed class ExportResult
         {
             public int Boxes;
+            public int Spheres;
+            public int Capsules;
             public int Skipped;
             public List<string> Warnings = new();
         }
@@ -50,7 +52,8 @@ namespace Atlas.Mvp.Editor
                 }
 
                 var result = ExportActiveSceneToFile(output, sourceHash);
-                Debug.Log($"[AtlasCollisionExporter] boxes={result.Boxes} skipped={result.Skipped} output={output}");
+                Debug.Log($"[AtlasCollisionExporter] boxes={result.Boxes} spheres={result.Spheres} " +
+                          $"capsules={result.Capsules} skipped={result.Skipped} output={output}");
                 foreach (var w in result.Warnings) Debug.LogWarning($"[AtlasCollisionExporter] {w}");
                 EditorApplication.Exit(0);
             }
@@ -108,13 +111,20 @@ namespace Atlas.Mvp.Editor
 
                     if (col is BoxCollider box)
                     {
-                        var emitted = TryEmitBox(box, auth, objects, ref first, result);
-                        if (emitted) result.Boxes++;
+                        if (TryEmitBox(box, auth, objects, ref first, result)) result.Boxes++;
+                    }
+                    else if (col is SphereCollider sphere)
+                    {
+                        if (TryEmitSphere(sphere, auth, objects, ref first, result)) result.Spheres++;
+                    }
+                    else if (col is CapsuleCollider capsule)
+                    {
+                        if (TryEmitCapsule(capsule, auth, objects, ref first, result)) result.Capsules++;
                     }
                     else
                     {
                         result.Skipped++;
-                        result.Warnings.Add($"{Trace(go)}: {col.GetType().Name} not supported by exporter (only BoxCollider)");
+                        result.Warnings.Add($"{Trace(go)}: {col.GetType().Name} not supported by exporter (box / sphere / capsule only)");
                     }
                 }
             }
@@ -165,6 +175,71 @@ namespace Atlas.Mvp.Editor
             objects.AppendFormat(CultureInfo.InvariantCulture,
                 "{{\"shape\": \"box\", \"min\": [{0:G9}, {1:G9}, {2:G9}], \"max\": [{3:G9}, {4:G9}, {5:G9}], \"layer\": {6}}}",
                 min.x, min.y, min.z, max.x, max.y, max.z, auth.layer);
+            return true;
+        }
+
+        // Sphere / capsule radius can't survive non-uniform scale (it would become
+        // an ellipsoid); returns false and warns when the scale isn't uniform.
+        static bool TryUniformScale(Transform t, string what, ExportResult result, out float scale)
+        {
+            var s = t.lossyScale;
+            scale = s.x;
+            if (s.x <= 0f || s.y <= 0f || s.z <= 0f)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(t.gameObject)}: lossyScale {s} non-positive, skip");
+                return false;
+            }
+            if (!Mathf.Approximately(s.x, s.y) || !Mathf.Approximately(s.x, s.z))
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(t.gameObject)}: {what} needs uniform scale, got {s}, skip");
+                return false;
+            }
+            return true;
+        }
+
+        static bool TryEmitSphere(SphereCollider sphere, ServerColliderAuthoring auth,
+                                  StringBuilder objects, ref bool first, ExportResult result)
+        {
+            var t = sphere.transform;
+            if (!TryUniformScale(t, "SphereCollider", result, out var scale)) return false;
+
+            var c = t.TransformPoint(sphere.center);
+            var radius = sphere.radius * scale;
+            if (!first) objects.Append(",");
+            first = false;
+            objects.Append("\n    ");
+            objects.AppendFormat(CultureInfo.InvariantCulture,
+                "{{\"shape\": \"sphere\", \"center\": [{0:G9}, {1:G9}, {2:G9}], \"radius\": {3:G9}, \"layer\": {4}}}",
+                c.x, c.y, c.z, radius, auth.layer);
+            return true;
+        }
+
+        static bool TryEmitCapsule(CapsuleCollider capsule, ServerColliderAuthoring auth,
+                                   StringBuilder objects, ref bool first, ExportResult result)
+        {
+            // Atlas StaticCapsule is vertical; only Y-axis Unity capsules map cleanly.
+            if (capsule.direction != 1)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(capsule.gameObject)}: CapsuleCollider direction must be Y-axis, skip");
+                return false;
+            }
+            var t = capsule.transform;
+            if (!TryUniformScale(t, "CapsuleCollider", result, out var scale)) return false;
+
+            var c = t.TransformPoint(capsule.center);
+            var radius = capsule.radius * scale;
+            // Unity height includes the caps; clamp so it never under-runs a sphere.
+            var height = Mathf.Max(capsule.height, 2f * capsule.radius) * scale;
+            var halfHeight = height * 0.5f;
+            if (!first) objects.Append(",");
+            first = false;
+            objects.Append("\n    ");
+            objects.AppendFormat(CultureInfo.InvariantCulture,
+                "{{\"shape\": \"capsule\", \"center\": [{0:G9}, {1:G9}, {2:G9}], \"radius\": {3:G9}, \"half_height\": {4:G9}, \"layer\": {5}}}",
+                c.x, c.y, c.z, radius, halfHeight, auth.layer);
             return true;
         }
 

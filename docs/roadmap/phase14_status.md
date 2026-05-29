@@ -85,6 +85,16 @@
   不降级；无 factory 时 box/plane cache 退回 Static，mesh cache 直接拒绝。
   `CellApp::LoadCollisionAsset` 按扩展名分流：`.collisioncache` 走 cache
   路径，`.collision.json` 仍走 uncooked Static dev 路径。
+- collision asset 加 `sphere` / `capsule` shape（v2）：Jolt
+  `AddSphere` / `AddCapsule` 全支持，Static 像跳过 mesh 一样跳过它们（parity
+  维持 box/plane）。exporter 从 `SphereCollider` / Y 轴 `CapsuleCollider`
+  发射（要求 uniform scale）。MVP `Main.unity` 已含 sphere boulder + capsule
+  pillar；live cluster 加载 5-shape cache（box×3 / sphere / capsule）无错。
+- MVP 碰撞垂直切片已闭合：`Main.unity` → exporter → `main.collision.json` →
+  `run_mvp_cluster` cook → `MvpSpace.OnSpaceInit` 经 Jolt backend 加载；
+  live cluster 日志确认 `CellApp: loaded collision cache` +
+  `MvpSpace: loaded collision` 后 seed 150/150 NPC。`test_collision_pipeline`
+  headless 覆盖 cooked cache → Space → 移动撞墙截停 / cooked-mesh 落地。
 - `Atlas.Mvp.Editor.AtlasCollisionExporter` 在 Unity batch mode 下扫
   `ServerColliderAuthoring(exportToServer=true)`，把 axis-aligned
   `BoxCollider` 写成 collision asset v2 JSON；旋转 box / sphere /

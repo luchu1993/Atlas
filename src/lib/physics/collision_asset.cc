@@ -47,19 +47,14 @@ void AppendFace(std::string& out, std::size_t a, std::size_t b, std::size_t c,
   out += std::format("f {} {} {} {}\n", a, b, c, d);
 }
 
-void AppendBoxObj(std::string& out, const StaticBox& box, std::size_t index,
-                  std::size_t& next_vertex) {
-  out += std::format("g box_{}_layer_{}\n", index, box.layer);
+void AppendAabbObj(std::string& out, const math::Vector3& min, const math::Vector3& max,
+                   std::size_t& next_vertex) {
   const auto base = next_vertex;
   const std::array<math::Vector3, 8> vertices = {
-      math::Vector3{box.min.x, box.min.y, box.min.z},
-      math::Vector3{box.max.x, box.min.y, box.min.z},
-      math::Vector3{box.max.x, box.max.y, box.min.z},
-      math::Vector3{box.min.x, box.max.y, box.min.z},
-      math::Vector3{box.min.x, box.min.y, box.max.z},
-      math::Vector3{box.max.x, box.min.y, box.max.z},
-      math::Vector3{box.max.x, box.max.y, box.max.z},
-      math::Vector3{box.min.x, box.max.y, box.max.z},
+      math::Vector3{min.x, min.y, min.z}, math::Vector3{max.x, min.y, min.z},
+      math::Vector3{max.x, max.y, min.z}, math::Vector3{min.x, max.y, min.z},
+      math::Vector3{min.x, min.y, max.z}, math::Vector3{max.x, min.y, max.z},
+      math::Vector3{max.x, max.y, max.z}, math::Vector3{min.x, max.y, max.z},
   };
   for (const auto& vertex : vertices) AppendVertex(out, vertex);
   AppendFace(out, base + 0, base + 1, base + 2, base + 3);
@@ -69,6 +64,12 @@ void AppendBoxObj(std::string& out, const StaticBox& box, std::size_t index,
   AppendFace(out, base + 0, base + 3, base + 7, base + 4);
   AppendFace(out, base + 1, base + 5, base + 6, base + 2);
   next_vertex += vertices.size();
+}
+
+void AppendBoxObj(std::string& out, const StaticBox& box, std::size_t index,
+                  std::size_t& next_vertex) {
+  out += std::format("g box_{}_layer_{}\n", index, box.layer);
+  AppendAabbObj(out, box.min, box.max, next_vertex);
 }
 
 void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t index,
@@ -197,6 +198,50 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
   return StaticPlane{*point, *normal, *layer};
 }
 
+[[nodiscard]] auto RequiredPositiveNumber(const rapidjson::Value& value,
+                                          std::string_view object_path,
+                                          std::string_view member) -> Result<float> {
+  auto result = RequiredMember(value, object_path, member);
+  if (!result) return result.Error();
+  const auto* member_value = *result;
+  if (!member_value->IsNumber()) {
+    return Invalid(std::format("{} must be a number", MemberPath(object_path, member)));
+  }
+  const double v = member_value->GetDouble();
+  if (!std::isfinite(v) || v <= 0.0) {
+    return Invalid(std::format("{} must be a finite positive number",
+                               MemberPath(object_path, member)));
+  }
+  return static_cast<float>(v);
+}
+
+[[nodiscard]] auto ParseSphere(const rapidjson::Value& value, std::string_view path)
+    -> Result<StaticSphere> {
+  auto center = RequiredVector3(value, path, "center");
+  if (!center) return center.Error();
+  auto radius = RequiredPositiveNumber(value, path, "radius");
+  if (!radius) return radius.Error();
+  auto layer = RequiredLayer(value, path);
+  if (!layer) return layer.Error();
+  return StaticSphere{*center, *radius, *layer};
+}
+
+[[nodiscard]] auto ParseCapsule(const rapidjson::Value& value, std::string_view path)
+    -> Result<StaticCapsule> {
+  auto center = RequiredVector3(value, path, "center");
+  if (!center) return center.Error();
+  auto radius = RequiredPositiveNumber(value, path, "radius");
+  if (!radius) return radius.Error();
+  auto half_height = RequiredPositiveNumber(value, path, "half_height");
+  if (!half_height) return half_height.Error();
+  auto layer = RequiredLayer(value, path);
+  if (!layer) return layer.Error();
+  if (*half_height < *radius) {
+    return Invalid(std::format("{}.half_height must be >= radius", path));
+  }
+  return StaticCapsule{*center, *radius, *half_height, *layer};
+}
+
 [[nodiscard]] auto ParseMesh(const rapidjson::Value& object, std::string_view path,
                               std::span<const std::byte> mesh_buffer)
     -> Result<MeshGeometry> {
@@ -267,6 +312,14 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
       auto plane = ParsePlane(object, path);
       if (!plane) return plane.Error();
       asset.planes.push_back(*plane);
+    } else if (*shape == "sphere") {
+      auto sphere = ParseSphere(object, path);
+      if (!sphere) return sphere.Error();
+      asset.spheres.push_back(*sphere);
+    } else if (*shape == "capsule") {
+      auto capsule = ParseCapsule(object, path);
+      if (!capsule) return capsule.Error();
+      asset.capsules.push_back(*capsule);
     } else if (*shape == "mesh") {
       if (mesh_buffer.empty()) {
         return Invalid(std::format(
@@ -560,8 +613,9 @@ auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
   std::string out;
   out += "# Atlas collision asset debug dump\n";
   out += std::format("# source_hash {}\n", asset.source_hash);
-  out += std::format("# boxes {} planes {} meshes {}\n", asset.boxes.size(),
-                    asset.planes.size(), asset.meshes.size());
+  out += std::format("# boxes {} planes {} spheres {} capsules {} meshes {}\n",
+                    asset.boxes.size(), asset.planes.size(), asset.spheres.size(),
+                    asset.capsules.size(), asset.meshes.size());
   out += "o collision_asset\n";
   std::size_t next_vertex = 1;
   for (std::size_t i = 0; i < asset.boxes.size(); ++i) {
@@ -569,6 +623,20 @@ auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
   }
   for (std::size_t i = 0; i < asset.planes.size(); ++i) {
     AppendPlaneObj(out, asset.planes[i], i, next_vertex);
+  }
+  // Spheres / capsules dump as their AABB — a coarse debug proxy, not the
+  // analytic shape.
+  for (std::size_t i = 0; i < asset.spheres.size(); ++i) {
+    const auto& s = asset.spheres[i];
+    const math::Vector3 r{s.radius_m, s.radius_m, s.radius_m};
+    out += std::format("g sphere_{}_layer_{}\n", i, s.layer);
+    AppendAabbObj(out, s.center - r, s.center + r, next_vertex);
+  }
+  for (std::size_t i = 0; i < asset.capsules.size(); ++i) {
+    const auto& c = asset.capsules[i];
+    const math::Vector3 r{c.radius_m, c.half_height_m, c.radius_m};
+    out += std::format("g capsule_{}_layer_{}\n", i, c.layer);
+    AppendAabbObj(out, c.center - r, c.center + r, next_vertex);
   }
   for (std::size_t mi = 0; mi < asset.meshes.size(); ++mi) {
     const auto& mesh = asset.meshes[mi];

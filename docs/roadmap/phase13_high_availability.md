@@ -13,8 +13,43 @@ abnormal-death restart；live fault-injection 已验证 CellAppMgr 重启后
 ## 目标
 
 为 Atlas 集群添加 BigWorld 风格的 Manager 高可用能力。全局唯一 Manager
-由 Reviver 监督；Manager 崩溃后由自身 Snapshot / Restore 恢复权威状态，
-普通 App 的故障由对应 Manager 处理。
+由 Reviver 监督；Manager 崩溃后恢复权威状态，普通 App 的故障由对应
+Manager 处理。
+
+## BigWorld 对齐与偏离（源码实证）
+
+对照 BigWorld 源码（`programming/bigworld/`）确认其 HA 三原则：
+
+- **Manager 是软状态，靠 worker 重建**：`server/cellappmgr/cellappmgr.cpp`
+  `startRecovery()`（~L2258）只起一个 ~2s 计时器等 worker 上报；存活的
+  CellApp/BaseApp 经 birth listener 发现新 manager 后主动调
+  `recoverCellApp()`（cellappmgr.cpp ~L1390）/ `recoverBaseApp()`
+  （baseappmgr.cpp ~L1167）重报状态，manager 现场 `addApp()` 重建注册表。
+  **manager 不向磁盘持久化自身协调态。** 真正的持久态在 DB（DBMgr）。
+- **去中心 machined**：`server/tools/bwmachined/` 每台机一个守护进程，UDP
+  广播发现（`lib/network/machine_guard.cpp` `BROADCAST`），按 IP 组 ring
+  （`cluster.cpp`）；单例 manager 靠"广播查询 → 注册表 first-found"，**无
+  集群级硬锁**。
+- **软仲裁、无 fencing**：`lib/server/reviver_subject.cpp`（~L97）—— 多
+  Reviver 各带 `ReviverPriority`（`reviver_common.hpp` uint8），被监控对象
+  端按 priority + 心跳超时（`REVIVER_DEFAULT_SUBJECT_TIMEOUT` 0.2s）裁决谁
+  活跃；无显式 fencing token，靠死地址 + 新端点 + 注册表收敛。
+
+Atlas 在三处**有意偏离**（CLAUDE.md：偏离须记录理由）：
+
+| 维度 | Atlas 选择 | 理由 |
+|---|---|---|
+| machined 传输 | 单地址 TCP 中心服务 | 容器 / 云 / k8s 下 UDP 广播常不通（见 `phase06_machined.md`）|
+| Manager 状态 | self-snapshot 到文件 + reattach | 支持**全集群重启**恢复 + 加快冷启动；BigWorld 纯 worker 重建在全员重启时同样丢失 manager 态 |
+| 仲裁 / 防脑裂 | machined-lease + `mgr_generation` epoch | 对"中心化 machined + 有状态 manager"两处偏离的**必要补偿**：中心化 machined 无 BigWorld 的去中心收敛，有状态 manager 的瞬时重复比 BigWorld 危险，故需显式 lease + epoch |
+
+**对齐方向（云兼容）**：保留上述云相关偏离，但把恢复语义向 BigWorld 的
+**reattach-first** 收敛——以 worker 重报为权威真值、snapshot 降级为"全集群
+重启"的 fallback。**现状**：恢复是 mgr 权威（`ReplayCellAppTopology` 把拓扑
+从 snapshot 回放给 worker，cellapp 仅经 `OnRequestCellAppState` 回报 load，
+不报拓扑）。**目标差量**：cellapp 在 (re)register 时重报自己持有的 cell
+（id / bounds / geometry_version / primary），mgr 能从这些 leaf 报告重建
+partition，使 manager 在 snapshot 缺失 / 过期时仍可纯由存活 worker 恢复。
 
 ## 当前已落地能力
 

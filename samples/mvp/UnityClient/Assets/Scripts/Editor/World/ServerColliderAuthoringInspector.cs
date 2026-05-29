@@ -33,7 +33,14 @@ namespace Atlas.Mvp.Editor
             {
                 EditorGUILayout.HelpBox(
                     $"{col.GetType().Name} is not supported by the exporter yet. " +
-                    "Only primitive Box / Sphere / Capsule colliders are exported.",
+                    "Only Box / Sphere / Capsule colliders are exported.",
+                    MessageType.Warning);
+            }
+
+            if (col is CapsuleCollider capsule && capsule.direction != 1)
+            {
+                EditorGUILayout.HelpBox(
+                    "Atlas capsules are vertical; only a Y-Axis CapsuleCollider is exported.",
                     MessageType.Warning);
             }
 

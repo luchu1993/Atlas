@@ -65,6 +65,21 @@ struct StaticPlane {
   ObjectLayer layer{0};
 };
 
+struct StaticSphere {
+  math::Vector3 center{0.0f, 0.0f, 0.0f};
+  float radius_m{0.0f};
+  ObjectLayer layer{0};
+};
+
+// Vertical (Y-axis) capsule; center is the geometric center and half_height_m
+// is half the total height including the hemispherical caps.
+struct StaticCapsule {
+  math::Vector3 center{0.0f, 0.0f, 0.0f};
+  float radius_m{0.0f};
+  float half_height_m{0.0f};
+  ObjectLayer layer{0};
+};
+
 enum class StaticGroundMode : uint8_t {
   kEnabled,
   kDisabled,

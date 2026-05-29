@@ -160,6 +160,36 @@ void JoltPhysicsQuery::AddPlane(const StaticPlane& plane) {
   impl_->needs_optimize = true;
 }
 
+void JoltPhysicsQuery::AddSphere(const StaticSphere& sphere) {
+  if (!(sphere.radius_m > kEpsilon)) return;
+  JPH::SphereShapeSettings shape_settings(sphere.radius_m);
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) return;
+
+  const JPH::RVec3 center{sphere.center.x, sphere.center.y, sphere.center.z};
+  JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
+                                JPH::EMotionType::Static, kStaticObjectLayer);
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+}
+
+void JoltPhysicsQuery::AddCapsule(const StaticCapsule& capsule) {
+  const float cylinder_half = JoltCapsuleHalfHeight(capsule.half_height_m, capsule.radius_m);
+  if (!(capsule.radius_m > kEpsilon) || cylinder_half <= 0.0f) return;
+  JPH::CapsuleShapeSettings shape_settings(cylinder_half, capsule.radius_m);
+  shape_settings.SetEmbedded();
+  auto shape_result = shape_settings.Create();
+  if (shape_result.HasError()) return;
+
+  // StaticCapsule.center is the geometric center (unlike the query capsule's foot).
+  const JPH::RVec3 center{capsule.center.x, capsule.center.y, capsule.center.z};
+  JPH::BodyCreationSettings bcs(shape_result.Get(), center, JPH::Quat::sIdentity(),
+                                JPH::EMotionType::Static, kStaticObjectLayer);
+  impl_->system.GetBodyInterface().CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+  impl_->needs_optimize = true;
+}
+
 void JoltPhysicsQuery::AddMesh(std::span<const math::Vector3> vertices,
                                 std::span<const uint32_t> indices,
                                 ObjectLayer /*layer*/) {

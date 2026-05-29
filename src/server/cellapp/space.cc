@@ -97,7 +97,8 @@ void Space::SetCollisionAsset(const physics::CollisionAsset& asset) {
   auto query = physics::BuildStaticPhysicsQueryFromAsset(asset);
   physics_query_ = std::move(query);
   collision_asset_source_hash_ = asset.source_hash;
-  collision_asset_object_count_ = asset.boxes.size() + asset.planes.size();
+  collision_asset_object_count_ = asset.boxes.size() + asset.planes.size() +
+                                  asset.spheres.size() + asset.capsules.size();
 }
 
 void Space::SetCollisionBackendFactory(
@@ -121,8 +122,9 @@ auto Space::LoadCollisionCacheFromFile(const std::filesystem::path& path) -> Res
     if (!query) return query.Error();
     physics_query_ = std::move(*query);
     collision_asset_source_hash_ = cache->asset.source_hash;
-    collision_asset_object_count_ =
-        cache->asset.boxes.size() + cache->asset.planes.size() + cache->asset.meshes.size();
+    collision_asset_object_count_ = cache->asset.boxes.size() + cache->asset.planes.size() +
+                                    cache->asset.spheres.size() + cache->asset.capsules.size() +
+                                    cache->asset.meshes.size();
     return {};
   }
 

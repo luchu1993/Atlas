@@ -25,6 +25,8 @@ class JoltPhysicsQuery final : public PhysicsQuery {
 
   void AddBox(const StaticBox& box);
   void AddPlane(const StaticPlane& plane);
+  void AddSphere(const StaticSphere& sphere);
+  void AddCapsule(const StaticCapsule& capsule);
   void AddMesh(std::span<const math::Vector3> vertices,
                std::span<const uint32_t> indices, ObjectLayer layer);
 

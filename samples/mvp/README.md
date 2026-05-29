@@ -110,13 +110,14 @@ tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.js
 
 `--scene` is required — batch mode boots an untitled scene, so omitting it
 makes the exporter abort rather than silently emit zero objects. The exporter
-scans `ServerColliderAuthoring` components with `exportToServer = true`. MVP
-support is intentionally narrow:
+scans `ServerColliderAuthoring` components with `exportToServer = true`:
 
-- `BoxCollider` with axis-aligned transform → `{shape: box, min, max, layer}`.
-- Rotated `BoxCollider`, `SphereCollider`, `CapsuleCollider`, `MeshCollider`,
-  `TerrainCollider`, and negative scale are logged and skipped — Atlas
-  `StaticBox` is an AABB and the asset schema only models box/plane/mesh.
+- `BoxCollider`, axis-aligned → `{shape: box, min, max, layer}`.
+- `SphereCollider`, uniform scale → `{shape: sphere, center, radius, layer}`.
+- `CapsuleCollider`, Y-axis + uniform scale → `{shape: capsule, center,
+  radius, half_height, layer}`.
+- Rotated boxes, non-uniform-scaled / non-Y capsules, `MeshCollider`,
+  `TerrainCollider`, and negative scale are logged and skipped.
 
 `run_mvp_cluster` cooks `samples/mvp/maps/main.collision.json` to a
 `.collisioncache` at launch and `MvpSpace.OnSpaceInit` loads it through the

@@ -57,6 +57,24 @@ namespace Atlas.Mvp.Editor
                    layer: 0, visible: true);
             AddBox(root, "Platform", new Vector3(-6f, 0.75f, -6f), new Vector3(4f, 1.5f, 4f),
                    layer: 0, visible: true);
+            // A sphere boulder and a capsule pillar exercise the non-box shapes.
+            AddPrimitive(root, "Boulder", PrimitiveType.Sphere, new Vector3(8f, 1f, 4f),
+                         uniformScale: 2f, layer: 0);
+            AddPrimitive(root, "Pillar", PrimitiveType.Capsule, new Vector3(-6f, 1f, 6f),
+                         uniformScale: 1f, layer: 0);
+        }
+
+        static void AddPrimitive(GameObject parent, string name, PrimitiveType type,
+                                 Vector3 center, float uniformScale, int layer)
+        {
+            var go = GameObject.CreatePrimitive(type);
+            go.name = name;
+            go.transform.SetParent(parent.transform, worldPositionStays: true);
+            go.transform.position = center;
+            go.transform.localScale = new Vector3(uniformScale, uniformScale, uniformScale);
+            var authoring = go.AddComponent<ServerColliderAuthoring>();
+            authoring.exportToServer = true;
+            authoring.layer = layer;
         }
 
         static void AddBox(GameObject parent, string name, Vector3 center, Vector3 size,

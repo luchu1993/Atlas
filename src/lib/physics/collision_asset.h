@@ -42,6 +42,8 @@ struct CollisionAsset {
   std::string source_hash;
   std::vector<StaticBox> boxes;
   std::vector<StaticPlane> planes;
+  std::vector<StaticSphere> spheres;
+  std::vector<StaticCapsule> capsules;
   std::vector<MeshGeometry> meshes;
 };
 
