@@ -80,6 +80,13 @@ ServerAppOption<uint32_t> s_lb_load_report_stale_ms{
 ServerAppOption<uint32_t> s_ha_reattach_watchdog_ms{
     30000u, "cellappmgr_ha_reattach_watchdog_ms",
     "cellappmgr/ha/reattach_watchdog_ms", WatcherMode::kReadWrite};
+// Deadline after which a reattach-pending CellApp that never reconnects is
+// treated as dead so the restore gate (which freezes LB/grow/split/retire
+// while PendingReattachCellAppCount()>0) cannot stall forever. 0 disables
+// the escape (infinite wait). Effective trigger is max(this, watchdog).
+ServerAppOption<uint32_t> s_ha_reattach_force_resolve_ms{
+    90000u, "cellappmgr_ha_reattach_force_resolve_ms",
+    "cellappmgr/ha/reattach_force_resolve_ms", WatcherMode::kReadWrite};
 
 auto NonNegative(float v) -> float {
   return std::isfinite(v) && v > 0.f ? v : 0.f;
@@ -123,6 +130,10 @@ auto IsAssignableForLb(const CellAppMgr::CellAppInfo& info, TimePoint now) -> bo
 
 auto ReattachWatchdogWindow() -> Duration {
   return Milliseconds{s_ha_reattach_watchdog_ms.Value()};
+}
+
+auto ReattachForceResolveWindow() -> Duration {
+  return Milliseconds{s_ha_reattach_force_resolve_ms.Value()};
 }
 
 auto MiB(uint64_t bytes) -> float {
@@ -1357,6 +1368,9 @@ void CellAppMgr::RegisterWatchers() {
   wr.Add<uint64_t>("cellappmgr/ha/reattach_registry_reconciled_total",
                    std::function<uint64_t()>(
                        [this] { return reattach_registry_reconciled_total_; }));
+  wr.Add<uint64_t>("cellappmgr/ha/reattach_force_resolved_total",
+                   std::function<uint64_t()>(
+                       [this] { return reattach_force_resolved_total_; }));
   wr.Add<std::string>("cellappmgr/ha/reattach_registry_status",
                       std::function<std::string()>(
                           [this] { return BuildReattachRegistryStatusSummary(); }));
@@ -2440,16 +2454,35 @@ void CellAppMgr::AuditReattachWatchdog() {
   const auto min_repeat_window = std::chrono::duration_cast<Duration>(Milliseconds{1000});
   const auto repeat_window =
       watchdog_window < min_repeat_window ? min_repeat_window : watchdog_window;
-  for (auto& [_, info] : cellapps_) {
+  const auto force_window = ReattachForceResolveWindow();
+  std::vector<Address> force_resolve;
+  for (auto& [addr, info] : cellapps_) {
     if (!IsReattachStuck(info, now)) continue;
-    if (info.last_reattach_watchdog_log_at != TimePoint{} &&
-        now - info.last_reattach_watchdog_log_at < repeat_window) {
-      continue;
+    if (info.last_reattach_watchdog_log_at == TimePoint{} ||
+        now - info.last_reattach_watchdog_log_at >= repeat_window) {
+      ATLAS_LOG_WARNING("CellAppMgr: restored CellApp reattach stuck app_id={} addr={} age_ms={}",
+                        info.app_id, info.internal_addr.ToString(),
+                        DurationMs(now - info.registered_at));
+      info.last_reattach_watchdog_log_at = now;
     }
-    ATLAS_LOG_WARNING("CellAppMgr: restored CellApp reattach stuck app_id={} addr={} age_ms={}",
-                      info.app_id, info.internal_addr.ToString(),
-                      DurationMs(now - info.registered_at));
-    info.last_reattach_watchdog_log_at = now;
+    // A CellApp that stays registered in machined but never re-sends
+    // RegisterCellApp would keep the restore gate closed forever (machined
+    // reconciliation only prunes hosts machined reports GONE). After
+    // force_window, treat it as dead so leaves rehome and LB resumes —
+    // skip when no other assignable host exists, since rehoming would just
+    // strand its leaves (a single-CellApp cluster has nothing to balance).
+    if (force_window != Duration::zero() && now - info.registered_at >= force_window &&
+        HasAssignableCellAppExcept(addr)) {
+      force_resolve.push_back(addr);
+    }
+  }
+  for (const auto& addr : force_resolve) {
+    ATLAS_LOG_WARNING(
+        "CellAppMgr: force-resolving stuck reattach addr={} after {}ms — rehoming leaves "
+        "so load balancing can resume",
+        addr.ToString(), DurationMs(force_window));
+    OnCellAppDeath(addr, /*reason=*/2);
+    ++reattach_force_resolved_total_;
   }
 }
 

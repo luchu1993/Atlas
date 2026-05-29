@@ -1487,6 +1487,99 @@ TEST(CellAppMgr, SnapshotRestore_ReattachRegistryAuditBlocksMissingLeafWithoutSu
   EXPECT_NE(status->find("state=blocked"), std::string::npos);
 }
 
+TEST(CellAppMgr, ReattachWatchdogForceResolvesStuckHostWhenSurvivorAssignable) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 46;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  ASSERT_TRUE(restored.mgr.Restore(snapshot).HasValue());
+  restored.mgr.RegisterWatchersForTest();
+  ASSERT_TRUE(restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_watchdog_ms", "1000"));
+  ASSERT_TRUE(
+      restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_force_resolve_ms", "5000"));
+
+  // reg_b reattaches (assignable survivor); reg_a never does and is aged past
+  // the force window. The watchdog must treat reg_a as dead so the gate opens.
+  restored.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  restored.mgr.BackdateCellAppRegistrationForTest(reg_a.internal_addr, Milliseconds{10000});
+  restored.mgr.AuditReattachWatchdogForTest();
+
+  EXPECT_FALSE(restored.mgr.CellApps().contains(reg_a.internal_addr));
+  EXPECT_TRUE(restored.mgr.CellApps().contains(reg_b.internal_addr));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("0"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/restore_gate_active"),
+            std::optional<std::string>("false"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_force_resolved_total"),
+            std::optional<std::string>("1"));
+}
+
+TEST(CellAppMgr, ReattachWatchdogDoesNotForceResolveSoleHost) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg;
+  reg.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg.internal_addr, nullptr, reg);
+  cellappmgr::CreateSpaceRequest csr;
+  csr.space_id = 47;
+  h.mgr.OnCreateSpaceRequest(Address{}, nullptr, csr);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  ASSERT_TRUE(restored.mgr.Restore(snapshot).HasValue());
+  restored.mgr.RegisterWatchersForTest();
+  ASSERT_TRUE(restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_watchdog_ms", "1000"));
+  ASSERT_TRUE(
+      restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_force_resolve_ms", "5000"));
+
+  // Sole restored host aged past the window: rehoming would strand its leaves
+  // (nothing else to balance onto), so the gate stays closed rather than drop
+  // the only server.
+  restored.mgr.BackdateCellAppRegistrationForTest(reg.internal_addr, Milliseconds{10000});
+  restored.mgr.AuditReattachWatchdogForTest();
+
+  EXPECT_TRUE(restored.mgr.CellApps().contains(reg.internal_addr));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_pending"),
+            std::optional<std::string>("1"));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_force_resolved_total"),
+            std::optional<std::string>("0"));
+}
+
+TEST(CellAppMgr, ReattachWatchdogForceResolveDisabledByZeroWindow) {
+  CellAppMgrHarness h;
+  cellappmgr::RegisterCellApp reg_a;
+  reg_a.internal_addr = MakePeerAddr(30001);
+  h.mgr.OnRegisterCellApp(reg_a.internal_addr, nullptr, reg_a);
+  cellappmgr::RegisterCellApp reg_b;
+  reg_b.internal_addr = MakePeerAddr(30002);
+  h.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+
+  const auto snapshot = h.mgr.Snapshot();
+  CellAppMgrHarness restored;
+  ASSERT_TRUE(restored.mgr.Restore(snapshot).HasValue());
+  restored.mgr.RegisterWatchersForTest();
+  ASSERT_TRUE(restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_watchdog_ms", "1000"));
+  ASSERT_TRUE(restored.mgr.GetWatcherRegistry().Set("cellappmgr/ha/reattach_force_resolve_ms", "0"));
+
+  restored.mgr.OnRegisterCellApp(reg_b.internal_addr, nullptr, reg_b);
+  restored.mgr.BackdateCellAppRegistrationForTest(reg_a.internal_addr, Milliseconds{10000});
+  restored.mgr.AuditReattachWatchdogForTest();
+
+  // force_resolve_ms=0 opts out of the escape: reg_a stays pending forever.
+  EXPECT_TRUE(restored.mgr.CellApps().contains(reg_a.internal_addr));
+  EXPECT_EQ(restored.mgr.GetWatcherRegistry().Get("cellappmgr/ha/reattach_force_resolved_total"),
+            std::optional<std::string>("0"));
+}
+
 TEST(CellAppMgr, SnapshotRestore_WatchersTrackReattachConvergence) {
   CellAppMgrHarness h;
   for (uint16_t port : {uint16_t{30001}, uint16_t{30002}}) {

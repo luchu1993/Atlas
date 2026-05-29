@@ -82,6 +82,12 @@ class CellAppMgr : public ManagerApp {
   }
   void ApplyReattachRegistryAuditForTest(std::span<const machined::ProcessInfo> infos);
   void OnReattachRegistryAuditForTest(std::vector<machined::ProcessInfo> infos);
+  void AuditReattachWatchdogForTest() { AuditReattachWatchdog(); }
+  void BackdateCellAppRegistrationForTest(const Address& addr, Duration age) {
+    if (auto it = cellapps_.find(addr); it != cellapps_.end()) {
+      it->second.registered_at = Clock::now() - age;
+    }
+  }
 
   [[nodiscard]] auto Snapshot() const -> std::vector<std::byte>;
   [[nodiscard]] auto Restore(std::span<const std::byte> bytes) -> Result<void>;
@@ -394,6 +400,7 @@ class CellAppMgr : public ManagerApp {
   bool reattach_registry_audit_pending_{false};
   uint64_t reattach_registry_audit_count_{0};
   uint64_t reattach_registry_reconciled_total_{0};
+  uint64_t reattach_force_resolved_total_{0};
   std::size_t last_reattach_registry_missing_{0};
   std::size_t last_reattach_registry_blocked_{0};
   std::size_t last_reattach_registry_reconciled_{0};

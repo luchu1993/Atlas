@@ -96,6 +96,13 @@ abnormal-death restart；live fault-injection 已验证 CellAppMgr 重启后
 - **不可达 host 防护**: 尚未 reattach 的 CellApp 不参与新 Space bootstrap、
   auto split 和 death rehome；其 `InformCellLoad` 与 deferred `AddCellToSpaceAck`
   会被忽略。
+- **reattach force-resolve（gate 时间上限）**: 一个在 machined 中仍存活、却
+  始终不向新 mgr 重发 `RegisterCellApp` 的 CellApp，会让 restore gate 永久关闭
+  （registry 对账只 prune machined 报告已消失的 host）。`cellappmgr_ha_reattach_force_resolve_ms`
+  （默认 90s，0=禁用）超时后把这种卡住的 host 当作死亡处理，rehome 其叶子，
+  让 LB 恢复；当不存在其他可分配 CellApp 时跳过（rehome 会让叶子无处可去，
+  单 CellApp 集群本就无需均衡）。计数经 `cellappmgr/ha/reattach_force_resolved_total`
+  watcher 暴露。有效触发阈值为 `max(force_resolve_ms, reattach_watchdog_ms)`。
 - **Reviver cold-start**: `--revive-cellappmgr-on-start` 可在 machined 中没有
   目标 CellAppMgr 时启动新进程。
 - **Reviver restart**: machined abnormal death 通知后延迟重启 CellAppMgr，
