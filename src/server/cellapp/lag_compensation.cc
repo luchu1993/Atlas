@@ -19,10 +19,12 @@ auto ComputeRewindTick(uint32_t server_tick, float rtt_ms,
 
 auto RewindSphereHit(const MovementPositionHistoryStore& history,
                      std::span<const LagCompCandidate> candidates, uint32_t rewind_tick,
-                     const math::Vector3& origin, float hit_radius_m)
-    -> std::optional<LagCompHit> {
+                     const math::Vector3& origin, float hit_radius_m,
+                     float boundary_tolerance_m) -> std::optional<LagCompHit> {
   if (!(hit_radius_m > 0.0f)) return std::nullopt;
-  const float radius_sq = hit_radius_m * hit_radius_m;
+  const float core_sq = hit_radius_m * hit_radius_m;
+  const float effective = hit_radius_m + std::max(boundary_tolerance_m, 0.0f);
+  const float effective_sq = effective * effective;
 
   std::optional<LagCompHit> best;
   for (const auto& candidate : candidates) {
@@ -36,9 +38,10 @@ auto RewindSphereHit(const MovementPositionHistoryStore& history,
     }
 
     const float dist_sq = (position - origin).LengthSquared();
-    if (dist_sq > radius_sq) continue;
-    if (!best || dist_sq < best->distance_m * best->distance_m) {
-      best = LagCompHit{candidate.id, position, std::sqrt(dist_sq), from_history};
+    if (dist_sq > effective_sq) continue;
+    const float dist = std::sqrt(dist_sq);
+    if (!best || dist < best->distance_m) {
+      best = LagCompHit{candidate.id, position, dist, from_history, dist_sq > core_sq};
     }
   }
   return best;

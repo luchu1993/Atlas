@@ -20,6 +20,7 @@ struct LagCompensationConfig {
   float interp_delay_ms{100.0f};                 // remote-entity display delay
   float input_to_hit_ms{1000.0f / 30.0f};        // ~1 tick from input to hitbox
   float max_rewind_ms{200.0f};                   // favor-the-shooter window cap
+  float favor_shooter_tolerance_m{0.2f};         // boundary "almost hit" band (§3.3)
 };
 
 // The tick the shooter saw its target at: server_tick minus
@@ -38,15 +39,19 @@ struct LagCompHit {
   math::Vector3 rewound_position;
   float distance_m{0.0f};
   bool from_history{false};  // false => fell back to current_position
+  bool grazing{false};       // hit only within the favor-the-shooter band
 };
 
 // Rewinds each candidate to rewind_tick and returns the nearest whose rewound
-// position is within hit_radius_m of origin. A candidate with no history sample
-// at rewind_tick uses its current position (cross-cell edge, §6.4).
+// position is within (hit_radius_m + boundary_tolerance_m) of origin. A
+// candidate with no history sample at rewind_tick uses its current position
+// (cross-cell edge, §6.4). A hit beyond hit_radius_m but inside the tolerance
+// band is reported with grazing=true (favor-the-shooter, §3.3).
 [[nodiscard]] auto RewindSphereHit(const MovementPositionHistoryStore& history,
                                    std::span<const LagCompCandidate> candidates,
                                    uint32_t rewind_tick, const math::Vector3& origin,
-                                   float hit_radius_m) -> std::optional<LagCompHit>;
+                                   float hit_radius_m, float boundary_tolerance_m = 0.0f)
+    -> std::optional<LagCompHit>;
 
 }  // namespace atlas
 

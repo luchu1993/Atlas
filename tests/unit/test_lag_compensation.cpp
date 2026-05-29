@@ -90,5 +90,36 @@ TEST(LagCompensation, ReturnsNearestCandidate) {
   EXPECT_EQ(hit->id, 2u);  // 0.3m beats 0.9m
 }
 
+TEST(LagCompensation, FavorShooterToleranceCountsGrazingHit) {
+  MovementPositionHistoryStore history;
+  // Target 1.1m away: outside a 1.0m radius, inside the 0.2m favor band.
+  std::vector<LagCompCandidate> candidates = {
+      LagCompCandidate{5, math::Vector3{1.1f, 0.0f, 0.0f}}};
+  const math::Vector3 origin{0.0f, 0.0f, 0.0f};
+
+  EXPECT_FALSE(RewindSphereHit(history, candidates, 0, origin, 1.0f).has_value());
+
+  auto hit = RewindSphereHit(history, candidates, 0, origin, 1.0f, 0.2f);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_TRUE(hit->grazing);  // beyond the core radius, within the band
+}
+
+TEST(LagCompensation, FavorShooterToleranceRejectsBeyondBand) {
+  MovementPositionHistoryStore history;
+  std::vector<LagCompCandidate> candidates = {
+      LagCompCandidate{5, math::Vector3{1.3f, 0.0f, 0.0f}}};  // 0.3m past radius > 0.2 band
+  EXPECT_FALSE(
+      RewindSphereHit(history, candidates, 0, {0.0f, 0.0f, 0.0f}, 1.0f, 0.2f).has_value());
+}
+
+TEST(LagCompensation, CoreHitIsNotMarkedGrazing) {
+  MovementPositionHistoryStore history;
+  std::vector<LagCompCandidate> candidates = {
+      LagCompCandidate{5, math::Vector3{0.5f, 0.0f, 0.0f}}};  // well inside the radius
+  auto hit = RewindSphereHit(history, candidates, 0, {0.0f, 0.0f, 0.0f}, 1.0f, 0.2f);
+  ASSERT_TRUE(hit.has_value());
+  EXPECT_FALSE(hit->grazing);
+}
+
 }  // namespace
 }  // namespace atlas

@@ -55,6 +55,10 @@
   回退当前位置（跨 cell 边界）。gameplay-agnostic（PvP gating / iframe 状态
   回溯 / favor-the-shooter 容忍是消费者与后续里程碑的事）。
   设计见 `docs/gameplay/02_sync/LAG_COMPENSATION.md`。
+- favor-the-shooter 边界容忍（§3.3）：`RewindSphereHit` 接受 boundary
+  tolerance，命中半径外、容忍带（默认 0.2m）内的"擦边"也算命中并标 `grazing`。
+  iframe / SuperArmor / Block 状态回溯（§3.5/§3.6）推迟：引擎尚无 iframe 机制
+  产生该状态（仅存在于设计文档），无源可回溯，等 skill-system 落地再做。
 
 ### Physics query 契约（14.2 前置）
 
