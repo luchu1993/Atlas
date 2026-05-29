@@ -33,7 +33,7 @@ def project_version(unity_project: Path) -> str | None:
 def installed_unity_candidates() -> list[Path]:
     home = Path.home()
     if HOST == "Windows":
-        roots = [Path("C:/Program Files/Unity/Hub/Editor")]
+        roots = [Path("C:/Program Files/Unity/Hub/Editor"), Path("C:/Unity/Hub/Editor")]
         candidates = [
             p / "Editor" / "Unity.exe"
             for root in roots
@@ -69,6 +69,7 @@ def unity_candidates(version: str | None) -> list[Path]:
     if HOST == "Windows":
         return [
             Path(f"C:/Program Files/Unity/Hub/Editor/{version}/Editor/Unity.exe"),
+            Path(f"C:/Unity/Hub/Editor/{version}/Editor/Unity.exe"),
             Path(f"C:/Program Files/Unity {version}/Editor/Unity.exe"),
         ]
     if HOST == "Darwin":

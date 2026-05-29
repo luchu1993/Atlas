@@ -125,6 +125,9 @@ auto CellMovementSystem::SetCommand(CellMovementHost& host, EntityID entity_id,
     ATLAS_LOG_WARNING("CellApp: invalid movement command for entity_id={} - dropped", entity_id);
     return false;
   }
+  // New command run (fresh or interrupting): advance from a clean sub-ms
+  // accumulator so a leftover fraction can't shorten the new command.
+  command_dt_residue_seconds_.erase(entity_id);
   if (interrupted_command) {
     auto& state =
         state_store_.Ensure(entity_id, actor.position, actor.direction, actor.on_ground);
@@ -151,6 +154,7 @@ auto CellMovementSystem::ClearCommand(CellMovementHost& host, EntityID entity_id
   auto& state =
       state_store_.Ensure(entity_id, actor.position, actor.direction, actor.on_ground);
   command_store_.Erase(entity_id);
+  command_dt_residue_seconds_.erase(entity_id);
   host.SendMovementCommandEnd(entity_id, ended_command_id, state, host.MovementServerTick(),
                               movement::MovementCommandEndReason::kCancelled);
   metrics_.RecordCommandEnded(movement::MovementCommandEndReason::kCancelled);
@@ -254,11 +258,15 @@ auto CellMovementSystem::RestoreCommand(EntityID entity_id,
     command_store_.Erase(entity_id);
     return false;
   }
+  // Sub-ms accumulation is local to a cell's dt frame; a migrated command
+  // starts fresh on this cell, mirroring the position-history tick rebase.
+  command_dt_residue_seconds_.erase(entity_id);
   return true;
 }
 
 void CellMovementSystem::ClearStoredCommand(EntityID entity_id) {
   command_store_.Erase(entity_id);
+  command_dt_residue_seconds_.erase(entity_id);
 }
 
 void CellMovementSystem::EraseEntity(EntityID entity_id) {

@@ -119,11 +119,10 @@ void ClientNativeProvider::SendMovementCorrectionReport(uint32_t target_entity_i
                                                         uint32_t acked_input_seq,
                                                         uint32_t server_tick, float distance_m,
                                                         uint16_t correction_flags) {
-  constexpr uint16_t kValidFlags = movement::kCorrectionFlagTier1 |
-                                   movement::kCorrectionFlagTier2 |
-                                   movement::kCorrectionFlagSnap;
+  // Single-tier exact match, same contract the C# / UE clients and the wire
+  // decoders enforce — a multi-tier combination would be dropped downstream.
   if (target_entity_id == kInvalidEntityID || !std::isfinite(distance_m) ||
-      distance_m < 0.0f || (correction_flags & ~kValidFlags) != 0) {
+      distance_m < 0.0f || !movement::IsCorrectionFlagsValid(correction_flags)) {
     ATLAS_LOG_WARNING(
         "Client: send_movement_correction_report rejected invalid args target={} "
         "distance={} flags={}",
