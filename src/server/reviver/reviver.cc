@@ -35,16 +35,6 @@ auto CurrentPid() -> uint32_t {
 #endif
 }
 
-auto SanitizeLockSegment(std::string value) -> std::string {
-  for (char& ch : value) {
-    const bool keep = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
-                      (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
-    if (!keep) ch = '_';
-  }
-  if (value.empty()) return "target";
-  return value;
-}
-
 auto IsLoopbackAddress(const Address& addr) -> bool {
   const uint32_t ip = addr.Ip();
   const auto* bytes = reinterpret_cast<const uint8_t*>(&ip);
@@ -58,12 +48,6 @@ auto AgeMsSince(TimePoint t) -> int64_t {
 }
 
 }  // namespace
-
-auto NormalizeLeaderLockMode(std::string_view configured) -> std::string {
-  if (configured.empty() || configured == "local") return "local";
-  if (configured == "machined") return "machined";
-  return "local";  // unknown → fall back to local; caller logs the value
-}
 
 Reviver::Reviver(EventDispatcher& dispatcher, NetworkInterface& network)
     : ManagerApp(dispatcher, network) {}
@@ -92,7 +76,6 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
     t.on_start = Config().revive_cellappmgr_on_start;
     t.priority = static_cast<uint8_t>(std::clamp(Config().revive_cellappmgr_priority, 0, 255));
-    t.leader_lock_path = Config().revive_leader_lock_path;
   } else {
     t.configured_name = Config().revive_baseappmgr_name;
     t.exe = Config().revive_baseappmgr_exe;
@@ -110,23 +93,10 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
     t.on_start = Config().revive_baseappmgr_on_start;
     t.priority = static_cast<uint8_t>(std::clamp(Config().revive_baseappmgr_priority, 0, 255));
-    t.leader_lock_path = Config().revive_baseappmgr_leader_lock_path;
   }
-  if (TargetEnabled(t)) {
-    t.leader_lock_path = ResolveLeaderLockPath(t);
-  }
-  const auto& configured_mode = Config().revive_leader_lock_mode;
-  t.leader_lock_mode = NormalizeLeaderLockMode(configured_mode);
-  if (!configured_mode.empty() && t.leader_lock_mode != configured_mode) {
-    ATLAS_LOG_ERROR(
-        "Reviver: unknown leader-lock-mode '{}' for {} — falling back to '{}';"
-        " valid values are 'local' or 'machined'",
-        configured_mode, t.slug, t.leader_lock_mode);
-  }
-  // holder_id baked once and reused across reconnects so machined can
-  // recognise the renewing client even after a connection blip.
-  t.leader_lock_holder_id =
-      std::format("{}:{}@{}", Config().process_name, CurrentPid(), t.slug);
+  // Seed the takeover grace from startup so a lone Reviver cold-starts an
+  // absent subject after its priority-scaled delay rather than never.
+  if (TargetEnabled(t)) t.subject_down_at = Clock::now();
 }
 
 auto Reviver::TargetEnabled(const ManagedTarget& t) const -> bool {
@@ -191,13 +161,6 @@ void Reviver::Fini() {
       (void)Dispatcher().CancelTimer(tp->restart_timer);
       tp->restart_timer = {};
     }
-    if (tp->leader_lock_mode == "machined" && tp->leader_lock_held &&
-        GetMachinedClient().IsConnected()) {
-      (void)GetMachinedClient().ReleaseLease(
-          tp->leader_lock_path.string(), tp->leader_lock_holder_id, nullptr);
-    }
-    tp->leader_lock_held = false;
-    tp->leader_lock.reset();
   }
   ManagerApp::Fini();
 }
@@ -278,66 +241,30 @@ void Reviver::RegisterWatchers() {
   // cellappmgr keeps the legacy reviver/leader/* watcher path for verify
   // scripts; baseappmgr lives under reviver/baseappmgr/leader/*.
   auto& wr = GetWatcherRegistry();
+  // "active" now means subject-designated active monitor (legacy alias kept so
+  // verify scripts that watched the leader-lock flag still resolve).
   wr.Add<bool>("reviver/leader/active",
-               std::function<bool()>([this] { return HasLeadership(cellappmgr_target_); }));
-  wr.Add<std::string>("reviver/leader/lock_path",
-                      std::function<std::string()>(
-                          [this] { return cellappmgr_target_.leader_lock_path.string(); }));
-  wr.Add<uint64_t>("reviver/leader/acquire_count",
-                   std::function<uint64_t()>(
-                       [this] { return cellappmgr_target_.leader_lock_acquires; }));
-  wr.Add<uint64_t>("reviver/leader/acquire_failures",
-                   std::function<uint64_t()>(
-                       [this] { return cellappmgr_target_.leader_lock_failures; }));
-  wr.Add<std::string>("reviver/leader/mode",
-                      std::function<std::string()>(
-                          [this] { return cellappmgr_target_.leader_lock_mode; }));
-  wr.Add<std::string>("reviver/leader/holder_id",
-                      std::function<std::string()>(
-                          [this] { return cellappmgr_target_.leader_lock_holder_id; }));
-  wr.Add<uint64_t>("reviver/leader/lease_renew_count",
-                   std::function<uint64_t()>(
-                       [this] { return cellappmgr_target_.lease_renew_count; }));
-  wr.Add<uint64_t>("reviver/leader/lease_failure_count",
-                   std::function<uint64_t()>(
-                       [this] { return cellappmgr_target_.lease_failure_count; }));
-
+               std::function<bool()>([this] { return cellappmgr_target_.is_active_reviver; }));
   wr.Add<bool>("reviver/baseappmgr/leader/active",
-               std::function<bool()>([this] { return HasLeadership(baseappmgr_target_); }));
-  wr.Add<std::string>("reviver/baseappmgr/leader/lock_path",
-                      std::function<std::string()>(
-                          [this] { return baseappmgr_target_.leader_lock_path.string(); }));
-  wr.Add<uint64_t>("reviver/baseappmgr/leader/acquire_count",
-                   std::function<uint64_t()>(
-                       [this] { return baseappmgr_target_.leader_lock_acquires; }));
-  wr.Add<uint64_t>("reviver/baseappmgr/leader/acquire_failures",
-                   std::function<uint64_t()>(
-                       [this] { return baseappmgr_target_.leader_lock_failures; }));
-  wr.Add<std::string>("reviver/baseappmgr/leader/mode",
-                      std::function<std::string()>(
-                          [this] { return baseappmgr_target_.leader_lock_mode; }));
-  wr.Add<std::string>("reviver/baseappmgr/leader/holder_id",
-                      std::function<std::string()>(
-                          [this] { return baseappmgr_target_.leader_lock_holder_id; }));
-  wr.Add<uint64_t>("reviver/baseappmgr/leader/lease_renew_count",
-                   std::function<uint64_t()>(
-                       [this] { return baseappmgr_target_.lease_renew_count; }));
-  wr.Add<uint64_t>("reviver/baseappmgr/leader/lease_failure_count",
-                   std::function<uint64_t()>(
-                       [this] { return baseappmgr_target_.lease_failure_count; }));
+               std::function<bool()>([this] { return baseappmgr_target_.is_active_reviver; }));
 }
 
 void Reviver::OnTickComplete() {
   for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_}) {
     if (!TargetEnabled(*tp)) continue;
-    AuditLeadership(*tp);
-    if (!HasLeadership(*tp)) continue;
-    AuditColdStart(*tp);
-    AuditTargetLaunch(*tp);
-    AuditTargetLiveness(*tp);
+    const bool supervise = ShouldSupervise(*tp);
+    if (supervise) {
+      AuditRevive(*tp);
+      AuditTargetLaunch(*tp);
+      AuditTargetLiveness(*tp);
+    }
+    // Every Reviver pings the subject so it can arbitrate the active monitor
+    // (standbys included); after liveness so a dead local pid is caught first.
     AuditTargetHeartbeat(*tp);
-    AuditTargetHealth(*tp);
-    AuditTargetRegistry(*tp);
+    if (supervise) {
+      AuditTargetHealth(*tp);
+      AuditTargetRegistry(*tp);
+    }
   }
 }
 
@@ -358,6 +285,9 @@ void Reviver::RememberTarget(ManagedTarget& t, std::string_view name, const Addr
   if (addr != t.last_addr && addr.Port() != 0) Network().DisconnectChannel(addr);
   ++t.active_generation;
   t.active = true;
+  t.ever_active = true;
+  t.intentional_down = false;
+  t.subject_down_at = {};
   t.last_addr = addr;
   t.last_pid = pid;
   ResetTargetLaunch(t);
@@ -373,7 +303,9 @@ void Reviver::RememberTarget(ManagedTarget& t, std::string_view name, const Addr
 
 void Reviver::OnTargetDeath(ManagedTarget& t, const machined::DeathNotification& msg) {
   if (!MatchesTargetName(t, msg.name)) return;
+  if (t.active && t.subject_down_at == TimePoint{}) t.subject_down_at = Clock::now();
   t.active = false;
+  t.intentional_down = (msg.reason == 0);
   ResetTargetManagerHealth(t);
   ResetTargetHeartbeat(t);
   t.last_addr = msg.internal_addr;
@@ -384,131 +316,21 @@ void Reviver::OnTargetDeath(ManagedTarget& t, const machined::DeathNotification&
     ATLAS_LOG_WARNING("Reviver: {} death name={} reason={} addr={}", t.slug, msg.name, msg.reason,
                       msg.internal_addr.ToString());
   }
-  if (!HasLeadership(t)) return;
+  // A graceful exit (reason 0) stays down; AuditRevive resurrects only an
+  // unexpectedly-dead subject, gated by ShouldSupervise + registry dedup.
   if (msg.reason == 0) return;
   ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
-void Reviver::AuditLeadership(ManagedTarget& t) {
-  const auto now = Clock::now();
-  if (t.leader_lock_mode == "machined") {
-    // Local lease bookkeeping: drop if our recorded ttl ran out before a
-    // successful renew came back. The next iteration tries to re-acquire.
-    if (t.leader_lock_held && t.leader_lock_expires_at != TimePoint{} &&
-        now >= t.leader_lock_expires_at) {
-      t.leader_lock_held = false;
-      ATLAS_LOG_WARNING("Reviver: {} lease expired locally — relinquishing leadership", t.slug);
-    }
-
-    if (t.lease_request_in_flight) return;
-    if (t.next_lease_renew_at != TimePoint{} && now < t.next_lease_renew_at) {
-      if (HasLeadership(t)) return;  // wait for re-acquire poll
-    }
-
-    if (!GetMachinedClient().IsConnected()) {
-      if (HasLeadership(t)) {
-        t.leader_lock_held = false;
-        ATLAS_LOG_WARNING("Reviver: {} dropped lease — machined disconnected", t.slug);
-      }
-      return;
-    }
-
-    const uint32_t ttl_ms = static_cast<uint32_t>(
-        std::max(100, Config().revive_leader_lock_ttl_ms));
-    const auto renew_ms = std::max(100, Config().revive_leader_lock_renew_ms);
-    const bool renewing = t.leader_lock_held;
-    t.lease_request_in_flight = true;
-    t.next_lease_renew_at = now + std::chrono::milliseconds(renew_ms);
-    // Anchor our local expiry to the request SEND time, not the callback
-    // arrival: machined stamps its authoritative expiry when it receives the
-    // request (≈ now + RTT/2), so send-time + ttl is never later than
-    // machined's view. Using callback-arrival would push our belief ~RTT past
-    // machined's and open a window where machined could grant the lease to a
-    // competing reviver while we still think we hold it.
-    const auto lease_expiry =
-        now + std::chrono::duration_cast<Duration>(std::chrono::milliseconds(ttl_ms));
-    const auto op = renewing ? machined::LeaseOp::kRenew : machined::LeaseOp::kAcquire;
-    auto issue = [this, &t, renewing, lease_expiry](MachinedClient::LeaseResult r) {
-      t.lease_request_in_flight = false;
-      if (r.success) {
-        t.leader_lock_expires_at = lease_expiry;
-        t.lease_failure_streak = 0;
-        if (!t.leader_lock_held) {
-          t.leader_lock_held = true;
-          ++t.lease_acquire_count;
-          ++t.leader_lock_acquires;
-          t.startup_checked = false;
-          t.startup_check_at = Clock::now();
-          t.last_error.clear();
-          ATLAS_LOG_INFO("Reviver: acquired {} lease (machined) holder={}", t.slug,
-                         t.leader_lock_holder_id);
-        } else {
-          ++t.lease_renew_count;
-        }
-        return;
-      }
-      ++t.lease_failure_streak;
-      ++t.lease_failure_count;
-      ++t.leader_lock_failures;
-      const auto threshold = static_cast<uint32_t>(
-          std::max(1, Config().revive_leader_lock_failure_threshold));
-      if (t.leader_lock_held && t.lease_failure_streak >= threshold) {
-        t.leader_lock_held = false;
-        t.last_error = std::format(
-            "{} lease lost after {} consecutive failures; current_holder={}", t.slug,
-            t.lease_failure_streak, r.current_holder);
-        ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
-        t.lease_failure_streak = 0;
-        return;
-      }
-      if (!renewing && !t.leader_lock_held && !r.current_holder.empty()) {
-        t.last_error = std::format(
-            "{} lease held by {} (expires in {}ms)", t.slug, r.current_holder,
-            r.current_holder_expires_in_ms);
-      }
-    };
-    if (op == machined::LeaseOp::kAcquire) {
-      (void)GetMachinedClient().AcquireLease(
-          t.leader_lock_path.string(), t.leader_lock_holder_id, ttl_ms, std::move(issue));
-    } else {
-      (void)GetMachinedClient().RenewLease(
-          t.leader_lock_path.string(), t.leader_lock_holder_id, ttl_ms, std::move(issue));
-    }
-    return;
-  }
-
-  // local-file mode (legacy default).
-  if (HasLeadership(t)) return;
-  if (t.next_leader_lock_attempt != TimePoint{} && now < t.next_leader_lock_attempt) return;
-  t.next_leader_lock_attempt = now + std::chrono::seconds(1);
-
-  auto lock = fs::ScopedFileLock::TryAcquire(t.leader_lock_path, LeaderLockContent());
-  if (!lock) {
-    ++t.leader_lock_failures;
-    if (lock.Error().Code() != ErrorCode::kAlreadyExists) {
-      t.last_error = std::format("leader lock failed: {}", lock.Error().Message());
-      ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
-    }
-    return;
-  }
-
-  t.leader_lock.emplace(std::move(*lock));
-  ++t.leader_lock_acquires;
-  t.leader_lock_held = true;
-  t.startup_checked = false;
-  t.startup_check_at = Clock::now();
-  t.last_error.clear();
-  ATLAS_LOG_INFO("Reviver: acquired {} leader lock {}", t.slug, t.leader_lock_path.string());
-}
-
-void Reviver::AuditColdStart(ManagedTarget& t) {
-  if (t.startup_checked || Clock::now() < t.startup_check_at) return;
-  if (!t.on_start || t.active) {
-    t.startup_checked = true;
-    return;
-  }
-  if (t.query_pending) return;
-  t.startup_checked = true;
+void Reviver::AuditRevive(ManagedTarget& t) {
+  // Called only when ShouldSupervise(t). Revives an absent subject — covers both
+  // the initial cold-start and a takeover after the designated Reviver itself
+  // died. A registry query right before launch dedups racing Revivers: if a
+  // higher-priority survivor already revived it, we adopt it instead.
+  if (Clock::now() < t.startup_check_at) return;
+  if (t.active || t.intentional_down) return;
+  if (t.query_pending || t.launch_pending || t.restart_timer.IsValid()) return;
+  if (!t.ever_active && !t.on_start) return;  // never seen + not auto-started
   t.query_pending = true;
   GetMachinedClient().QueryAsync(t.process_type,
                                  [this, &t](std::vector<machined::ProcessInfo> infos) {
@@ -567,6 +389,7 @@ void Reviver::AuditTargetLiveness(ManagedTarget& t) {
     return;
   }
 
+  if (t.subject_down_at == TimePoint{}) t.subject_down_at = Clock::now();
   t.active = false;
   ResetTargetManagerHealth(t);
   ResetTargetHeartbeat(t);
@@ -723,6 +546,7 @@ void Reviver::OnTargetRegistryAudit(ManagedTarget& t, std::vector<machined::Proc
   const auto threshold = static_cast<uint32_t>(std::max(1, t.missing_audit_threshold));
   if (t.registry_missing_streak < threshold) return;
 
+  if (t.subject_down_at == TimePoint{}) t.subject_down_at = Clock::now();
   t.active = false;
   ResetTargetManagerHealth(t);
   ResetTargetHeartbeat(t);
@@ -751,12 +575,17 @@ void Reviver::RecordTargetHealthFailure(ManagedTarget& t, std::string_view reaso
   const auto threshold = static_cast<uint32_t>(std::max(1, t.health_failure_threshold));
   if (streak < threshold) return;
 
+  // Mark the subject down even on a standby's failed heartbeat — its takeover
+  // grace counts from here. Only the supervising Reviver terminates/restarts;
+  // standbys defer to AuditRevive once their grace elapses.
+  if (t.active) t.subject_down_at = Clock::now();
   t.active = false;
   ResetTargetManagerHealth(t);
   ResetTargetHeartbeat(t);
-  TerminateTargetIfLocal(t, reason);
   t.last_error = std::format("{} after {} check(s)", reason, streak);
   ATLAS_LOG_WARNING("Reviver: {}", t.last_error);
+  if (!ShouldSupervise(t)) return;
+  TerminateTargetIfLocal(t, reason);
   ScheduleTargetRestart(t, Milliseconds(Config().revive_restart_delay_ms));
 }
 
@@ -807,7 +636,7 @@ void Reviver::TerminateLaunchedTarget(ManagedTarget& t, std::string_view reason)
 }
 
 void Reviver::ScheduleTargetRestart(ManagedTarget& t, Duration delay) {
-  if (!HasLeadership(t)) return;
+  if (!ShouldSupervise(t)) return;
   if (t.restart_timer.IsValid()) return;
   if (t.restart_attempts >= static_cast<uint32_t>(std::max(0, Config().revive_max_restarts))) {
     if (!t.restart_limit_reached) ++t.restart_limit_hit_count;
@@ -833,7 +662,7 @@ void Reviver::ScheduleTargetRestart(ManagedTarget& t, Duration delay) {
 }
 
 void Reviver::LaunchTarget(ManagedTarget& t) {
-  if (!HasLeadership(t)) return;
+  if (!ShouldSupervise(t)) return;
   if (t.active) return;
   ++t.restart_attempts;
   // Resolve exe relative to the Reviver process when no explicit path was
@@ -904,9 +733,30 @@ void Reviver::LaunchTarget(ManagedTarget& t) {
                     t.restart_attempts, t.launched.Pid(), exe.string(), port);
 }
 
-auto Reviver::HasLeadership(const ManagedTarget& t) const -> bool {
-  if (t.leader_lock_mode == "machined") return t.leader_lock_held;
-  return t.leader_lock.has_value() && t.leader_lock->IsHeld();
+auto Reviver::PriorityTakeoverGrace(uint8_t priority) -> Duration {
+  // Higher priority → shorter grace: the top priority takes over instantly, a
+  // lower one defers so a more-preferred survivor goes first. Registry dedup is
+  // the correctness backstop; the grace just avoids redundant launch attempts.
+  return std::chrono::duration_cast<Duration>(
+      std::chrono::milliseconds(static_cast<int>(255 - priority) * 20));
+}
+
+auto Reviver::ShouldSupervise(const ManagedTarget& t) const -> bool {
+  // Subject-designated active monitor, or the one it last designated and the
+  // subject just died → supervise immediately.
+  if (t.is_active_reviver) return true;
+  if (t.active) {
+    // Subject alive. Stand by only once it has actually designated someone else
+    // (we received an ack and it said we are not active). Before the first ack
+    // — e.g. right after we launched it — the sole/launching Reviver supervises
+    // provisionally; AuditRevive is a no-op while the subject is up, so this
+    // never double-launches against a higher-priority peer.
+    return t.heartbeat_last_ack_at == TimePoint{};
+  }
+  // Subject down and we were never designated: take over once our priority-
+  // scaled grace elapses (highest-priority survivor goes first).
+  if (t.subject_down_at == TimePoint{}) return false;
+  return Clock::now() - t.subject_down_at >= PriorityTakeoverGrace(t.priority);
 }
 
 auto Reviver::MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool {
@@ -919,29 +769,11 @@ auto Reviver::CanCheckLocalPid() const -> bool {
   return true;
 }
 
-auto Reviver::ResolveLeaderLockPath(const ManagedTarget& t) const -> std::filesystem::path {
-  if (!t.leader_lock_path.empty()) {
-    return std::filesystem::absolute(t.leader_lock_path);
-  }
-  // cellappmgr honors the legacy --revive-leader-lock-path top-level flag;
-  // baseappmgr requires --revive-baseappmgr-leader-lock-path (or output dir).
-  if (t.process_type == ProcessType::kCellAppMgr && !Config().revive_leader_lock_path.empty()) {
-    return std::filesystem::absolute(Config().revive_leader_lock_path);
-  }
-  const auto target_name = SanitizeLockSegment(t.configured_name);
-  const uint16_t port = t.internal_port;
-  auto base = t.output_path.parent_path();
-  if (base.empty()) base = fs::TempDirectory();
-  return base / std::format("atlas_reviver_{}_{}.lock", target_name, port);
-}
-
-auto Reviver::LeaderLockContent() const -> std::string {
-  return std::format("process={} pid={}\n", Config().process_name, CurrentPid());
-}
-
 auto Reviver::TargetStatus(const ManagedTarget& t) const -> std::string {
-  if (!HasLeadership(t)) return "standby";
+  // restart_limit_reached only happens to a Reviver that was supervising and
+  // gave up, so report it before the standby check (a standby never restarts).
   if (t.restart_limit_reached) return "restart_limited";
+  if (!ShouldSupervise(t)) return "standby";
   if (t.active) return "active";
   if (t.launch_pending) return "launching";
   if (t.restart_timer.IsValid()) return "restart_scheduled";

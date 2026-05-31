@@ -25,9 +25,6 @@ namespace baseappmgr {
 struct HealthProbeAck;
 }
 
-// Unknown / empty input falls back to "local"; caller logs the raw value.
-[[nodiscard]] auto NormalizeLeaderLockMode(std::string_view configured) -> std::string;
-
 class Reviver : public ManagerApp {
  public:
   Reviver(EventDispatcher& dispatcher, NetworkInterface& network);
@@ -42,7 +39,7 @@ class Reviver : public ManagerApp {
 
  private:
   // One Reviver process supervises both CellAppMgr and BaseAppMgr; each
-  // target keeps its own leader lock, heartbeat, restart budget, watchers.
+  // target keeps its own priority, heartbeat, restart budget, watchers.
   struct ManagedTarget {
     ProcessType process_type;
     std::string slug;  // baked into reviver/<slug>/* watcher paths
@@ -60,39 +57,30 @@ class Reviver : public ManagerApp {
     bool on_start{false};
     // Static ReviverPriority sent in every HealthProbe; the subject designates
     // the highest-priority live pinger as the active monitor.
-    uint8_t priority{128};
+    uint8_t priority{255};
 
     std::filesystem::path exe;
     uint16_t internal_port{0};
     std::filesystem::path output_path;
-    std::filesystem::path leader_lock_path;
-
-    // "local" → leader_lock owns a ScopedFileLock; "machined" → leader_lock
-    // stays nullopt and leader_lock_held + lease_* track a machined lease.
-    std::string leader_lock_mode;
-    std::optional<fs::ScopedFileLock> leader_lock;
-    bool leader_lock_held{false};
-    std::string leader_lock_holder_id;
-    TimePoint leader_lock_expires_at{};
-    TimePoint next_lease_renew_at{};
-    bool lease_request_in_flight{false};
-    uint32_t lease_failure_streak{0};
-    uint64_t lease_acquire_count{0};
-    uint64_t lease_renew_count{0};
-    uint64_t lease_failure_count{0};
     Address last_addr;
     uint32_t last_pid{0};
     LaunchedProcess launched;
     uint64_t active_generation{0};
     bool active{false};
-    TimePoint next_leader_lock_attempt{};
+    // True once the subject has been seen alive; gates cold-start vs restart.
+    bool ever_active{false};
+    // Set when the subject exits gracefully (death reason 0); suppresses revive
+    // until it is seen alive again. Cleared on RememberTarget.
+    bool intentional_down{false};
+    // When the subject was last observed down (from this Reviver's view); the
+    // priority-scaled takeover grace counts from here.
+    TimePoint subject_down_at{};
     TimePoint next_health_check_at{};
     TimePoint next_heartbeat_at{};
     TimePoint launch_deadline{};
     TimePoint health_check_sent_at{};
     TimePoint heartbeat_sent_at{};
     TimePoint next_registry_audit_at{};
-    bool startup_checked{false};
     TimePoint startup_check_at{};
     bool query_pending{false};
     bool launch_pending{false};
@@ -125,8 +113,6 @@ class Reviver : public ManagerApp {
     // Subject's last verdict on whether this Reviver is the active monitor.
     bool is_active_reviver{false};
     uint64_t forced_termination_count{0};
-    uint64_t leader_lock_acquires{0};
-    uint64_t leader_lock_failures{0};
     uint64_t registry_audit_count{0};
     uint64_t registry_missing_count{0};
     std::string last_error;
@@ -145,8 +131,7 @@ class Reviver : public ManagerApp {
   void OnTargetDeath(ManagedTarget& t, const machined::DeathNotification& msg);
   void RememberTarget(ManagedTarget& t, std::string_view name, const Address& addr, uint32_t pid);
 
-  void AuditLeadership(ManagedTarget& t);
-  void AuditColdStart(ManagedTarget& t);
+  void AuditRevive(ManagedTarget& t);
   void AuditTargetLaunch(ManagedTarget& t);
   void AuditTargetLiveness(ManagedTarget& t);
   void AuditTargetHeartbeat(ManagedTarget& t);
@@ -173,11 +158,13 @@ class Reviver : public ManagerApp {
   void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
                           uint64_t game_time, bool is_active_reviver);
 
-  [[nodiscard]] auto HasLeadership(const ManagedTarget& t) const -> bool;
+  // Whether this Reviver should run supervision/revive actions for t now: it
+  // is the subject-designated active monitor, or the subject is down and this
+  // Reviver's priority-scaled takeover grace has elapsed.
+  [[nodiscard]] auto ShouldSupervise(const ManagedTarget& t) const -> bool;
+  [[nodiscard]] static auto PriorityTakeoverGrace(uint8_t priority) -> Duration;
   [[nodiscard]] auto MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool;
   [[nodiscard]] auto CanCheckLocalPid() const -> bool;
-  [[nodiscard]] auto ResolveLeaderLockPath(const ManagedTarget& t) const -> std::filesystem::path;
-  [[nodiscard]] auto LeaderLockContent() const -> std::string;
   [[nodiscard]] auto TargetStatus(const ManagedTarget& t) const -> std::string;
   [[nodiscard]] auto HeartbeatLastAckAgeMsForWatcher(const ManagedTarget& t) const -> int64_t;
 

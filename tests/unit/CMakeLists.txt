@@ -242,9 +242,9 @@ atlas_add_test(NAME test_lease_store
   DEPS atlas_machined_lib atlas_network atlas_foundation
 )
 
-atlas_add_test(NAME test_reviver_leader_lock_mode
-  SOURCES test_reviver_leader_lock_mode.cpp
-  DEPS atlas_reviver_lib
+atlas_add_test(NAME test_reviver_subject
+  SOURCES test_reviver_subject.cpp
+  DEPS atlas_server atlas_network atlas_foundation
 )
 
 atlas_add_test(NAME test_script_events

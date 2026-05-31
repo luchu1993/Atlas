@@ -82,11 +82,14 @@ auto ExecutablePath() -> std::filesystem::path {
 }
 
 auto BuildRoot() -> std::filesystem::path {
-  // The machined target output is a stable marker for the CMake build root.
+  // The machined output is a stable marker for the CMake build root. Accept
+  // both the VS-solution layout (src/server/.../Debug) and the Ninja
+  // Multi-Config layout (bin/Debug) so the process tests run under either.
   auto current = ExecutablePath().parent_path();
   for (int i = 0; i < 10 && !current.empty(); ++i) {
     if (std::filesystem::exists(current / "src" / "server" / "machined" / "Debug" /
-                                "machined.exe")) {
+                                "machined.exe") ||
+        std::filesystem::exists(current / "bin" / "Debug" / "machined.exe")) {
       return current;
     }
     current = current.parent_path();
@@ -362,7 +365,7 @@ auto LaunchCellAppMgrWithRetry(const std::filesystem::path& cellappmgr_exe,
 auto LaunchReviver(const std::filesystem::path& reviver_exe,
                    const std::filesystem::path& cellappmgr_exe,
                    const std::wstring& machined_addr, uint16_t cellappmgr_port,
-                   const std::filesystem::path& leader_lock_path,
+                   uint32_t priority,
                    const std::wstring& reviver_name = L"reviver_process_test",
                    uint32_t max_restarts = 3,
                    uint32_t health_failure_threshold = 2,
@@ -376,7 +379,7 @@ auto LaunchReviver(const std::filesystem::path& reviver_exe,
       L"--machined", machined_addr, L"--revive-cellappmgr-exe", cellappmgr_exe.wstring(),
       L"--revive-cellappmgr-name", L"cellappmgr_revived", L"--revive-cellappmgr-port",
       std::to_wstring(cellappmgr_port), L"--revive-cellappmgr-on-start", L"true",
-      L"--revive-leader-lock-path", leader_lock_path.wstring(),
+      L"--revive-cellappmgr-priority", std::to_wstring(priority),
       L"--revive-cellappmgr-update-hertz", L"100",
       L"--revive-cellappmgr-launch-timeout-ms", std::to_wstring(launch_timeout_ms),
       L"--revive-cellappmgr-health-interval-ms", L"50",
@@ -674,7 +677,7 @@ TEST(CellAppMgrProcess, ReviverColdStartsAndRestartsCellAppMgr) {
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_process_test", 3, 2, 5000, 5000,
                                 reviver_config_path, revived_output_path);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
@@ -932,7 +935,7 @@ TEST(CellAppMgrProcess, ReviverAttachesToExistingCellAppMgrWithoutColdStart) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_attach");
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver, "reviver_attach"))
@@ -1046,7 +1049,7 @@ TEST(CellAppMgrProcess, ReviverStartsNewCellAppMgrAfterTargetDiedBeforeSubscribe
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_missed_death");
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
@@ -1149,7 +1152,7 @@ TEST(CellAppMgrProcess, ReviverRestartsCellAppMgrWhenDirectHeartbeatDoesNotAck) 
 
   PidGuard revived_mgr;
   Child reviver = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_heartbeat");
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, disp, ProcessType::kReviver,
@@ -1287,7 +1290,7 @@ TEST(CellAppMgrProcess, ReviverTimesOutPendingManagerHealthWatcher) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, machined_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_manager_timeout", 3, 20, 500);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
   ASSERT_TRUE(WaitForNamedRegistration(client, registry_disp, ProcessType::kReviver,
@@ -1353,7 +1356,7 @@ TEST(CellAppMgrProcess, ReviverStopsAfterRestartLimitWithoutHeartbeatAck) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, machined_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_limit", 2);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
 
@@ -1447,7 +1450,7 @@ TEST(CellAppMgrProcess, ReviverStopsAfterLaunchedProcessDoesNotRegister) {
   std::filesystem::remove(leader_lock_path, ec);
 
   Child reviver = LaunchReviver(reviver_exe, atlas_tool_exe, machined_addr,
-                                cellappmgr_port, leader_lock_path,
+                                cellappmgr_port, /*priority=*/255u,
                                 L"reviver_launch_timeout", 2, 2, 5000, 300);
   ASSERT_TRUE(reviver.IsRunning()) << reviver.Diagnostic();
 
@@ -1495,7 +1498,7 @@ TEST(CellAppMgrProcess, ReviverStopsAfterLaunchedProcessDoesNotRegister) {
 #endif
 }
 
-TEST(CellAppMgrProcess, ReviverLeaderLockAllowsOnlyOneColdStartOwner) {
+TEST(CellAppMgrProcess, ReviverPriorityArbitrationPicksOneActiveMonitor) {
 #if !defined(_WIN32)
   GTEST_SKIP() << "Windows-only process harness";
 #else
@@ -1526,10 +1529,10 @@ TEST(CellAppMgrProcess, ReviverLeaderLockAllowsOnlyOneColdStartOwner) {
 
   PidGuard revived_mgr;
   Child reviver_a = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                  cellappmgr_port, leader_lock_path,
+                                  cellappmgr_port, /*priority=*/255u,
                                   L"reviver_lock_a");
   Child reviver_b = LaunchReviver(reviver_exe, cellappmgr_exe, machined_addr,
-                                  cellappmgr_port, leader_lock_path,
+                                  cellappmgr_port, /*priority=*/200u,
                                   L"reviver_lock_b");
   ASSERT_TRUE(reviver_a.IsRunning()) << reviver_a.Diagnostic();
   ASSERT_TRUE(reviver_b.IsRunning()) << reviver_b.Diagnostic();
