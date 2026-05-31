@@ -296,12 +296,14 @@ void BaseAppMgr::OnBaseappReady(const Address& src, Channel* ch,
   ATLAS_LOG_INFO("BaseAppMgr: BaseApp app_id={} is ready", msg.app_id);
 }
 
-void BaseAppMgr::OnHealthProbe(const Address&, Channel* ch,
+void BaseAppMgr::OnHealthProbe(const Address& src, Channel* ch,
                                const baseappmgr::HealthProbe& msg) {
   if (ch == nullptr) return;
   baseappmgr::HealthProbeAck ack;
   ack.nonce = msg.nonce;
   ack.game_time = GameTime();
+  ack.is_active_reviver =
+      reviver_subject_.RecordPingAndIsActive(src, msg.reviver_priority, Clock::now());
   (void)ch->SendMessage(ack);
 }
 

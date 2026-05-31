@@ -243,12 +243,14 @@ static_assert(NetworkMessage<InformCellLoad>);
 
 struct HealthProbe {
   uint64_t nonce{0};
+  // Static ReviverPriority; the subject arbitrates the active monitor by it.
+  uint8_t reviver_priority{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kHealthProbe),
                                    "cellappmgr::HealthProbe",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint64_t)),
+                                   static_cast<int>(sizeof(uint64_t) + sizeof(uint8_t)),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
@@ -256,13 +258,16 @@ struct HealthProbe {
 
   void Serialize(BinaryWriter& w) const {
     w.Write(nonce);
+    w.Write(reviver_priority);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<HealthProbe> {
     auto value = r.Read<uint64_t>();
-    if (!value) return Error{ErrorCode::kInvalidArgument, "HealthProbe: truncated"};
+    auto priority = r.Read<uint8_t>();
+    if (!value || !priority) return Error{ErrorCode::kInvalidArgument, "HealthProbe: truncated"};
     HealthProbe msg;
     msg.nonce = *value;
+    msg.reviver_priority = *priority;
     return msg;
   }
 };
@@ -271,9 +276,11 @@ static_assert(NetworkMessage<HealthProbe>);
 struct HealthProbeAck {
   uint64_t nonce{0};
   uint64_t game_time{0};
+  // Subject's verdict: is the pinging Reviver the active monitor?
+  bool is_active_reviver{false};
 
   static auto Descriptor() -> const MessageDesc& {
-    constexpr int kSerializedSize = static_cast<int>(2 * sizeof(uint64_t));
+    constexpr int kSerializedSize = static_cast<int>(2 * sizeof(uint64_t) + sizeof(uint8_t));
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kHealthProbeAck),
                                    "cellappmgr::HealthProbeAck",
                                    MessageLengthStyle::kFixed,
@@ -286,15 +293,19 @@ struct HealthProbeAck {
   void Serialize(BinaryWriter& w) const {
     w.Write(nonce);
     w.Write(game_time);
+    w.Write<uint8_t>(is_active_reviver ? 1u : 0u);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<HealthProbeAck> {
     auto value = r.Read<uint64_t>();
     auto tick = r.Read<uint64_t>();
-    if (!value || !tick) {
+    auto active = r.Read<uint8_t>();
+    if (!value || !tick || !active) {
       return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: truncated"};
     }
+    if (*active > 1) return Error{ErrorCode::kInvalidArgument, "HealthProbeAck: bad flag"};
     HealthProbeAck msg;
+    msg.is_active_reviver = (*active != 0);
     msg.nonce = *value;
     msg.game_time = *tick;
     return msg;

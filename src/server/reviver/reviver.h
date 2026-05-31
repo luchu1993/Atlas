@@ -58,6 +58,9 @@ class Reviver : public ManagerApp {
     int launch_timeout_ms{5000};
     int update_hertz{10};
     bool on_start{false};
+    // Static ReviverPriority sent in every HealthProbe; the subject designates
+    // the highest-priority live pinger as the active monitor.
+    uint8_t priority{128};
 
     std::filesystem::path exe;
     uint16_t internal_port{0};
@@ -119,6 +122,8 @@ class Reviver : public ManagerApp {
     uint64_t heartbeat_timeout_count{0};
     TimePoint heartbeat_last_ack_at{};
     uint64_t heartbeat_last_game_time{0};
+    // Subject's last verdict on whether this Reviver is the active monitor.
+    bool is_active_reviver{false};
     uint64_t forced_termination_count{0};
     uint64_t leader_lock_acquires{0};
     uint64_t leader_lock_failures{0};
@@ -166,7 +171,7 @@ class Reviver : public ManagerApp {
   void OnBaseAppMgrHeartbeatAck(const Address& src, Channel* ch,
                                 const baseappmgr::HealthProbeAck& msg);
   void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
-                          uint64_t game_time);
+                          uint64_t game_time, bool is_active_reviver);
 
   [[nodiscard]] auto HasLeadership(const ManagedTarget& t) const -> bool;
   [[nodiscard]] auto MatchesTargetName(const ManagedTarget& t, std::string_view name) const -> bool;

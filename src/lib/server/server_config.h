@@ -77,6 +77,8 @@ struct ServerConfig {
   std::filesystem::path revive_cellappmgr_output_path;
   int revive_cellappmgr_update_hertz{10};
   int revive_cellappmgr_launch_timeout_ms{5000};
+  // ReviverPriority (0-255) the subject arbitrates the active monitor by.
+  int revive_cellappmgr_priority{128};
 
   // BaseAppMgr supervision. Parallel to revive_cellappmgr_*; the Reviver
   // tracks each manager independently (separate leader lock, heartbeat,
@@ -87,6 +89,7 @@ struct ServerConfig {
   std::filesystem::path revive_baseappmgr_output_path;
   int revive_baseappmgr_update_hertz{10};
   int revive_baseappmgr_launch_timeout_ms{5000};
+  int revive_baseappmgr_priority{128};
   bool revive_baseappmgr_on_start{false};
   std::filesystem::path revive_baseappmgr_leader_lock_path;
   int revive_restart_delay_ms{1000};

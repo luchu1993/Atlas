@@ -180,24 +180,32 @@ static_assert(NetworkMessage<InformLoad>);
 
 struct HealthProbe {
   uint64_t nonce{0};
+  // Static ReviverPriority; the subject arbitrates the active monitor by it.
+  uint8_t reviver_priority{0};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::BaseAppMgr::kHealthProbe),
                                    "baseappmgr::HealthProbe",
                                    MessageLengthStyle::kFixed,
-                                   static_cast<int>(sizeof(uint64_t)),
+                                   static_cast<int>(sizeof(uint64_t) + sizeof(uint8_t)),
                                    MessageReliability::kReliable,
                                    MessageUrgency::kImmediate};
     return kDesc;
   }
 
-  void Serialize(BinaryWriter& w) const { w.Write(nonce); }
+  void Serialize(BinaryWriter& w) const {
+    w.Write(nonce);
+    w.Write(reviver_priority);
+  }
 
   static auto Deserialize(BinaryReader& r) -> Result<HealthProbe> {
     auto value = r.Read<uint64_t>();
-    if (!value) return Error{ErrorCode::kInvalidArgument, "baseappmgr::HealthProbe: truncated"};
+    auto priority = r.Read<uint8_t>();
+    if (!value || !priority)
+      return Error{ErrorCode::kInvalidArgument, "baseappmgr::HealthProbe: truncated"};
     HealthProbe msg;
     msg.nonce = *value;
+    msg.reviver_priority = *priority;
     return msg;
   }
 };
@@ -206,6 +214,8 @@ static_assert(NetworkMessage<HealthProbe>);
 struct HealthProbeAck {
   uint64_t nonce{0};
   uint64_t game_time{0};
+  // Subject's verdict: is the pinging Reviver the active monitor?
+  bool is_active_reviver{false};
 
   static auto Descriptor() -> const MessageDesc& {
     // kVariable so future trailing fields stay deserialize-compatible.
@@ -221,17 +231,21 @@ struct HealthProbeAck {
   void Serialize(BinaryWriter& w) const {
     w.Write(nonce);
     w.Write(game_time);
+    w.Write<uint8_t>(is_active_reviver ? 1u : 0u);
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<HealthProbeAck> {
     auto value = r.Read<uint64_t>();
     auto tick = r.Read<uint64_t>();
-    if (!value || !tick) {
+    auto active = r.Read<uint8_t>();
+    if (!value || !tick || !active) {
       return Error{ErrorCode::kInvalidArgument, "baseappmgr::HealthProbeAck: truncated"};
     }
+    if (*active > 1) return Error{ErrorCode::kInvalidArgument, "baseappmgr::HealthProbeAck: bad flag"};
     HealthProbeAck msg;
     msg.nonce = *value;
     msg.game_time = *tick;
+    msg.is_active_reviver = (*active != 0);
     return msg;
   }
 };

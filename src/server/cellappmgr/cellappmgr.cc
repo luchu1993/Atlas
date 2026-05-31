@@ -512,12 +512,14 @@ void CellAppMgr::SendRegisterCellAppAck(Channel* ch, const Address& addr, uint32
   }
 }
 
-void CellAppMgr::OnHealthProbe(const Address&, Channel* ch,
+void CellAppMgr::OnHealthProbe(const Address& src, Channel* ch,
                                const cellappmgr::HealthProbe& msg) {
   if (ch == nullptr) return;
   cellappmgr::HealthProbeAck ack;
   ack.nonce = msg.nonce;
   ack.game_time = GameTime();
+  ack.is_active_reviver =
+      reviver_subject_.RecordPingAndIsActive(src, msg.reviver_priority, Clock::now());
   (void)ch->SendMessage(ack);
 }
 

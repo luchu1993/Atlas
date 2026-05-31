@@ -113,6 +113,7 @@ static const CliField kCliFields[] = {
     {"revive-cellappmgr-name",      &ServerConfig::revive_cellappmgr_name},
     {"revive-cellappmgr-port",      &ServerConfig::revive_cellappmgr_internal_port},
     {"revive-cellappmgr-output-path", &ServerConfig::revive_cellappmgr_output_path},
+    {"revive-cellappmgr-priority",  &ServerConfig::revive_cellappmgr_priority},
     {"revive-cellappmgr-update-hertz",  &ServerConfig::revive_cellappmgr_update_hertz},
     {"revive-cellappmgr-launch-timeout-ms",
         &ServerConfig::revive_cellappmgr_launch_timeout_ms},
@@ -142,6 +143,7 @@ static const CliField kCliFields[] = {
     {"revive-baseappmgr-name",      &ServerConfig::revive_baseappmgr_name},
     {"revive-baseappmgr-port",      &ServerConfig::revive_baseappmgr_internal_port},
     {"revive-baseappmgr-output-path", &ServerConfig::revive_baseappmgr_output_path},
+    {"revive-baseappmgr-priority",  &ServerConfig::revive_baseappmgr_priority},
     {"revive-baseappmgr-update-hertz",  &ServerConfig::revive_baseappmgr_update_hertz},
     {"revive-baseappmgr-launch-timeout-ms",
         &ServerConfig::revive_baseappmgr_launch_timeout_ms},
@@ -255,6 +257,8 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           cellappmgr->ReadUint("internal_port", cfg.revive_cellappmgr_internal_port));
       cfg.revive_cellappmgr_output_path =
           cellappmgr->ReadString("output_path", cfg.revive_cellappmgr_output_path.string());
+      cfg.revive_cellappmgr_priority =
+          cellappmgr->ReadInt("priority", cfg.revive_cellappmgr_priority);
       cfg.revive_cellappmgr_update_hertz =
           cellappmgr->ReadInt("update_hertz", cfg.revive_cellappmgr_update_hertz);
       cfg.revive_cellappmgr_launch_timeout_ms =
@@ -284,6 +288,8 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           baseappmgr->ReadUint("internal_port", cfg.revive_baseappmgr_internal_port));
       cfg.revive_baseappmgr_output_path =
           baseappmgr->ReadString("output_path", cfg.revive_baseappmgr_output_path.string());
+      cfg.revive_baseappmgr_priority =
+          baseappmgr->ReadInt("priority", cfg.revive_baseappmgr_priority);
       cfg.revive_baseappmgr_update_hertz =
           baseappmgr->ReadInt("update_hertz", cfg.revive_baseappmgr_update_hertz);
       cfg.revive_baseappmgr_launch_timeout_ms =

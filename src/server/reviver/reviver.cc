@@ -91,6 +91,7 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.audit_interval_ms = Config().revive_cellappmgr_audit_interval_ms;
     t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
     t.on_start = Config().revive_cellappmgr_on_start;
+    t.priority = static_cast<uint8_t>(std::clamp(Config().revive_cellappmgr_priority, 0, 255));
     t.leader_lock_path = Config().revive_leader_lock_path;
   } else {
     t.configured_name = Config().revive_baseappmgr_name;
@@ -108,6 +109,7 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.audit_interval_ms = Config().revive_cellappmgr_audit_interval_ms;
     t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
     t.on_start = Config().revive_baseappmgr_on_start;
+    t.priority = static_cast<uint8_t>(std::clamp(Config().revive_baseappmgr_priority, 0, 255));
     t.leader_lock_path = Config().revive_baseappmgr_leader_lock_path;
   }
   if (TargetEnabled(t)) {
@@ -254,6 +256,10 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
                    std::function<uint64_t()>([&t] { return t.heartbeat_timeout_count; }));
   wr.Add<uint64_t>(root + "/heartbeat_last_game_time",
                    std::function<uint64_t()>([&t] { return t.heartbeat_last_game_time; }));
+  wr.Add<int>(root + "/priority",
+              std::function<int()>([&t] { return static_cast<int>(t.priority); }));
+  wr.Add<bool>(root + "/active_reviver",
+               std::function<bool()>([&t] { return t.is_active_reviver; }));
   wr.Add<uint64_t>(root + "/forced_terminations",
                    std::function<uint64_t()>([&t] { return t.forced_termination_count; }));
   wr.Add<uint64_t>(root + "/registry_audits",
@@ -587,6 +593,7 @@ void Reviver::SendHeartbeat(ManagedTarget& t) {
   if (t.process_type == ProcessType::kCellAppMgr) {
     cellappmgr::HealthProbe msg;
     msg.nonce = nonce;
+    msg.reviver_priority = t.priority;
     if (auto send = (*ch)->SendMessage(msg); !send) {
       t.heartbeat_pending = false;
       t.heartbeat_pending_nonce = 0;
@@ -595,6 +602,7 @@ void Reviver::SendHeartbeat(ManagedTarget& t) {
   } else {
     baseappmgr::HealthProbe msg;
     msg.nonce = nonce;
+    msg.reviver_priority = t.priority;
     if (auto send = (*ch)->SendMessage(msg); !send) {
       t.heartbeat_pending = false;
       t.heartbeat_pending_nonce = 0;
@@ -628,7 +636,7 @@ void Reviver::AuditTargetHeartbeat(ManagedTarget& t) {
 }
 
 void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
-                                 uint64_t game_time) {
+                                 uint64_t game_time, bool is_active_reviver) {
   if (!t.active) return;
   if (src != t.last_addr) return;
   if (!t.heartbeat_pending || nonce != t.heartbeat_pending_nonce) return;
@@ -640,17 +648,18 @@ void Reviver::RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t 
   t.last_error.clear();
   t.heartbeat_last_ack_at = Clock::now();
   t.heartbeat_last_game_time = game_time;
+  t.is_active_reviver = is_active_reviver;
   ++t.heartbeat_ack_count;
 }
 
 void Reviver::OnCellAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const cellappmgr::HealthProbeAck& msg) {
-  RecordHeartbeatAck(cellappmgr_target_, src, msg.nonce, msg.game_time);
+  RecordHeartbeatAck(cellappmgr_target_, src, msg.nonce, msg.game_time, msg.is_active_reviver);
 }
 
 void Reviver::OnBaseAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const baseappmgr::HealthProbeAck& msg) {
-  RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time);
+  RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time, msg.is_active_reviver);
 }
 
 void Reviver::AuditTargetHealth(ManagedTarget& t) {
