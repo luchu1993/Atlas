@@ -152,7 +152,8 @@ Atlas collision asset 是长期稳定边界。它应包含：
   偶数）/ `sample_byte_offset`；`sample_count²` 个 float 高度样本（行主序）放在
   同一 `.bin` 侧车，surface = `origin + scale * (x, sample[y*N+x], y)`，样本值
   `FLT_MAX` 表示 hole（无碰撞）。同样在加载时重建、不 cook（大地形的 cook 优化
-  后置）。Unity Terrain → heightfield 的 exporter 后置
+  后置）。Unity `TerrainCollider` → heightfield 的 exporter 已落地（N = 分辨率
+  − 1 裁偶数；holes 暂未导）
 
 `.bin` 侧车布局（小端）：
 

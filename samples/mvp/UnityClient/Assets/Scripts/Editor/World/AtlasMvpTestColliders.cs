@@ -68,6 +68,40 @@ namespace Atlas.Mvp.Editor
                         layer: 0);
             // A convex MeshCollider crate exercises the convex-hull export path.
             AddConvexCrate(root, "ConvexCrate", new Vector3(10f, 1f, -8f), 2f, layer: 0);
+            // A small Terrain exercises the heightfield export path.
+            AddTerrain(root, "Terrain", new Vector3(40f, 0f, -40f),
+                       new Vector3(50f, 5f, 50f), resolution: 33, layer: 0);
+        }
+
+        const string kTerrainDataPath = "Assets/Scenes/MvpTestTerrain.asset";
+
+        static void AddTerrain(GameObject parent, string name, Vector3 origin, Vector3 size,
+                               int resolution, int layer)
+        {
+            AssetDatabase.DeleteAsset(kTerrainDataPath);  // re-runnable
+            var data = new TerrainData();
+            data.heightmapResolution = resolution;  // 2^k+1; must precede SetHeights
+            data.size = size;
+            var heights = new float[resolution, resolution];
+            for (int z = 0; z < resolution; ++z)
+            {
+                for (int x = 0; x < resolution; ++x)
+                {
+                    float dx = x / (float)(resolution - 1) - 0.5f;
+                    float dz = z / (float)(resolution - 1) - 0.5f;
+                    heights[z, x] = Mathf.Max(0f, 0.6f - Mathf.Sqrt(dx * dx + dz * dz));  // dome
+                }
+            }
+            data.SetHeights(0, 0, heights);
+            AssetDatabase.CreateAsset(data, kTerrainDataPath);
+
+            var go = Terrain.CreateTerrainGameObject(data);  // adds Terrain + TerrainCollider
+            go.name = name;
+            go.transform.SetParent(parent.transform, worldPositionStays: true);
+            go.transform.position = origin;
+            var authoring = go.AddComponent<ServerColliderAuthoring>();
+            authoring.exportToServer = true;
+            authoring.layer = layer;
         }
 
         static void AddConvexCrate(GameObject parent, string name, Vector3 center,

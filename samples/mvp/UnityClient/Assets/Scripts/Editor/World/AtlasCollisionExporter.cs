@@ -25,6 +25,7 @@ namespace Atlas.Mvp.Editor
             public int Capsules;
             public int Meshes;
             public int Convexes;
+            public int HeightFields;
             public int Skipped;
             public List<string> Warnings = new();
             // ACOL side-car: 8-byte header + per-mesh float32 verts / uint32 indices.
@@ -59,7 +60,7 @@ namespace Atlas.Mvp.Editor
                 var result = ExportActiveSceneToFile(output, sourceHash);
                 Debug.Log($"[AtlasCollisionExporter] boxes={result.Boxes} spheres={result.Spheres} " +
                           $"capsules={result.Capsules} meshes={result.Meshes} convexes={result.Convexes} " +
-                          $"skipped={result.Skipped} output={output}");
+                          $"heightfields={result.HeightFields} skipped={result.Skipped} output={output}");
                 foreach (var w in result.Warnings) Debug.LogWarning($"[AtlasCollisionExporter] {w}");
                 EditorApplication.Exit(0);
             }
@@ -138,10 +139,15 @@ namespace Atlas.Mvp.Editor
                         // Counts the right shape internally (mesh vs convex hull).
                         TryEmitMesh(meshCol, auth, objects, ref first, result);
                     }
+                    else if (col is TerrainCollider terrainCol)
+                    {
+                        if (TryEmitHeightField(terrainCol, auth, objects, ref first, result))
+                            result.HeightFields++;
+                    }
                     else
                     {
                         result.Skipped++;
-                        result.Warnings.Add($"{Trace(go)}: {col.GetType().Name} not supported by exporter (box / sphere / capsule / mesh only)");
+                        result.Warnings.Add($"{Trace(go)}: {col.GetType().Name} not supported by exporter (box / sphere / capsule / mesh / terrain only)");
                     }
                 }
             }
@@ -330,6 +336,53 @@ namespace Atlas.Mvp.Editor
                     auth.layer, vertexByteOffset, verts.Length, indexByteOffset, tris.Length);
                 result.Meshes++;
             }
+            return true;
+        }
+
+        // Unity terrains are axis-aligned (no rotation/scale on the heightmap), so
+        // origin = transform position and spacing comes from terrainData.size. The
+        // heightmap resolution is 2^k+1 (odd); Atlas needs an even sample count, so
+        // the last row/column is dropped (a one-sample sliver at the far edge).
+        // Unity terrain holes are per-cell and not exported yet (Atlas supports
+        // FLT_MAX hole samples; the exporter just doesn't emit them here).
+        static bool TryEmitHeightField(TerrainCollider col, ServerColliderAuthoring auth,
+                                       StringBuilder objects, ref bool first, ExportResult result)
+        {
+            var data = col.terrainData;
+            if (data == null)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(col.gameObject)}: TerrainCollider has no terrainData, skip");
+                return false;
+            }
+            int res = data.heightmapResolution;
+            int n = res - 1;  // 2^k+1 → 2^k, always even
+            if (n < 4 || (n % 2) != 0)
+            {
+                result.Skipped++;
+                result.Warnings.Add($"{Trace(col.gameObject)}: heightmap resolution {res} → {n} samples (need >= 4, even), skip");
+                return false;
+            }
+
+            var size = data.size;
+            var heights = data.GetHeights(0, 0, res, res);  // [z, x] normalized [0,1]
+            var bin = result.MeshBin;
+            if (bin.Count == 0) WriteMeshBinHeader(bin);
+            int sampleByteOffset = bin.Count;
+            for (int z = 0; z < n; z++)
+                for (int x = 0; x < n; x++)
+                    AppendFloat(bin, heights[z, x]);  // normalized; Atlas scale.y = size.y
+
+            var origin = col.transform.position;
+            float spacingX = size.x / (res - 1);
+            float spacingZ = size.z / (res - 1);
+            if (!first) objects.Append(",");
+            first = false;
+            objects.Append("\n    ");
+            objects.AppendFormat(CultureInfo.InvariantCulture,
+                "{{\"shape\": \"heightfield\", \"layer\": {0}, \"origin\": [{1:G9}, {2:G9}, {3:G9}], \"scale\": [{4:G9}, {5:G9}, {6:G9}], \"sample_count\": {7}, \"sample_byte_offset\": {8}}}",
+                auth.layer, origin.x, origin.y, origin.z, spacingX, size.y, spacingZ, n,
+                sampleByteOffset);
             return true;
         }
 

@@ -111,7 +111,12 @@
   Jolt `AddHeightField`（`HeightFieldShape`）加载时重建（不 cook；大地形 cook
   后置）。Static 跳过。无 factory 的 cache 路径现拒绝任何非 box/plane shape
   （含 heightfield），不静默丢弃。atlas_tool validate/cook 报告 heightfields
-  计数。runtime 加载 + cook 已单测 + 端到端验证；Unity Terrain exporter 后置。
+  计数。
+- heightfield exporter 补齐 producer：`TerrainCollider` → heightfield asset
+  —— 地形 heightmap 导成 N×N 样本网格（N = 分辨率 − 1 裁偶数，远边丢一行/列；
+  holes 暂未导）写进 `.bin`，origin/scale 取 terrain 位置与 size。MVP
+  `Main.unity` 现含全 7 种 shape（box×3 / sphere / capsule / mesh / convex /
+  heightfield）；live cluster 加载 8-object cache 无错，seed 150/150 NPC。
 - MVP `Main.unity` 含全 5 种 shape（box×3 / sphere / capsule / mesh / convex）；
   live cluster 加载 7-object cache（含真 cooked-mesh blob + convex hull）无错，
   seed 150/150 NPC。

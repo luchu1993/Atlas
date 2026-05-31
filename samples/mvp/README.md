@@ -122,8 +122,12 @@ scans `ServerColliderAuthoring` components with `exportToServer = true`:
   rotation/scale is fine. The server uses Jolt's triangle `MeshShape` or
   `ConvexHullShape` respectively — a convex collider's server shape is the hull,
   matching Unity's own convex behaviour.
-- Rotated boxes, non-uniform-scaled / non-Y capsules, `TerrainCollider`, and
-  negative scale are logged and skipped.
+- `TerrainCollider` → `{shape: heightfield, ...}`: the terrain heightmap is
+  exported as an N×N sample grid in the `.bin` (N = heightmap resolution − 1,
+  trimmed to an even count; the far-edge row/column is dropped). Terrain holes
+  aren't exported yet.
+- Rotated boxes, non-uniform-scaled / non-Y capsules, and negative scale are
+  logged and skipped.
 
 `run_mvp_cluster` cooks `samples/mvp/maps/main.collision.json` to a
 `.collisioncache` at launch and `MvpSpace.OnSpaceInit` loads it through the

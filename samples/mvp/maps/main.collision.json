@@ -9,6 +9,7 @@
     {"shape": "sphere", "center": [8, 1, 4], "radius": 1, "layer": 0},
     {"shape": "capsule", "center": [-6, 1, 6], "radius": 0.5, "half_height": 1, "layer": 0},
     {"shape": "mesh", "layer": 0, "vertex_byte_offset": 8, "vertex_count": 4, "index_byte_offset": 56, "index_count": 6},
-    {"shape": "convex", "layer": 0, "vertex_byte_offset": 80, "vertex_count": 24}
+    {"shape": "convex", "layer": 0, "vertex_byte_offset": 80, "vertex_count": 24},
+    {"shape": "heightfield", "layer": 0, "origin": [40, 0, -40], "scale": [1.5625, 5, 1.5625], "sample_count": 32, "sample_byte_offset": 368}
   ]
 }
