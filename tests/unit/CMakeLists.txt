@@ -242,6 +242,11 @@ atlas_add_test(NAME test_machined_types
   DEPS atlas_network atlas_server
 )
 
+atlas_add_test(NAME test_mesh_gossip
+  SOURCES test_mesh_gossip.cpp
+  DEPS atlas_network atlas_serialization
+)
+
 atlas_add_test(NAME test_reviver_subject
   SOURCES test_reviver_subject.cpp
   DEPS atlas_server atlas_network atlas_foundation
