@@ -221,5 +221,87 @@ TEST(OffloadTraversal, EntityStaysInOwnCell_NoOffload) {
   EXPECT_TRUE(real->IsReal()) << "Entity must still be Real on A";
 }
 
+// Cross-space teleport: the resolved-host reply kicks an is_teleport Offload
+// with geometry_version=0; the destination re-localizes via its own BSP and
+// rehydrates the Real in the target space.
+TEST(OffloadTraversal, CrossSpaceTeleport_RehydratesInTargetSpace) {
+  Host host_a("teleport_traversal_a");
+  Host host_b("teleport_traversal_b");
+  auto addr_a = host_a.StartServer();
+  auto addr_b = host_b.StartServer();
+  ASSERT_NE(addr_a.Port(), 0u);
+  ASSERT_NE(addr_b.Port(), 0u);
+
+  auto ch_a2b = host_a.network.ConnectRudp(addr_b);
+  ASSERT_TRUE(ch_a2b.HasValue());
+  host_a.app.PeerRegistryForTest().InsertForTest(addr_b, *ch_a2b);
+  auto ch_b2a = host_b.network.ConnectRudp(addr_a);
+  ASSERT_TRUE(ch_b2a.HasValue());
+  host_b.app.PeerRegistryForTest().InsertForTest(addr_a, *ch_b2a);
+
+  // Source space on A holds the Real.
+  const SpaceID kSrcSpace = 1;
+  host_a.app.OnCreateSpace({}, nullptr, cellapp::CreateSpace{kSrcSpace});
+  auto* space_a = host_a.app.FindSpace(kSrcSpace);
+  ASSERT_NE(space_a, nullptr);
+  BSPTree tree_a;
+  tree_a.InitSingleCell(CellInfo{/*cell_id=*/1, addr_a, /*bounds=*/{}, 0.f, 0});
+  space_a->SetBspTree(std::move(tree_a));
+  space_a->AddLocalCell(std::make_unique<Cell>(*space_a, /*cell_id=*/1, CellBounds{}));
+
+  cellapp::CreateCellEntity cce;
+  cce.entity_id = 100;
+  cce.type_id = 1;
+  cce.space_id = kSrcSpace;
+  cce.position = {-5.f, 0.f, 0.f};
+  cce.direction = {1.f, 0.f, 0.f};
+  host_a.app.OnCreateCellEntity({}, nullptr, cce);
+  ASSERT_TRUE(host_a.app.FindRealEntity(100) != nullptr);
+
+  // Destination space on B must already be hosted with a local cell so the
+  // teleport guard accepts it and the BSP re-localizes the arrival.
+  const SpaceID kDstSpace = 2;
+  host_b.app.OnCreateSpace({}, nullptr, cellapp::CreateSpace{kDstSpace});
+  auto* space_b = host_b.app.FindSpace(kDstSpace);
+  ASSERT_NE(space_b, nullptr);
+  BSPTree tree_b;
+  tree_b.InitSingleCell(CellInfo{/*cell_id=*/1, addr_b, /*bounds=*/{}, 0.f, 0});
+  space_b->SetBspTree(std::move(tree_b));
+  space_b->AddLocalCell(std::make_unique<Cell>(*space_b, /*cell_id=*/1, CellBounds{}));
+
+  // Stub the mgr round-trip: seed the pending teleport, then feed the reply
+  // naming B as the destination host.
+  const math::Vector3 dst_pos{12.f, 0.f, 9.f};
+  host_a.app.PendingTeleportsForTest()[1] =
+      CellApp::PendingTeleport{kDstSpace, dst_pos, {1.f, 0.f, 0.f}, Clock::now()};
+  cellappmgr::ResolveSpaceHostReply reply;
+  reply.request_id = 1;
+  reply.entity_id = 100;
+  reply.space_id = kDstSpace;
+  reply.found = true;
+  reply.host_addr = addr_b;
+  reply.cell_id = 1;
+  host_a.app.OnResolveSpaceHostReply(addr_b, nullptr, reply);
+
+  ASSERT_TRUE(PumpUntil(host_a, host_b, [&] {
+    auto* on_b = host_b.app.FindEntity(100);
+    return on_b != nullptr && on_b->IsReal();
+  })) << "B never rehydrated the teleported Real";
+  ASSERT_TRUE(
+      PumpUntil(host_a, host_b, [&] { return host_a.app.PendingOffloadsForTest().empty(); }))
+      << "A's pending_offloads_ never drained after teleport";
+
+  auto* on_a = host_a.app.FindEntity(100);
+  ASSERT_NE(on_a, nullptr);
+  EXPECT_TRUE(on_a->IsGhost());
+
+  auto* on_b = host_b.app.FindEntity(100);
+  ASSERT_NE(on_b, nullptr);
+  EXPECT_TRUE(on_b->IsReal());
+  EXPECT_EQ(on_b->GetSpace().Id(), kDstSpace);
+  EXPECT_FLOAT_EQ(on_b->Position().x, dst_pos.x);
+  EXPECT_FLOAT_EQ(on_b->Position().z, dst_pos.z);
+}
+
 }  // namespace
 }  // namespace atlas

@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "cellapp/cell_bounds.h"
+#include "math/vector3.h"
 #include "network/address.h"
 #include "network/message.h"
 #include "network/message_ids.h"
@@ -688,6 +689,111 @@ struct RecoverCellAppState {
   }
 };
 static_assert(NetworkMessage<RecoverCellAppState>);
+
+// CellApp -> CellAppMgr: which host owns (space_id, position)? Drives a
+// cross-space teleport offload once the reply names the destination cellapp.
+struct ResolveSpaceHostRequest {
+  SpaceID space_id{kInvalidSpaceID};
+  math::Vector3 position{0.f, 0.f, 0.f};
+  uint32_t request_id{0};
+  EntityID entity_id{kInvalidEntityID};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kResolveSpaceHostRequest),
+                                   "cellappmgr::ResolveSpaceHostRequest",
+                                   MessageLengthStyle::kFixed,
+                                   sizeof(uint32_t) + 3 * sizeof(float) + sizeof(uint32_t) +
+                                       sizeof(uint32_t),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(space_id);
+    w.Write(position.x);
+    w.Write(position.y);
+    w.Write(position.z);
+    w.Write(request_id);
+    w.Write(entity_id);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ResolveSpaceHostRequest> {
+    auto sid = r.Read<uint32_t>();
+    auto px = r.Read<float>();
+    auto py = r.Read<float>();
+    auto pz = r.Read<float>();
+    auto rid = r.Read<uint32_t>();
+    auto eid = r.Read<uint32_t>();
+    if (!sid || !px || !py || !pz || !rid || !eid)
+      return Error{ErrorCode::kInvalidArgument, "ResolveSpaceHostRequest: truncated"};
+    ResolveSpaceHostRequest msg;
+    msg.space_id = *sid;
+    msg.position = {*px, *py, *pz};
+    msg.request_id = *rid;
+    msg.entity_id = *eid;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ResolveSpaceHostRequest>);
+
+// CellAppMgr -> CellApp: resolved destination for the teleport. found=false
+// when the space is unhosted or the position lands outside every leaf.
+struct ResolveSpaceHostReply {
+  uint32_t request_id{0};
+  EntityID entity_id{kInvalidEntityID};
+  SpaceID space_id{kInvalidSpaceID};
+  bool found{false};
+  Address host_addr;
+  CellID cell_id{0};
+  uint64_t geometry_version{0};
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::CellAppMgr::kResolveSpaceHostReply),
+                                   "cellappmgr::ResolveSpaceHostReply",
+                                   MessageLengthStyle::kFixed,
+                                   sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint32_t) +
+                                       sizeof(uint8_t) + sizeof(uint32_t) + sizeof(uint16_t) +
+                                       sizeof(uint32_t) + sizeof(uint64_t),
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(request_id);
+    w.Write(entity_id);
+    w.Write(space_id);
+    w.Write<uint8_t>(found ? 1u : 0u);
+    w.Write(host_addr.Ip());
+    w.Write(host_addr.Port());
+    w.Write(cell_id);
+    w.Write(geometry_version);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<ResolveSpaceHostReply> {
+    auto rid = r.Read<uint32_t>();
+    auto eid = r.Read<uint32_t>();
+    auto sid = r.Read<uint32_t>();
+    auto f = r.Read<uint8_t>();
+    auto ip = r.Read<uint32_t>();
+    auto port = r.Read<uint16_t>();
+    auto cid = r.Read<uint32_t>();
+    auto gv = r.Read<uint64_t>();
+    if (!rid || !eid || !sid || !f || !ip || !port || !cid || !gv)
+      return Error{ErrorCode::kInvalidArgument, "ResolveSpaceHostReply: truncated"};
+    ResolveSpaceHostReply msg;
+    msg.request_id = *rid;
+    msg.entity_id = *eid;
+    msg.space_id = *sid;
+    msg.found = (*f != 0);
+    msg.host_addr = Address(*ip, *port);
+    msg.cell_id = *cid;
+    msg.geometry_version = *gv;
+    return msg;
+  }
+};
+static_assert(NetworkMessage<ResolveSpaceHostReply>);
 
 }  // namespace atlas::cellappmgr
 

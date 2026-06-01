@@ -149,11 +149,18 @@ class CellApp : public EntityApp, public CellMovementHost {
   // Refuses base-owned entities so base-side bookkeeping can't drift.
   void DestroyLocalEntity(EntityID entity_id);
 
+  // Cross-space teleport: resolves the host via CellAppMgr then offloads there.
+  // Async on the reply; returns false now if not a local Real or no mgr channel.
+  auto RequestTeleport(EntityID entity_id, SpaceID target_space_id, math::Vector3 pos,
+                       math::Vector3 dir) -> bool;
+
   void OnAddCellToSpace(const Address& src, Channel* ch, const cellappmgr::AddCellToSpace& msg);
   void OnRemoveCellFromSpace(const Address& src, Channel* ch,
                              const cellappmgr::RemoveCellFromSpace& msg);
   void OnUpdateGeometry(const Address& src, Channel* ch, const cellappmgr::UpdateGeometry& msg);
   void OnShouldOffload(const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg);
+  void OnResolveSpaceHostReply(const Address& src, Channel* ch,
+                               const cellappmgr::ResolveSpaceHostReply& msg);
   void OnRegisterCellAppAck(const Address& src, Channel* ch,
                             const cellappmgr::RegisterCellAppAck& msg);
 
@@ -246,9 +253,22 @@ class CellApp : public EntityApp, public CellMovementHost {
   // No-op if the pending entry is already resolved.
   void RevertPendingOffload(EntityID entity_id, const char* reason);
 
+  // Script-initiated cross-space teleport awaiting a ResolveSpaceHostReply.
+  struct PendingTeleport {
+    SpaceID target_space_id{kInvalidSpaceID};
+    math::Vector3 position{0.f, 0.f, 0.f};
+    math::Vector3 direction{1.f, 0.f, 0.f};
+    TimePoint sent_at;
+  };
+
   // Test hook; production writes happen in Offload send and resolution paths.
   [[nodiscard]] auto PendingOffloadsForTest() -> std::unordered_map<EntityID, PendingOffload>& {
     return pending_offloads_;
+  }
+
+  // Test hook; production writes happen in RequestTeleport / OnResolveSpaceHostReply.
+  [[nodiscard]] auto PendingTeleportsForTest() -> std::unordered_map<uint32_t, PendingTeleport>& {
+    return pending_teleports_;
   }
 
   // Test hook for handlers that normally seed entity_population_.
@@ -520,6 +540,18 @@ class CellApp : public EntityApp, public CellMovementHost {
 
  private:
   std::unordered_map<EntityID, PendingOffload> pending_offloads_;
+  std::unordered_map<uint32_t, PendingTeleport> pending_teleports_;
+  uint32_t next_teleport_request_id_{1};
+
+  // Sends a pre-built OffloadEntity, captures the revert snapshot, warns haunts,
+  // then flips the local Real to a Ghost. Shared by Offload and teleport.
+  void ProcessOffload(CellEntity& entity, Channel* peer, const Address& target_addr,
+                      cellapp::OffloadEntity&& msg);
+
+  // Resolved-host continuation of RequestTeleport: builds a teleport-flavored
+  // OffloadEntity (geometry_version=0) and routes it through ProcessOffload.
+  void BeginTeleportOffload(CellEntity& entity, const Address& target_addr, SpaceID target_space_id,
+                            math::Vector3 pos, math::Vector3 dir);
 
   PendingRpcRegistry rpc_registry_;
 
@@ -537,8 +569,10 @@ class CellApp : public EntityApp, public CellMovementHost {
 
   // Called each tick from OnEndOfTick.
   void TickOffloadAckTimeouts();
+  void TickTeleportTimeouts();
 
   static constexpr Duration kOffloadAckTimeout = std::chrono::seconds(5);
+  static constexpr Duration kTeleportResolveTimeout = std::chrono::seconds(5);
 
   // Reject AvatarUpdate displacement beyond 50 m/tick (~500 m/s at
   // 10 Hz - well above any realistic player speed).

@@ -39,6 +39,8 @@ class CellAppMgr : public ManagerApp {
   void OnHealthProbe(const Address& src, Channel* ch, const cellappmgr::HealthProbe& msg);
   void OnRecoverCellAppState(const Address& src, Channel* ch,
                              const cellappmgr::RecoverCellAppState& msg);
+  void OnResolveSpaceHostRequest(const Address& src, Channel* ch,
+                                 const cellappmgr::ResolveSpaceHostRequest& msg);
 
   void OnCellAppDeath(const Address& internal_addr, uint8_t reason);
 

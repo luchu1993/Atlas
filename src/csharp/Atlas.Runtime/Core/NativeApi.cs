@@ -186,6 +186,20 @@ internal static unsafe partial class NativeApi
         DestroyCellEntityNative(entityId);
     }
 
+    [LibraryImport(LibName, EntryPoint = "AtlasTeleportEntity")]
+    private static partial byte TeleportEntityNative(uint entityId, uint targetSpaceId,
+        float posX, float posY, float posZ, float dirX, float dirY, float dirZ);
+
+    // Cross-space teleport via offload. true means the resolve request was
+    // dispatched; the move completes async once CellAppMgr names the host.
+    public static bool TeleportEntity(uint entityId, uint targetSpaceId,
+        Vector3 position, Vector3 direction)
+    {
+        ThreadGuard.EnsureMainThread();
+        return TeleportEntityNative(entityId, targetSpaceId, position.X, position.Y, position.Z,
+            direction.X, direction.Y, direction.Z) != 0;
+    }
+
     [LibraryImport(LibName, EntryPoint = "AtlasRequestSpawnCellOnly")]
     private static partial byte RequestSpawnCellOnlyNative(ushort typeId, uint spaceId,
         float posX, float posY, float posZ, float dirX, float dirY, float dirZ,

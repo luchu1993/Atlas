@@ -157,6 +157,11 @@ auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
                              math::Vector3{dx, dy, dz}, on_ground);
   });
   provider->SetDestroyLocalEntityFn([this](uint32_t eid) { DestroyLocalEntity(eid); });
+  provider->SetTeleportEntityFn([this](uint32_t eid, uint32_t target_space_id, float px, float py,
+                                       float pz, float dx, float dy, float dz) {
+    return RequestTeleport(eid, target_space_id, math::Vector3{px, py, pz},
+                           math::Vector3{dx, dy, dz});
+  });
   provider->SetSetSpaceDataFn(
       [this](uint32_t sid, uint16_t kid, const std::byte* v, int32_t len) {
         SetSpaceData(sid, kid,
@@ -341,6 +346,10 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::ShouldOffload& msg) {
         OnShouldOffload(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellappmgr::ResolveSpaceHostReply>(
+      [this](const Address& src, Channel* ch, const cellappmgr::ResolveSpaceHostReply& msg) {
+        OnResolveSpaceHostReply(src, ch, msg);
+      });
   (void)table.RegisterTypedHandler<cellappmgr::RegisterCellAppAck>(
       [this](const Address& src, Channel* ch, const cellappmgr::RegisterCellAppAck& msg) {
         OnRegisterCellAppAck(src, ch, msg);
@@ -496,6 +505,7 @@ void CellApp::OnEndOfTick() {
   TickGhostPump();
   TickOffloadChecker();
   TickOffloadAckTimeouts();
+  TickTeleportTimeouts();
 }
 
 void CellApp::OnTickComplete() {
@@ -2114,7 +2124,16 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
   if (RejectUntrustedCellAppPeer(src, "OffloadEntity")) return;
 
   auto* space = FindSpace(msg.space_id);
-  if (!space) {
+  if (msg.is_teleport) {
+    // Teleport requires a fully-hosted destination; never auto-create a
+    // ghost-only space here (decision: no teleport to an unhosted space).
+    if (space == nullptr || space->LocalCells().empty()) {
+      ATLAS_LOG_WARNING("CellApp: teleport Offload entity_id={} rejected - space {} not hosted",
+                        msg.entity_id, msg.space_id);
+      SendOffloadReject(ch, src, msg.entity_id, cellapp::OffloadRejectReason::kTargetMissing);
+      return;
+    }
+  } else if (!space) {
     if (msg.geometry_version != 0) {
       ATLAS_LOG_WARNING(
           "CellApp: OffloadEntity target missing space={} entity_id={} geometry_version={}",
@@ -3006,103 +3025,221 @@ void CellApp::TickOffloadChecker() {
         continue;
       }
 
-      // Notify the C# side first so any in-flight RPCs that took
-      // LifecycleCancellation cancel before we ship the offload bytes.
+      // Cancel in-flight C# RPCs before BuildOffloadMessage captures the blob,
+      // then ship the entity to its load-balance target.
       if (auto cancel_fn =
               native_provider_ ? native_provider_->entity_lifecycle_cancel_fn() : nullptr;
           cancel_fn != nullptr) {
         cancel_fn(op.entity->Id());
       }
-
-      // Build the message and warn existing haunts Real is moving.
       auto msg = BuildOffloadMessage(*op.entity, op.target_cell_id);
-      if (auto* rd = op.entity->GetRealData()) {
-        cellapp::GhostSetNextReal notify;
-        notify.entity_id = op.entity->Id();
-        notify.next_real_addr = op.target_cellapp_addr;
-        for (const auto& h : rd->Haunts()) {
-          if (h.channel) (void)h.channel->SendMessage(notify);
-        }
-      }
-
-      if (!peer->SendMessage(msg)) {
-        ATLAS_LOG_ERROR("CellApp: OffloadEntity send failed for entity_id={}", op.entity->Id());
-        continue;
-      }
-
-      // Capture the revert snapshot before ConvertRealToGhost.
-      // Rejected or timed-out Offload can restore a live Real.
-      PendingOffload po;
-      po.target_addr = op.target_cellapp_addr;
-      po.sent_at = Clock::now();
-      po.space_id = op.entity->GetSpace().Id();
-      for (const auto& [cid, cell] : space->LocalCells()) {
-        if (cell->HasRealEntity(op.entity)) {
-          po.cell_id = cid;
-          break;
-        }
-      }
-      if (const auto* rd = op.entity->GetRealData()) {
-        po.haunt_addrs.reserve(rd->Haunts().size());
-        for (const auto& h : rd->Haunts()) {
-          if (h.channel != nullptr) po.haunt_addrs.push_back(h.channel->RemoteAddress());
-        }
-      }
-      {
-        BinaryWriter cw;
-        SerializeControllersForMigration(*op.entity, cw);
-        auto buf = cw.Detach();
-        po.controller_blob.assign(buf.begin(), buf.end());
-      }
-      // Read before ConvertRealToGhost strips the witness.
-      // Failed-Offload restore must preserve SetAoIRadius contracts.
-      if (const auto* witness = op.entity->GetWitness()) {
-        po.had_witness = true;
-        po.aoi_radius = witness->AoIRadius();
-        po.aoi_hysteresis = witness->Hysteresis();
-      }
-      po.has_movement_state = msg.has_movement_state;
-      po.movement_state = msg.movement_state;
-      po.movement_position_history = msg.movement_position_history;
-      po.has_movement_command = msg.has_movement_command;
-      po.movement_command = msg.movement_command;
-      // Re-borrow the just-built msg.persistent_blob so RevertPendingOffload
-      // can hand it back to restore_entity_fn after Ghost->Real flip-back.
-      po.persistent_blob = msg.persistent_blob;
-      po.type_id = op.entity->TypeId();
-      pending_offloads_[op.entity->Id()] = std::move(po);
-
-      // Silent C# teardown for migration: OnDestroy stays reserved for real
-      // death (counters survive the offload). Older runtimes fall back.
-      if (native_provider_) {
-        if (auto fn = native_provider_->entity_migrating_out_fn()) {
-          fn(op.entity->Id());
-        } else if (auto df = native_provider_->entity_destroyed_fn()) {
-          df(op.entity->Id());
-        }
-      }
-
-      // Local Real -> Ghost; drops witness + controllers and uses the
-      // peer channel as the new back-channel.
-      movement_system_.EraseEntity(op.entity->Id());
-      entity_load_counters_.erase(op.entity->Id());
-      op.entity->ConvertRealToGhost(peer, op.target_cellapp_addr);
-      op.entity->SetGhostPersistentBlob(std::span<const std::byte>(msg.persistent_blob));
-
-      for (auto& [_cell_id, cell] : space->LocalCells()) {
-        cell->RemoveRealEntity(op.entity);
-      }
-
-      // Re-create C# as Ghost; differs from BigWorld's flag-flip - any state
-      // populated outside OnInit / OnGhostInit is dropped across the boundary.
-      if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
-        const auto* data = msg.other_snapshot.empty()
-                               ? nullptr
-                               : reinterpret_cast<const uint8_t*>(msg.other_snapshot.data());
-        native_provider_->restore_ghost_fn()(op.entity->Id(), op.entity->TypeId(), data,
-                                             static_cast<int32_t>(msg.other_snapshot.size()));
-      }
+      ProcessOffload(*op.entity, peer, op.target_cellapp_addr, std::move(msg));
     }
+  }
+}
+
+void CellApp::ProcessOffload(CellEntity& entity, Channel* peer, const Address& target_addr,
+                             cellapp::OffloadEntity&& msg) {
+  // Warn existing haunts before shipping the bytes so the GhostSetNextReal
+  // subsequence boundary precedes the new Real's GhostSetReal.
+  if (auto* rd = entity.GetRealData()) {
+    cellapp::GhostSetNextReal notify;
+    notify.entity_id = entity.Id();
+    notify.next_real_addr = target_addr;
+    for (const auto& h : rd->Haunts()) {
+      if (h.channel) (void)h.channel->SendMessage(notify);
+    }
+  }
+
+  if (!peer->SendMessage(msg)) {
+    ATLAS_LOG_ERROR("CellApp: OffloadEntity send failed for entity_id={}", entity.Id());
+    return;
+  }
+
+  // Capture the revert snapshot before ConvertRealToGhost; a rejected or
+  // timed-out Offload restores a live Real from this.
+  PendingOffload po;
+  po.target_addr = target_addr;
+  po.sent_at = Clock::now();
+  po.space_id = entity.GetSpace().Id();
+  for (const auto& [cid, cell] : entity.GetSpace().LocalCells()) {
+    if (cell->HasRealEntity(&entity)) {
+      po.cell_id = cid;
+      break;
+    }
+  }
+  if (const auto* rd = entity.GetRealData()) {
+    po.haunt_addrs.reserve(rd->Haunts().size());
+    for (const auto& h : rd->Haunts()) {
+      if (h.channel != nullptr) po.haunt_addrs.push_back(h.channel->RemoteAddress());
+    }
+  }
+  {
+    BinaryWriter cw;
+    SerializeControllersForMigration(entity, cw);
+    auto buf = cw.Detach();
+    po.controller_blob.assign(buf.begin(), buf.end());
+  }
+  // Read before ConvertRealToGhost strips the witness so a failed Offload
+  // restore preserves SetAoIRadius contracts.
+  if (const auto* witness = entity.GetWitness()) {
+    po.had_witness = true;
+    po.aoi_radius = witness->AoIRadius();
+    po.aoi_hysteresis = witness->Hysteresis();
+  }
+  po.has_movement_state = msg.has_movement_state;
+  po.movement_state = msg.movement_state;
+  po.movement_position_history = msg.movement_position_history;
+  po.has_movement_command = msg.has_movement_command;
+  po.movement_command = msg.movement_command;
+  po.persistent_blob = msg.persistent_blob;
+  po.type_id = entity.TypeId();
+  pending_offloads_[entity.Id()] = std::move(po);
+
+  // Silent C# teardown for migration: OnDestroy stays reserved for real
+  // death (counters survive the offload). Older runtimes fall back.
+  if (native_provider_) {
+    if (auto fn = native_provider_->entity_migrating_out_fn()) {
+      fn(entity.Id());
+    } else if (auto df = native_provider_->entity_destroyed_fn()) {
+      df(entity.Id());
+    }
+  }
+
+  // Local Real -> Ghost; drops witness + controllers and uses the peer
+  // channel as the new back-channel.
+  movement_system_.EraseEntity(entity.Id());
+  entity_load_counters_.erase(entity.Id());
+  entity.ConvertRealToGhost(peer, target_addr);
+  entity.SetGhostPersistentBlob(std::span<const std::byte>(msg.persistent_blob));
+
+  for (auto& [_cell_id, cell] : entity.GetSpace().LocalCells()) {
+    cell->RemoveRealEntity(&entity);
+  }
+
+  // Re-create C# as Ghost; state populated outside OnInit / OnGhostInit is
+  // dropped across the boundary, matching the BigWorld ghost contract.
+  if (native_provider_ && native_provider_->restore_ghost_fn() != nullptr) {
+    const auto* data = msg.other_snapshot.empty()
+                           ? nullptr
+                           : reinterpret_cast<const uint8_t*>(msg.other_snapshot.data());
+    native_provider_->restore_ghost_fn()(entity.Id(), entity.TypeId(), data,
+                                         static_cast<int32_t>(msg.other_snapshot.size()));
+  }
+}
+
+auto CellApp::RequestTeleport(EntityID entity_id, SpaceID target_space_id, math::Vector3 pos,
+                              math::Vector3 dir) -> bool {
+  if (target_space_id == kInvalidSpaceID) return false;
+  auto* entity = FindEntity(entity_id);
+  if (entity == nullptr || !entity->IsReal()) {
+    ATLAS_LOG_WARNING("CellApp: RequestTeleport for non-local-Real entity_id={}", entity_id);
+    return false;
+  }
+  if (cellappmgr_channel_ == nullptr) {
+    ATLAS_LOG_WARNING("CellApp: RequestTeleport entity_id={} dropped - no CellAppMgr channel",
+                      entity_id);
+    return false;
+  }
+  const uint32_t request_id = next_teleport_request_id_++;
+  cellappmgr::ResolveSpaceHostRequest req;
+  req.space_id = target_space_id;
+  req.position = pos;
+  req.request_id = request_id;
+  req.entity_id = entity_id;
+  if (auto r = cellappmgr_channel_->SendMessage(req); !r) {
+    ATLAS_LOG_WARNING("CellApp: ResolveSpaceHostRequest send failed entity_id={}: {}", entity_id,
+                      r.Error().Message());
+    return false;
+  }
+  pending_teleports_[request_id] = PendingTeleport{target_space_id, pos, dir, Clock::now()};
+  return true;
+}
+
+void CellApp::OnResolveSpaceHostReply(const Address& /*src*/, Channel* ch,
+                                      const cellappmgr::ResolveSpaceHostReply& msg) {
+  if (!AcceptCellAppMgrMessage(ch, "ResolveSpaceHostReply")) return;
+  auto it = pending_teleports_.find(msg.request_id);
+  if (it == pending_teleports_.end()) {
+    ATLAS_LOG_WARNING("CellApp: ResolveSpaceHostReply request_id={} not pending (timed out?)",
+                      msg.request_id);
+    return;
+  }
+  const PendingTeleport pending = it->second;
+  pending_teleports_.erase(it);
+
+  if (!msg.found) {
+    ATLAS_LOG_WARNING("CellApp: teleport entity_id={} to space={} aborted - target unhosted",
+                      msg.entity_id, msg.space_id);
+    return;
+  }
+  auto* entity = FindEntity(msg.entity_id);
+  if (entity == nullptr || !entity->IsReal()) {
+    ATLAS_LOG_WARNING("CellApp: teleport entity_id={} aborted - no longer a local Real",
+                      msg.entity_id);
+    return;
+  }
+  BeginTeleportOffload(*entity, msg.host_addr, msg.space_id, pending.position, pending.direction);
+}
+
+void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_addr,
+                                   SpaceID target_space_id, math::Vector3 pos, math::Vector3 dir) {
+  // Same-cellapp cross-space teleport would need a local re-home (no peer
+  // channel to self); not yet supported, so abort leaving the Real in place.
+  if (target_addr == ResolveSelfAddr()) {
+    ATLAS_LOG_WARNING(
+        "CellApp: teleport entity_id={} to space={} lands on this cellapp - "
+        "same-cellapp cross-space teleport unsupported; entity stays put",
+        entity.Id(), target_space_id);
+    return;
+  }
+  Channel* peer = FindPeerChannel(target_addr);
+  if (peer == nullptr) {
+    ATLAS_LOG_WARNING("CellApp: teleport entity_id={} target {}:{} has no peer channel",
+                      entity.Id(), target_addr.Ip(), target_addr.Port());
+    return;
+  }
+  // Anchor the pose to the teleport target before BuildOffloadMessage so the
+  // destination re-localizes against its own BSP at the new coordinates.
+  entity.SetPositionAndDirection(pos, dir);
+
+  // Drop OLD-space ghosts via DeleteGhost (not a cross-space GhostSetReal
+  // redirect); they are meaningless once the Real lives in another space.
+  if (auto* rd = entity.GetRealData()) {
+    cellapp::DeleteGhost del;
+    del.entity_id = entity.Id();
+    for (const auto& h : rd->Haunts()) {
+      if (h.channel) (void)h.channel->SendMessage(del);
+    }
+    rd->Haunts().clear();
+  }
+  if (auto cancel_fn =
+          native_provider_ ? native_provider_->entity_lifecycle_cancel_fn() : nullptr;
+      cancel_fn != nullptr) {
+    cancel_fn(entity.Id());
+  }
+  // Source has no BSP for the destination space: geometry_version=0 makes the
+  // receiver skip stale-geometry validation and place via its own tree.
+  auto msg = BuildOffloadMessage(entity, /*target_cell_id=*/0);
+  msg.is_teleport = true;
+  msg.space_id = target_space_id;
+  msg.geometry_version = 0;
+  msg.target_cell_id = 0;
+  msg.position = pos;
+  msg.direction = dir;
+  ProcessOffload(entity, peer, target_addr, std::move(msg));
+}
+
+void CellApp::TickTeleportTimeouts() {
+  if (pending_teleports_.empty()) return;
+  const auto now = Clock::now();
+  std::vector<uint32_t> timed_out;
+  for (const auto& [rid, pt] : pending_teleports_) {
+    if (now - pt.sent_at >= kTeleportResolveTimeout) timed_out.push_back(rid);
+  }
+  for (auto rid : timed_out) {
+    ATLAS_LOG_WARNING("CellApp: teleport resolve request_id={} timed out - entity stays put", rid);
+    pending_teleports_.erase(rid);
   }
 }
 

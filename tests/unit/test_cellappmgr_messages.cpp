@@ -245,6 +245,53 @@ TEST(CellAppMgrMessages, RemoveCellFromSpace_RoundTrip) {
   EXPECT_EQ(rt->cell_id, 9u);
 }
 
+TEST(CellAppMgrMessages, ResolveSpaceHostRequest_RoundTrip) {
+  ResolveSpaceHostRequest msg;
+  msg.space_id = 42;
+  msg.position = {12.5f, 0.f, -7.25f};
+  msg.request_id = 99;
+  msg.entity_id = 0xABCD1234;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->space_id, 42u);
+  EXPECT_FLOAT_EQ(rt->position.x, 12.5f);
+  EXPECT_FLOAT_EQ(rt->position.z, -7.25f);
+  EXPECT_EQ(rt->request_id, 99u);
+  EXPECT_EQ(rt->entity_id, 0xABCD1234u);
+}
+
+TEST(CellAppMgrMessages, ResolveSpaceHostReply_RoundTrip) {
+  ResolveSpaceHostReply msg;
+  msg.request_id = 99;
+  msg.entity_id = 0xABCD1234;
+  msg.space_id = 42;
+  msg.found = true;
+  msg.host_addr = Address(0x7F000001u, 30007);
+  msg.cell_id = 3;
+  msg.geometry_version = 55;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_EQ(rt->request_id, 99u);
+  EXPECT_EQ(rt->entity_id, 0xABCD1234u);
+  EXPECT_EQ(rt->space_id, 42u);
+  EXPECT_TRUE(rt->found);
+  EXPECT_EQ(rt->host_addr.Port(), 30007u);
+  EXPECT_EQ(rt->cell_id, 3u);
+  EXPECT_EQ(rt->geometry_version, 55u);
+}
+
+TEST(CellAppMgrMessages, ResolveSpaceHostReply_NotFoundRoundTrips) {
+  ResolveSpaceHostReply msg;
+  msg.request_id = 7;
+  msg.entity_id = 1;
+  msg.space_id = 9;
+  msg.found = false;
+  auto rt = RoundTrip(msg);
+  ASSERT_TRUE(rt.has_value());
+  EXPECT_FALSE(rt->found);
+  EXPECT_EQ(rt->request_id, 7u);
+}
+
 TEST(CellAppMgrMessages, UpdateGeometry_RoundTrip) {
   UpdateGeometry msg;
   msg.space_id = 77;

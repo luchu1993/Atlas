@@ -248,6 +248,16 @@ void CellAppNativeProvider::DestroyCellEntity(uint32_t entity_id) {
   destroy_local_entity_fn_(entity_id);
 }
 
+auto CellAppNativeProvider::TeleportEntity(uint32_t entity_id, uint32_t target_space_id, float pos_x,
+                                           float pos_y, float pos_z, float dir_x, float dir_y,
+                                           float dir_z) -> bool {
+  if (!teleport_entity_fn_) {
+    ATLAS_LOG_ERROR("CellApp: TeleportEntity: not wired to CellApp (entity_id={})", entity_id);
+    return false;
+  }
+  return teleport_entity_fn_(entity_id, target_space_id, pos_x, pos_y, pos_z, dir_x, dir_y, dir_z);
+}
+
 void CellAppNativeProvider::SetSpaceData(uint32_t space_id, uint16_t key_id,
                                          const std::byte* value, int32_t len) {
   if (!set_space_data_fn_) {

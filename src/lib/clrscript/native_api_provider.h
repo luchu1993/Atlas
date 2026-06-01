@@ -119,6 +119,14 @@ class INativeApiProvider {
                                     float pos_z, float dir_x, float dir_y, float dir_z,
                                     bool on_ground) -> bool = 0;
 
+  // Cross-space teleport via offload; only CellAppNativeProvider implements it.
+  // Returns false off-CellApp or when the entity can't teleport right now.
+  virtual auto TeleportEntity(uint32_t /*entity_id*/, uint32_t /*target_space_id*/, float /*pos_x*/,
+                              float /*pos_y*/, float /*pos_z*/, float /*dir_x*/, float /*dir_y*/,
+                              float /*dir_z*/) -> bool {
+    return false;
+  }
+
   virtual void SetAoIRadius(uint32_t entity_id, float radius, float hysteresis) = 0;
 
   // Owner-authoritative SpaceData write; fans out to peer cellapps and

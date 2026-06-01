@@ -260,6 +260,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   msg.movement_command.elapsed_ms = 120;
   msg.movement_command.curve_id = 4;
   msg.movement_command.server_tick = 80;
+  msg.is_teleport = true;
 
   auto rt = RoundTrip(msg);
   ASSERT_TRUE(rt.has_value());
@@ -290,6 +291,7 @@ TEST(IntercellMessages, OffloadEntity_RoundTrip_Full) {
   EXPECT_EQ(rt->movement_command.command_id, 77u);
   EXPECT_EQ(rt->movement_command.type, movement::MovementCommandType::kKnockback);
   EXPECT_EQ(rt->movement_command.elapsed_ms, 120u);
+  EXPECT_TRUE(rt->is_teleport);
 }
 
 TEST(IntercellMessages, OffloadEntity_RoundTrip_AllBlobsEmpty) {

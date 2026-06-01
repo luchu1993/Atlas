@@ -362,6 +362,11 @@ atlas_add_test(NAME test_offload_revert
   DEPS atlas_cellapp_lib atlas_space atlas_network atlas_serialization
 )
 
+atlas_add_test(NAME test_teleport
+  SOURCES test_teleport.cpp
+  DEPS atlas_cellapp_lib atlas_space atlas_network atlas_serialization
+)
+
 atlas_add_test(NAME test_cell
   SOURCES test_cell.cpp
   DEPS atlas_cellapp_lib atlas_space
@@ -379,6 +384,11 @@ atlas_add_test(NAME test_offload_checker
 
 atlas_add_test(NAME test_cellappmgr
   SOURCES test_cellappmgr.cpp
+  DEPS atlas_cellappmgr_lib atlas_cellappmgr_bsp atlas_network
+)
+
+atlas_add_test(NAME test_teleport_resolve
+  SOURCES test_teleport_resolve.cpp
   DEPS atlas_cellappmgr_lib atlas_cellappmgr_bsp atlas_network
 )
 
@@ -698,6 +708,11 @@ atlas_add_test(NAME test_baseapp_messages
 atlas_add_test(NAME test_baseapp_movement
   SOURCES test_baseapp_movement.cpp
   DEPS atlas_baseapp_lib
+)
+
+atlas_add_test(NAME test_baseapp_inflight_rpc
+  SOURCES test_baseapp_inflight_rpc.cpp
+  DEPS atlas_baseapp_lib atlas_cellapp_lib atlas_entitydef atlas_network atlas_serialization
 )
 
 atlas_add_test(NAME test_id_client

@@ -413,6 +413,9 @@ struct OffloadEntity {
   std::vector<MovementPositionSample> movement_position_history;
   bool has_movement_command{false};
   movement::MovementCommand movement_command;
+  // Script-initiated cross-space teleport. Sender ships geometry_version=0 so
+  // the receiver places via its own BSP instead of validating source geometry.
+  bool is_teleport{false};
 
   static auto Descriptor() -> const MessageDesc& {
     static const MessageDesc kDesc{msg_id::Id(msg_id::CellApp::kOffloadEntity),
@@ -474,6 +477,7 @@ struct OffloadEntity {
     }
     w.Write(static_cast<uint8_t>(has_movement_command ? 1 : 0));
     if (has_movement_command) movement::SerializeMovementCommand(w, movement_command);
+    w.Write(static_cast<uint8_t>(is_teleport ? 1 : 0));
   }
 
   static auto Deserialize(BinaryReader& r) -> Result<OffloadEntity> {
@@ -641,6 +645,12 @@ struct OffloadEntity {
         }
         msg.movement_command = *command;
       }
+    }
+    if (r.Remaining() >= sizeof(uint8_t)) {
+      auto teleport = r.Read<uint8_t>();
+      if (!teleport)
+        return Error{ErrorCode::kInvalidArgument, "OffloadEntity: is_teleport truncated"};
+      msg.is_teleport = (*teleport != 0);
     }
     return msg;
   }

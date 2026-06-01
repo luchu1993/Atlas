@@ -26,6 +26,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
       std::function<uint32_t(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
                              float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)>;
   using DestroyLocalEntityFn = std::function<void(uint32_t entity_id)>;
+  using TeleportEntityFn =
+      std::function<bool(uint32_t entity_id, uint32_t target_space_id, float pos_x, float pos_y,
+                         float pos_z, float dir_x, float dir_y, float dir_z)>;
   using SetSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id,
                                             const std::byte* value, int32_t len)>;
   using RemoveSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id)>;
@@ -51,6 +54,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SetDestroyLocalEntityFn(DestroyLocalEntityFn fn) {
     destroy_local_entity_fn_ = std::move(fn);
   }
+  void SetTeleportEntityFn(TeleportEntityFn fn) { teleport_entity_fn_ = std::move(fn); }
   void SetSetSpaceDataFn(SetSpaceDataFn fn) { set_space_data_fn_ = std::move(fn); }
   void SetRemoveSpaceDataFn(RemoveSpaceDataFn fn) { remove_space_data_fn_ = std::move(fn); }
   void SetLoadCollisionAssetFn(LoadCollisionAssetFn fn) {
@@ -86,6 +90,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
                              float pos_z, float dir_x, float dir_y, float dir_z, bool on_ground)
       -> uint32_t override;
   void DestroyCellEntity(uint32_t entity_id) override;
+  auto TeleportEntity(uint32_t entity_id, uint32_t target_space_id, float pos_x, float pos_y,
+                      float pos_z, float dir_x, float dir_y, float dir_z) -> bool override;
 
   void SetSpaceData(uint32_t space_id, uint16_t key_id, const std::byte* value,
                     int32_t len) override;
@@ -154,6 +160,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   EntityLookupFn lookup_;
   CreateLocalEntityFn create_local_entity_fn_;
   DestroyLocalEntityFn destroy_local_entity_fn_;
+  TeleportEntityFn teleport_entity_fn_;
   SetSpaceDataFn set_space_data_fn_;
   RemoveSpaceDataFn remove_space_data_fn_;
   LoadCollisionAssetFn load_collision_asset_fn_;

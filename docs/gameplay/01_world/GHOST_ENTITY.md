@@ -404,6 +404,28 @@ Entity E 在 cell #1 处于战斗中
 
 CellAppMgr 广播映射表更新有延迟（< 1 秒），其间消息可能 misrouted——cell 必须支持 forward。
 
+### 7.4 跨 Space 传送（offload 式）
+
+脚本通过 `CellServerEntity.Teleport(targetSpaceId, pos, dir)` 把实体送到另一个 space。
+对齐 BigWorld：跨 space 传送复用 offload 通路，而非销毁＋重建。流程：
+
+```
+1. cell 向 CellAppMgr 发 ResolveSpaceHostRequest(targetSpace, pos)
+   ← CellAppMgr 用目标 space 的 BSP 解析出 host cellapp + leaf cell
+2. cell 把实体 offload 到该 host：OffloadEntity 带 is_teleport=true、
+   geometry_version=0（源端没有目标 space 的 BSP，让接收端用自己的 BSP 重定位）
+3. 接收端复用 OnOffloadEntity：promote/新建 Real，发 CurrentCell 给 base
+```
+
+因为复用 offload 通路，base 侧路由切换走 `OnCurrentCell` 的有序 drain，
+传送窗口内客户端发来的 cell 消息缓冲后按序转发到新 space——与 cell 间 offload
+同一套保证。传送前先 DeleteGhost 清掉旧 space 的 haunts（它们在新 space 无意义）。
+
+**前置条件 / 限制**：
+- 目标 space 必须已被某 cellapp host；解析不到 host 时传送中止，实体留在原地。
+- 暂不支持目标落在**同一 cellapp**（需本地 re-home，无指向自身的 peer 通道）；
+  此时传送中止并记录日志，实体保持 Real。
+
 ---
 
 ## 8. AoI 与 Ghost 的关系

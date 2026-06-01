@@ -132,6 +132,7 @@ class BaseApp : public EntityApp {
  private:
   friend class BaseAppRollbackTest;
   friend class BaseAppMovementInputTest;
+  friend class BaseAppInflightRpcTest;
 
   struct LoadSnapshot;
   struct LoadTracker;

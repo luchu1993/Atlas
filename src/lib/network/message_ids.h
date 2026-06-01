@@ -145,6 +145,9 @@ enum class CellAppMgr : uint16_t {
   kHealthProbe = 7011,
   kHealthProbeAck = 7012,
   kRecoverCellAppState = 7013,
+  // CellApp asks the mgr which host owns (space, position) for a teleport.
+  kResolveSpaceHostRequest = 7014,
+  kResolveSpaceHostReply = 7015,
 };
 
 enum class DBApp : uint16_t {
@@ -282,6 +285,8 @@ ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRemoveCellFromSpace, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbe, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kHealthProbeAck, 7000, 7099);
 ATLAS_ASSERT_ID_RANGE(CellAppMgr::kRecoverCellAppState, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kResolveSpaceHostRequest, 7000, 7099);
+ATLAS_ASSERT_ID_RANGE(CellAppMgr::kResolveSpaceHostReply, 7000, 7099);
 
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntity, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kWriteEntityAck, 4000, 4999);

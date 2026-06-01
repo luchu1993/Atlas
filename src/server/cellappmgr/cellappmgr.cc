@@ -283,6 +283,10 @@ auto CellAppMgr::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const cellappmgr::RecoverCellAppState& msg) {
         OnRecoverCellAppState(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<cellappmgr::ResolveSpaceHostRequest>(
+      [this](const Address& src, Channel* ch, const cellappmgr::ResolveSpaceHostRequest& msg) {
+        OnResolveSpaceHostRequest(src, ch, msg);
+      });
 
   // CellApp deaths rehome orphaned leaves and tell BaseApps to restore Reals.
   GetMachinedClient().Subscribe(
@@ -689,6 +693,33 @@ void CellAppMgr::SendCreateSpaceReply(const cellappmgr::CreateSpaceRequest& msg,
     }
   }
   (void)src;
+}
+
+void CellAppMgr::OnResolveSpaceHostRequest(const Address& src, Channel* ch,
+                                           const cellappmgr::ResolveSpaceHostRequest& msg) {
+  cellappmgr::ResolveSpaceHostReply reply;
+  reply.request_id = msg.request_id;
+  reply.entity_id = msg.entity_id;
+  reply.space_id = msg.space_id;
+  if (auto it = spaces_.find(msg.space_id); it != spaces_.end()) {
+    const auto& partition = it->second;
+    if (const auto* leaf = partition.bsp.FindCell(msg.position.x, msg.position.z)) {
+      reply.found = true;
+      reply.host_addr = leaf->cellapp_addr;
+      reply.cell_id = leaf->cell_id;
+      reply.geometry_version = partition.geometry_version;
+    }
+  }
+  if (!reply.found) {
+    ATLAS_LOG_INFO("CellAppMgr: ResolveSpaceHost miss space_id={} pos=({:.1f},{:.1f}) entity={}",
+                   msg.space_id, msg.position.x, msg.position.z, msg.entity_id);
+  }
+  if (ch != nullptr) {
+    if (auto r = ch->SendMessage(reply); !r) {
+      ATLAS_LOG_WARNING("CellAppMgr: ResolveSpaceHostReply send failed (space_id={}, src {}): {}",
+                        msg.space_id, src.ToString(), r.Error().Message());
+    }
+  }
 }
 
 void CellAppMgr::OnCreateSpaceRequest(const Address& src, Channel* ch,

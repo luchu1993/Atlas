@@ -98,6 +98,14 @@ public abstract class CellServerEntity : ServerEntity
         return NativeApi.ClearMovementCommand(EntityId, commandId);
     }
 
+    // Cross-space teleport to a hosted space; the move completes async once
+    // CellAppMgr names the host. False if Ghost/destroyed or dispatch failed.
+    public bool Teleport(uint targetSpaceId, Vector3 position, Vector3 direction)
+    {
+        if (IsGhost || IsDestroyed) return false;
+        return NativeApi.TeleportEntity(EntityId, targetSpaceId, position, direction);
+    }
+
     public static bool RegisterMovementCurve(ushort curveId, System.ReadOnlySpan<float> samples)
     {
         return NativeApi.SetMovementCurve(curveId, samples);

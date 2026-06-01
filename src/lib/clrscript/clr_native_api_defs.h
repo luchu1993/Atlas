@@ -97,6 +97,13 @@
     X(void, DestroyCellEntity, \
         (uint32_t entity_id), \
         atlas::GetNativeApiProvider().DestroyCellEntity(entity_id)) \
+    X(uint8_t, TeleportEntity, \
+        (uint32_t entity_id, uint32_t target_space_id, float pos_x, float pos_y, float pos_z, \
+         float dir_x, float dir_y, float dir_z), \
+        return atlas::GetNativeApiProvider().TeleportEntity( \
+            entity_id, target_space_id, pos_x, pos_y, pos_z, dir_x, dir_y, dir_z) \
+            ? 1 \
+            : 0) \
     X(uint8_t, RequestSpawnCellOnly, \
         (uint16_t type_id, uint32_t space_id, float pos_x, float pos_y, float pos_z, \
          float dir_x, float dir_y, float dir_z, uint8_t on_ground), \
