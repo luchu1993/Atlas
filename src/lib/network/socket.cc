@@ -410,6 +410,15 @@ auto Socket::SetReuseAddr(bool enable) -> Result<void> {
   return Result<void>{};
 }
 
+auto Socket::SetBroadcast(bool enable) -> Result<void> {
+  int optval = enable ? 1 : 0;
+  if (::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), SOL_SOCKET, SO_BROADCAST,
+                   reinterpret_cast<const char*>(&optval), sizeof(optval)) != 0) {
+    return Error{ErrorCode::kInternalError, "setsockopt(SO_BROADCAST) failed"};
+  }
+  return Result<void>{};
+}
+
 auto Socket::SetNoDelay(bool enable) -> Result<void> {
   int optval = enable ? 1 : 0;
   if (::setsockopt(static_cast<decltype(::socket(0, 0, 0))>(fd_), IPPROTO_TCP, TCP_NODELAY,

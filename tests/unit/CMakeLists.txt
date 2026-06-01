@@ -187,6 +187,11 @@ atlas_add_test(NAME test_socket
   DEPS atlas_network
 )
 
+atlas_add_test(NAME test_broadcast
+  SOURCES test_broadcast.cpp
+  DEPS atlas_network
+)
+
 atlas_add_test(NAME test_event_dispatcher
   SOURCES test_event_dispatcher.cpp
   DEPS atlas_network

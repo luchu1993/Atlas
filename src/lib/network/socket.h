@@ -43,6 +43,7 @@ class Socket {
 
   [[nodiscard]] auto SetNonBlocking(bool enable) -> Result<void>;
   [[nodiscard]] auto SetReuseAddr(bool enable) -> Result<void>;
+  [[nodiscard]] auto SetBroadcast(bool enable) -> Result<void>;
   [[nodiscard]] auto SetNoDelay(bool enable) -> Result<void>;
   [[nodiscard]] auto SetSendBufferSize(int size) -> Result<void>;
   [[nodiscard]] auto SetRecvBufferSize(int size) -> Result<void>;

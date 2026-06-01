@@ -136,6 +136,13 @@ TEST(Socket, UdpSendRecvLoopback) {
   EXPECT_EQ(static_cast<uint8_t>(buf[2]), 3);
 }
 
+TEST(Socket, SetBroadcastTogglesOption) {
+  auto sock = Socket::CreateUdp();
+  ASSERT_TRUE(sock.HasValue());
+  EXPECT_TRUE(sock->SetBroadcast(true).HasValue());
+  EXPECT_TRUE(sock->SetBroadcast(false).HasValue());
+}
+
 TEST(Socket, BindConflictReturnsAddressInUse) {
   auto sock1 = Socket::CreateTcp();
   ASSERT_TRUE(sock1.HasValue());
