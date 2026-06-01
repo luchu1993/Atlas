@@ -1,5 +1,17 @@
 #!/usr/bin/env python3
-"""Validate CellAppMgr HA restart on a live Atlas cluster."""
+"""Validate CellAppMgr HA restart on a live Atlas cluster.
+
+Drives an abnormal shutdown via machined, waits for the active Reviver to
+relaunch CellAppMgr, and checks the worker-rebuild recovery: surviving
+CellApps re-register and report their BSP so the fresh mgr rebuilds the same
+space topology (cellappmgr/lb/spaces fingerprint continuity) while the
+recovery window holds topology mutation frozen, then the window closes
+(cellappmgr/ha/recovery_window_active -> false) and load reports resume.
+
+Reviver arbitration is soft: the mgr designates the highest-priority live
+Reviver as the active monitor (reviver/leader/active, reviver/.../priority);
+failover kills the active monitor and a standby takes over.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +22,6 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -63,11 +74,8 @@ class HaCycleResult(NamedTuple):
     generation_after: int
     launch_count_before: int
     launch_count_after: int
-    restore_status: str
     pre_topology_status: str
-    pre_snapshot_status: str
     restored_topology_status: str
-    post_restore_snapshot_status: str
     output_status: str
     stability_status: str
     manager_restart_ms: int
@@ -171,7 +179,7 @@ def parse_args() -> argparse.Namespace:
         "--max-takeover-ms",
         type=int,
         default=0,
-        help="maximum allowed shutdown-to-fresh-snapshot takeover time; 0 disables the check",
+        help="maximum allowed shutdown-to-worker-rebuild takeover time; 0 disables the check",
     )
     parser.add_argument(
         "--max-reviver-failover-ms",
@@ -183,7 +191,7 @@ def parse_args() -> argparse.Namespace:
         "--max-load-report-age-ms",
         type=int,
         default=0,
-        help="maximum allowed CellApp load report age after reattach; 0 disables",
+        help="maximum allowed CellApp load report age after worker-rebuild; 0 disables",
     )
     parser.add_argument(
         "--min-post-failover-standbys",
@@ -193,14 +201,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--shutdown-reason", type=int, default=1, help="machined shutdown reason")
     parser.add_argument(
-        "--allow-empty-snapshot",
+        "--allow-empty-cluster",
         action="store_true",
-        help="do not require cellappmgr/ha/snapshot_path or snapshot_saves > 0",
-    )
-    parser.add_argument(
-        "--allow-missing-backup-snapshot",
-        action="store_true",
-        help="do not require cellappmgr/ha/snapshot_backup_status state=ready",
+        help="do not require surviving CellApps to re-register after worker-rebuild",
     )
     parser.add_argument(
         "--allow-empty-output-log",
@@ -229,10 +232,10 @@ def parse_args() -> argparse.Namespace:
         help="number of active Reviver leader failover cycles to inject",
     )
     parser.add_argument(
-        "--check-leader-lock-mode",
-        default="",
-        help="if non-empty, require reviver/leader/mode to equal this value (e.g. 'machined')"
-             " and (for 'machined') leader_active=true at check time",
+        "--check-active-reviver",
+        action="store_true",
+        help="require the selected Reviver to be the mgr-designated active monitor"
+             " (reviver/leader/active == true)",
     )
     parser.add_argument(
         "--summary-json",
@@ -739,8 +742,7 @@ def summary_parameters(args: argparse.Namespace) -> dict[str, object]:
         "max_load_report_age_ms": args.max_load_report_age_ms,
         "min_post_failover_standbys": args.min_post_failover_standbys,
         "shutdown_reason": args.shutdown_reason,
-        "allow_empty_snapshot": args.allow_empty_snapshot,
-        "allow_missing_backup_snapshot": args.allow_missing_backup_snapshot,
+        "allow_empty_cluster": args.allow_empty_cluster,
         "allow_empty_output_log": args.allow_empty_output_log,
         "allow_topology_change": args.allow_topology_change,
         "no_inject": args.no_inject,
@@ -863,7 +865,7 @@ def build_summary_payload(
         summary["failure_stages"][0] if summary["failure_stages"] else ""
     )
     payload: dict[str, object] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "mode": mode,
         "summary": summary,
         "cycles": [ha_cycle_payload(result) for result in results],
@@ -919,11 +921,8 @@ def failed_ha_cycle_result(
         generation_after=generation_before,
         launch_count_before=launch_count_before,
         launch_count_after=launch_count_before,
-        restore_status=status,
         pre_topology_status=status,
-        pre_snapshot_status=status,
         restored_topology_status=status,
-        post_restore_snapshot_status=status,
         output_status=status,
         stability_status=status,
         manager_restart_ms=elapsed,
@@ -952,185 +951,6 @@ def write_summary_json(
         return payload
     except OSError as ex:
         raise RuntimeError(f"failed to write summary JSON {path}: {ex}") from ex
-
-
-def expected_reattach_state(restored_cellapps: int, pending: int, stuck: int) -> str:
-    if stuck:
-        return "stuck"
-    if pending:
-        return "pending"
-    if restored_cellapps == 0:
-        return "idle"
-    return "complete"
-
-
-def reattach_health_detail(
-    restored_cellapps: int,
-    pending: int,
-    completed_count: int,
-    stuck: int,
-    completed: str,
-    reattach_state: str,
-    status: str,
-    min_cellapps: int,
-    require_restored: bool,
-) -> tuple[bool, str, bool]:
-    status_fields = summary_fields(status)
-    expected_state = expected_reattach_state(restored_cellapps, pending, stuck)
-    counts_ok = pending == 0 and completed_count == restored_cellapps
-    if require_restored:
-        counts_ok = counts_ok and restored_cellapps >= min_cellapps
-    completed_ok = completed == "true"
-    state_ok = reattach_state == expected_state
-    status_ok = (
-        summary_has(status_fields, "restored", str(restored_cellapps))
-        and summary_has(status_fields, "pending", str(pending))
-        and summary_has(status_fields, "stuck", str(stuck))
-        and summary_has(status_fields, "completed_count", str(completed_count))
-        and summary_has(status_fields, "completed", "1" if completed_ok else "0")
-        and summary_has(status_fields, "state", expected_state)
-    )
-    ok = counts_ok and completed_ok and stuck == 0 and state_ok and status_ok
-    detail = (
-        f"restored_cellapps={restored_cellapps} pending={pending} "
-        f"completed_count={completed_count} completed={completed} stuck={stuck} "
-        f"reattach_counts_ok={counts_ok} "
-        f"reattach_state={reattach_state}/{expected_state} "
-        f"reattach_state_ok={state_ok} "
-        f"reattach_status_ok={status_ok}; status={status}"
-    )
-    return ok, detail, stuck != 0
-
-
-def build_reattach_health_payload(
-    restored_cellapps: int,
-    pending: int,
-    completed_count: int,
-    stuck: int,
-    completed: str,
-    reattach_state: str,
-    status: str,
-    min_cellapps: int,
-    require_restored: bool,
-) -> dict[str, object]:
-    ok, detail, has_stuck = reattach_health_detail(
-        restored_cellapps,
-        pending,
-        completed_count,
-        stuck,
-        completed,
-        reattach_state,
-        status,
-        min_cellapps,
-        require_restored,
-    )
-    return {
-        "healthy": ok,
-        "detail": detail,
-        "restored_cellapps": restored_cellapps,
-        "pending": pending,
-        "completed_count": completed_count,
-        "stuck": stuck,
-        "has_stuck": has_stuck,
-        "completed": completed == "true",
-        "state": reattach_state,
-        "expected_state": expected_reattach_state(restored_cellapps, pending, stuck),
-        "min_cellapps": min_cellapps,
-        "require_restored": require_restored,
-        "status": status,
-    }
-
-
-def restore_gate_health_detail(
-    pending: int,
-    active: str,
-    pending_geometry: int,
-    blocked_pending_geometry: int,
-    status: str,
-) -> tuple[bool, str]:
-    status_fields = summary_fields(status)
-    expected_active = pending != 0 or blocked_pending_geometry != 0
-    expected_state = "closed" if expected_active else "open"
-    active_ok = active == ("true" if expected_active else "false")
-    status_ok = (
-        summary_has(status_fields, "state", expected_state)
-        and summary_has(status_fields, "active", "1" if expected_active else "0")
-        and summary_has(status_fields, "lb_frozen", "1" if pending != 0 else "0")
-        and summary_has(status_fields, "pending_reattach", str(pending))
-        and summary_has(status_fields, "pending_geometry", str(pending_geometry))
-        and summary_has(status_fields, "blocked_pending_geometry", str(blocked_pending_geometry))
-    )
-    open_ok = pending == 0 and blocked_pending_geometry == 0 and active == "false"
-    ok = open_ok and status_ok
-    detail = (
-        f"restore_gate_active={active}/{expected_active} "
-        f"restore_gate_active_ok={active_ok} "
-        f"restore_gate_pending_geometry={pending_geometry} "
-        f"restore_gate_blocked_pending_geometry={blocked_pending_geometry} "
-        f"restore_gate_status_ok={status_ok}; restore_gate_status={status}"
-    )
-    return ok, detail
-
-
-def build_restore_gate_health_payload(
-    pending: int,
-    active: str,
-    pending_geometry: int,
-    blocked_pending_geometry: int,
-    status: str,
-) -> dict[str, object]:
-    ok, detail = restore_gate_health_detail(
-        pending, active, pending_geometry, blocked_pending_geometry, status
-    )
-    expected_active = pending != 0 or blocked_pending_geometry != 0
-    return {
-        "healthy": ok,
-        "detail": detail,
-        "active": active == "true",
-        "expected_active": expected_active,
-        "pending_reattach": pending,
-        "pending_geometry": pending_geometry,
-        "blocked_pending_geometry": blocked_pending_geometry,
-        "status": status,
-    }
-
-
-def reattach_registry_health_detail(status: str) -> tuple[bool, str]:
-    fields = summary_fields(status)
-    state = fields.get("state", "")
-    query_pending = fields.get("query_pending", "")
-    last_blocked = fields.get("last_blocked", "")
-    error_detail = fields.get("error_detail", "")
-    ok = (
-        state in {"idle", "healthy", "reconciled"}
-        and query_pending == "0"
-        and last_blocked == "0"
-        and error_detail == "none"
-    )
-    detail = (
-        f"reattach_registry_state={state} "
-        f"reattach_registry_query_pending={query_pending} "
-        f"reattach_registry_last_blocked={last_blocked} "
-        f"reattach_registry_ok={ok}; reattach_registry_status={status}"
-    )
-    return ok, detail
-
-
-def build_reattach_registry_health_payload(status: str) -> dict[str, object]:
-    ok, detail = reattach_registry_health_detail(status)
-    fields = summary_fields(status)
-    return {
-        "healthy": ok,
-        "detail": detail,
-        "state": fields.get("state", ""),
-        "query_pending": fields.get("query_pending", ""),
-        "last_missing": fields.get("last_missing", ""),
-        "last_blocked": fields.get("last_blocked", ""),
-        "last_reconciled": fields.get("last_reconciled", ""),
-        "reconciled_total": fields.get("reconciled_total", ""),
-        "error_detail": fields.get("error_detail", ""),
-        "status": status,
-    }
 
 
 def build_load_report_health_report(
@@ -1217,52 +1037,6 @@ def load_report_health_detail(
         stale_count, cellapps_summary, min_cellapps, max_age_ms
     )
     return report.ok, report.status
-
-
-def reviver_heartbeat_snapshot_health_detail(
-    acks: int,
-    min_acks: int,
-    baseline_failures: int,
-    snapshot_dirty: str,
-    snapshot_stale: str,
-    snapshot_failures: int,
-    snapshot_status: str,
-) -> tuple[bool, str, bool]:
-    fields = summary_fields(snapshot_status)
-    expected_state = "ready"
-    if snapshot_failures:
-        expected_state = "failed"
-    elif snapshot_dirty == "true":
-        expected_state = "dirty"
-    elif snapshot_stale == "true":
-        expected_state = "stale"
-    elif acks < min_acks:
-        expected_state = "unknown"
-    dirty_digit = "1" if snapshot_dirty == "true" else "0"
-    stale_digit = "1" if snapshot_stale == "true" else "0"
-    status_ok = (
-        summary_has(fields, "state", expected_state)
-        and summary_has(fields, "failures", str(snapshot_failures))
-        and summary_has(fields, "dirty", dirty_digit)
-        and summary_has(fields, "stale", stale_digit)
-    )
-    new_failures = snapshot_failures > baseline_failures
-    ok = (
-        acks >= min_acks
-        and snapshot_dirty == "false"
-        and snapshot_stale == "false"
-        and not new_failures
-        and status_ok
-    )
-    detail = (
-        f"heartbeat_acks={acks}/{min_acks} "
-        f"heartbeat_snapshot_dirty={snapshot_dirty} "
-        f"heartbeat_snapshot_save_stale={snapshot_stale} "
-        f"heartbeat_snapshot_failures={baseline_failures}->{snapshot_failures} "
-        f"heartbeat_snapshot_status_ok={status_ok}; "
-        f"heartbeat_snapshot_status={snapshot_status}"
-    )
-    return ok, detail, new_failures
 
 
 def reviver_failover_health_detail(
@@ -1355,67 +1129,54 @@ def build_standby_reviver_health_record(
 def read_recovery_health(
     args: argparse.Namespace, exe: Path, target: str, require_restored: bool
 ) -> RecoveryHealthReport:
-    restored_cellapps = int_watcher(exe, args.machined, target, "cellappmgr/ha/restored_cellapps")
-    pending = int_watcher(exe, args.machined, target, "cellappmgr/ha/reattach_pending")
-    completed_count = int_watcher(
-        exe, args.machined, target, "cellappmgr/ha/reattach_completed_count"
+    window_active = (
+        watcher_value(exe, args.machined, target, "cellappmgr/ha/recovery_window_active")
+        == "true"
     )
-    stuck = int_watcher(exe, args.machined, target, "cellappmgr/ha/reattach_stuck")
-    completed = watcher_value(exe, args.machined, target, "cellappmgr/ha/reattach_completed")
-    reattach_state = watcher_value(exe, args.machined, target, "cellappmgr/ha/reattach_state")
-    status = watcher_value(exe, args.machined, target, "cellappmgr/ha/reattach_status")
-    reattach_payload = build_reattach_health_payload(
-        restored_cellapps,
-        pending,
-        completed_count,
-        stuck,
-        completed,
-        reattach_state,
-        status,
-        args.min_cellapps,
-        require_restored,
+    window_status = watcher_value(
+        exe, args.machined, target, "cellappmgr/ha/recovery_window_status"
     )
-    gate_active = watcher_value(exe, args.machined, target, "cellappmgr/ha/restore_gate_active")
+    window_fields = summary_fields(window_status)
     pending_geometry = int_watcher(
         exe, args.machined, target, "cellappmgr/lb/pending_geometry_broadcasts"
     )
-    blocked_geometry = int_watcher(
-        exe, args.machined, target, "cellappmgr/ha/restore_gate_blocked_pending_geometry"
-    )
-    gate_status = watcher_value(exe, args.machined, target, "cellappmgr/ha/restore_gate_status")
-    gate_payload = build_restore_gate_health_payload(
-        pending, gate_active, pending_geometry, blocked_geometry, gate_status
-    )
-    registry_status = watcher_value(
-        exe, args.machined, target, "cellappmgr/ha/reattach_registry_status"
-    )
-    registry_payload = build_reattach_registry_health_payload(registry_status)
+    window_closed = not window_active and pending_geometry == 0
+    window_payload: dict[str, object] = {
+        "healthy": window_closed,
+        "active": window_active,
+        "remaining_ms": int(window_fields.get("remaining_ms", "0") or 0),
+        "pending_geometry": pending_geometry,
+        "detail": (
+            f"recovery_window_active={window_active} "
+            f"pending_geometry={pending_geometry}; recovery_window_status={window_status}"
+        ),
+    }
+    cellapp_count = int_watcher(exe, args.machined, target, "cellappmgr/cellapp_count")
+    space_count = int_watcher(exe, args.machined, target, "cellappmgr/space_count")
+    rebuild_ok = (not require_restored) or cellapp_count >= args.min_cellapps
+    rebuild_payload: dict[str, object] = {
+        "healthy": rebuild_ok,
+        "cellapp_count": cellapp_count,
+        "space_count": space_count,
+        "min_cellapps": args.min_cellapps,
+        "require_restored": require_restored,
+        "detail": (
+            f"cellapp_count={cellapp_count} space_count={space_count} "
+            f"min_cellapps={args.min_cellapps} require_restored={require_restored}"
+        ),
+    }
     load_report = read_load_report_health(args, exe, target, enforce_max_age=False)
-    ok = (
-        bool(reattach_payload["healthy"])
-        and bool(gate_payload["healthy"])
-        and bool(registry_payload["healthy"])
-        and load_report.ok
-    )
+    ok = window_closed and rebuild_ok and load_report.ok
     status_text = (
-        f"{reattach_payload['detail']}; {gate_payload['detail']}; "
-        f"{registry_payload['detail']}; {load_report.status}"
+        f"{window_payload['detail']}; {rebuild_payload['detail']}; {load_report.status}"
     )
     payload: dict[str, object] = {
         "healthy": ok,
-        "reattach": reattach_payload,
-        "restore_gate": gate_payload,
-        "reattach_registry": registry_payload,
+        "recovery_window": window_payload,
+        "worker_rebuild": rebuild_payload,
         "load_report": load_report.payload,
     }
-    return RecoveryHealthReport(ok, status_text, bool(reattach_payload["has_stuck"]), payload)
-
-
-def read_reattach_health(
-    args: argparse.Namespace, exe: Path, target: str, require_restored: bool
-) -> tuple[bool, str, bool]:
-    report = read_recovery_health(args, exe, target, require_restored)
-    return report.ok, report.status, report.stuck
+    return RecoveryHealthReport(ok, status_text, False, payload)
 
 
 def read_load_report_health(
@@ -1452,8 +1213,6 @@ def wait_for_recovery_health(
 ) -> RecoveryHealthReport:
     def check():
         report = read_recovery_health(args, exe, target, require_restored)
-        if report.stuck:
-            raise RuntimeError(f"reattach stuck; {report.status}")
         return report.ok, report
 
     return wait_until(args.timeout_sec, args.poll_sec, check)
@@ -1472,36 +1231,6 @@ def wait_or_capture_recovery_health(
         if not capture_unhealthy:
             raise
         return read_recovery_health(args, exe, target, require_restored)
-
-
-def wait_for_reattach_health(
-    args: argparse.Namespace, exe: Path, target: str, require_restored: bool
-) -> str:
-    return wait_for_recovery_health(args, exe, target, require_restored).status
-
-
-def snapshot_failure_counters(
-    args: argparse.Namespace, exe: Path, target: str
-) -> tuple[int, int, int]:
-    save_failures = int_watcher(
-        exe, args.machined, target, "cellappmgr/ha/snapshot_save_failures"
-    )
-    restore_failures = int_watcher(
-        exe, args.machined, target, "cellappmgr/ha/snapshot_restore_failures"
-    )
-    failures = int_watcher(exe, args.machined, target, "cellappmgr/ha/snapshot_failures")
-    return save_failures, restore_failures, failures
-
-
-def snapshot_failure_counter_mismatch(
-    save_failures: int, restore_failures: int, failures: int
-) -> str:
-    if failures == save_failures + restore_failures:
-        return ""
-    return (
-        f"snapshot_failures={failures} does not equal "
-        f"save_failures={save_failures} + restore_failures={restore_failures}"
-    )
 
 
 def wait_until(timeout_sec: float, poll_sec: float, fn):
@@ -1567,28 +1296,6 @@ def read_topology_fingerprint(
     return topology_fingerprint(summary)
 
 
-def read_snapshot_topology_fingerprint(
-    args: argparse.Namespace, exe: Path, target: str
-) -> tuple[str, int]:
-    summary = watcher_value(
-        exe, args.machined, target, "cellappmgr/ha/snapshot_last_save_topology"
-    )
-    if not summary:
-        return "", 0
-    return topology_fingerprint(summary)
-
-
-def read_restore_topology_fingerprint(
-    args: argparse.Namespace, exe: Path, target: str
-) -> tuple[str, int]:
-    summary = watcher_value(
-        exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_topology"
-    )
-    if not summary:
-        return "", 0
-    return topology_fingerprint(summary)
-
-
 def wait_for_topology_quiescence(
     args: argparse.Namespace, exe: Path, target: str, expected: str | None = None
 ) -> tuple[str | None, str]:
@@ -1607,45 +1314,6 @@ def wait_for_topology_quiescence(
         return True, (fingerprint, topology_brief(fingerprint))
 
     return wait_until(args.timeout_sec, args.poll_sec, check)
-
-
-@dataclass
-class LeaderLockHealth:
-    mode: str
-    leader_active: bool
-    holder_id: str
-    acquire_count: int
-    lease_renew_count: int
-    lease_failure_count: int
-    healthy: bool
-    detail: str
-
-
-def read_cellappmgr_leader_lock_health(exe: Path, machined: str, target: str,
-                                       required_mode: str) -> LeaderLockHealth:
-    """Mirror of verify_baseappmgr_ha.read_leader_lock_health for the
-    reviver/leader/* (cellappmgr) surface. The cellappmgr Reviver still
-    uses the legacy reviver/leader/* watcher names for backward compat
-    with the verify_cellappmgr_ha summary schema."""
-    mode = watcher_value(exe, machined, target, "reviver/leader/mode")
-    leader_active = watcher_value(exe, machined, target, "reviver/leader/active") == "true"
-    holder = watcher_value(exe, machined, target, "reviver/leader/holder_id")
-    acquire_count = int_watcher(exe, machined, target, "reviver/leader/acquire_count")
-    renew_count = int_watcher(exe, machined, target, "reviver/leader/lease_renew_count")
-    failure_count = int_watcher(exe, machined, target, "reviver/leader/lease_failure_count")
-    healthy = True
-    parts = [
-        f"mode={mode}", f"leader_active={leader_active}", f"acquire_count={acquire_count}",
-        f"lease_renew_count={renew_count}", f"lease_failure_count={failure_count}"
-    ]
-    if required_mode and mode != required_mode:
-        healthy = False
-        parts.append(f"required_mode={required_mode} mismatch")
-    if required_mode == "machined" and not leader_active:
-        healthy = False
-        parts.append("leader not active under machined mode")
-    return LeaderLockHealth(mode, leader_active, holder, acquire_count, renew_count,
-                            failure_count, healthy, " ".join(parts))
 
 
 def select_leader_reviver(
@@ -1949,235 +1617,6 @@ def wait_for_reviver_leader_failover(
         )
 
 
-def wait_for_snapshot_save(
-    args: argparse.Namespace,
-    exe: Path,
-    target: str,
-    require_after_restore: bool = False,
-    expected_topology: str | None = None,
-) -> str:
-    snapshot_path = watcher_value(exe, args.machined, target, "cellappmgr/ha/snapshot_path")
-    if not snapshot_path and not args.allow_empty_snapshot:
-        raise RuntimeError("CellAppMgr snapshot_path is empty")
-    baseline_save_failures, baseline_restore_failures, baseline_failures = (
-        snapshot_failure_counters(args, exe, target)
-    )
-    mismatch = snapshot_failure_counter_mismatch(
-        baseline_save_failures, baseline_restore_failures, baseline_failures
-    )
-    if mismatch:
-        raise RuntimeError(mismatch)
-    if args.allow_empty_snapshot:
-        return "snapshot_save=skipped"
-
-    def check():
-        saves = int_watcher(exe, args.machined, target, "cellappmgr/ha/snapshot_saves")
-        save_failures, restore_failures, failures = snapshot_failure_counters(args, exe, target)
-        mismatch = snapshot_failure_counter_mismatch(save_failures, restore_failures, failures)
-        save_path = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_save_path"
-        )
-        save_error = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_save_error"
-        )
-        file_present = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_file_present"
-        )
-        file_bytes = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_file_bytes"
-        )
-        file_status = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_file_status"
-        )
-        file_topology_status = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_file_topology_status"
-        )
-        backup_path = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_backup_path"
-        )
-        backup_present = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_backup_present"
-        )
-        backup_bytes = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_backup_bytes"
-        )
-        backup_status = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_backup_status"
-        )
-        backup_topology_status = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_backup_topology_status"
-        )
-        attempt_age_ms = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_save_attempt_age_ms"
-        )
-        save_age_ms = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_save_age_ms"
-        )
-        save_stale = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_save_stale"
-        )
-        save_dirty = watcher_value(exe, args.machined, target, "cellappmgr/ha/snapshot_dirty")
-        save_dirty_age_ms = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_dirty_age_ms"
-        )
-        save_dirty_reason = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_dirty_reason"
-        )
-        save_status = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_status"
-        )
-        file_status_fields = summary_fields(file_status)
-        file_topology_fields = summary_fields(file_topology_status)
-        backup_status_fields = summary_fields(backup_status)
-        backup_topology_fields = summary_fields(backup_topology_status)
-        save_status_fields = summary_fields(save_status)
-        snapshot_topology = None
-        snapshot_topology_pending = 0
-        snapshot_topology_pending_watcher = 0
-        snapshot_topology_ok = args.allow_topology_change or expected_topology is None
-        snapshot_status_ok = True
-        if expected_topology is not None and not args.allow_topology_change:
-            snapshot_topology, snapshot_topology_pending = read_snapshot_topology_fingerprint(
-                args, exe, target
-            )
-            snapshot_topology_pending_watcher = int_watcher(
-                exe,
-                args.machined,
-                target,
-                "cellappmgr/ha/snapshot_last_save_topology_pending_ack",
-            )
-            snapshot_topology_ok = (
-                snapshot_topology == expected_topology
-                and snapshot_topology_pending == 0
-                and snapshot_topology_pending_watcher == 0
-            )
-            snapshot_status_ok = (
-                summary_has(save_status_fields, "topology_present", "1")
-                and summary_has(save_status_fields, "topology_pending_ack", "0")
-            )
-        snapshot_error_ok = (
-            summary_has(save_status_fields, "error_present", "0")
-            and summary_has(save_status_fields, "error_detail", "none")
-        )
-        restore_age_ms = -1
-        if require_after_restore:
-            restore_age_ms = int_watcher(
-                exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_age_ms"
-            )
-        save_after_restore = (
-            not require_after_restore
-            or (restore_age_ms >= 0 and save_age_ms <= restore_age_ms)
-        )
-        file_ready = (
-            file_present == "true"
-            and file_bytes > 0
-            and summary_has(file_status_fields, "state", "ready")
-            and summary_has(file_status_fields, "valid", "1")
-            and summary_has(file_status_fields, "error_present", "0")
-            and summary_has(file_status_fields, "error_detail", "none")
-        )
-        file_topology_ready = (
-            summary_has(file_topology_fields, "state", "ready")
-            and summary_has(file_topology_fields, "restorable", "1")
-            and summary_has(file_topology_fields, "topology_pending_ack", "0")
-            and summary_has(file_topology_fields, "error_present", "0")
-            and summary_has(file_topology_fields, "error_detail", "none")
-            and (
-                args.allow_topology_change
-                or expected_topology is None
-                or summary_has(file_topology_fields, "matches_expected", "1")
-            )
-        )
-        expected_backup_path = f"{snapshot_path}.bak"
-        backup_ready = (
-            backup_present == "true"
-            and backup_bytes > 0
-            and summary_has(backup_status_fields, "state", "ready")
-            and summary_has(backup_status_fields, "valid", "1")
-            and summary_has(backup_status_fields, "error_present", "0")
-            and summary_has(backup_status_fields, "error_detail", "none")
-        )
-        backup_topology_ready = (
-            summary_has(backup_topology_fields, "state", "ready")
-            and summary_has(backup_topology_fields, "restorable", "1")
-            and summary_has(backup_topology_fields, "topology_pending_ack", "0")
-            and summary_has(backup_topology_fields, "error_present", "0")
-            and summary_has(backup_topology_fields, "error_detail", "none")
-        )
-        backup_ok = (
-            backup_path == expected_backup_path
-            and (
-                (backup_ready and backup_topology_ready)
-                or (
-                    args.allow_missing_backup_snapshot
-                    and backup_present == "false"
-                    and backup_bytes == 0
-                    and summary_has(backup_status_fields, "state", "missing")
-                    and summary_has(backup_status_fields, "error_detail", "none")
-                    and summary_has(backup_topology_fields, "state", "missing")
-                    and summary_has(backup_topology_fields, "error_detail", "none")
-                )
-            )
-        )
-        ok = (
-            not mismatch
-            and saves > 0
-            and save_failures == baseline_save_failures
-            and save_path == snapshot_path
-            and not save_error
-            and file_ready
-            and file_topology_ready
-            and backup_ok
-            and attempt_age_ms >= 0
-            and save_age_ms >= 0
-            and save_stale == "false"
-            and save_dirty == "false"
-            and save_dirty_age_ms == -1
-            and not save_dirty_reason
-            and summary_has(save_status_fields, "state", "healthy")
-            and summary_has(save_status_fields, "dirty", "0")
-            and summary_has(save_status_fields, "dirty_reason", "none")
-            and save_after_restore
-            and snapshot_topology_ok
-            and snapshot_status_ok
-            and snapshot_error_ok
-        )
-        mismatch_prefix = f"{mismatch}; " if mismatch else ""
-        topology_status = "skipped"
-        if expected_topology is not None and not args.allow_topology_change:
-            topology_status = "matched" if snapshot_topology_ok else "stale"
-            if snapshot_topology_pending:
-                topology_status = f"pending_ack={snapshot_topology_pending}"
-            elif snapshot_topology_pending_watcher:
-                topology_status = f"pending_ack={snapshot_topology_pending_watcher}"
-        return ok, (
-            f"{mismatch_prefix}snapshot_saves={saves} "
-            f"save_failures={baseline_save_failures}->{save_failures} "
-            f"restore_failures={restore_failures} snapshot_failures={failures} "
-            f"attempt_age_ms={attempt_age_ms} save_age_ms={save_age_ms} "
-            f"restore_age_ms={restore_age_ms} save_after_restore={save_after_restore} "
-            f"save_stale={save_stale} save_path={save_path} "
-            f"save_dirty={save_dirty} dirty_age_ms={save_dirty_age_ms} "
-            f"dirty_reason={save_dirty_reason} "
-            f"file_present={file_present} file_bytes={file_bytes} "
-            f"file_ready={file_ready} file_status={file_status} "
-            f"file_topology_ready={file_topology_ready} "
-            f"file_topology_status={file_topology_status} "
-            f"backup_path={backup_path} backup_present={backup_present} "
-            f"backup_bytes={backup_bytes} backup_ready={backup_ready} "
-            f"backup_status={backup_status} "
-            f"backup_topology_ready={backup_topology_ready} "
-            f"backup_topology_status={backup_topology_status} "
-            f"snapshot_topology={topology_status} "
-            f"snapshot_status_topology={snapshot_status_ok} "
-            f"snapshot_status_error={snapshot_error_ok} "
-            f"expected_save_path={snapshot_path} save_error={save_error} "
-            f"snapshot_status={save_status}"
-        )
-
-    return wait_until(args.timeout_sec, args.poll_sec, check)
-
-
 def resolve_watcher_path(value: str) -> Path:
     path = Path(value)
     if not path.is_absolute():
@@ -2216,10 +1655,6 @@ def wait_for_revived_output_log(args: argparse.Namespace, path: Path | None, new
 def wait_for_reviver_health(
     args: argparse.Namespace, exe: Path, target: str, min_heartbeat_acks: int = 1
 ) -> None:
-    baseline_snapshot_failures = int_watcher(
-        exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_failures"
-    )
-
     def check():
         status = watcher_value(exe, args.machined, target, "reviver/cellappmgr/status")
         launch_pending = watcher_value(
@@ -2243,18 +1678,6 @@ def wait_for_reviver_health(
         acks = int_watcher(exe, args.machined, target, "reviver/cellappmgr/heartbeat_acks")
         ack_age_ms = int_watcher(
             exe, args.machined, target, "reviver/cellappmgr/heartbeat_last_ack_age_ms"
-        )
-        snapshot_dirty = watcher_value(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_dirty"
-        )
-        snapshot_stale = watcher_value(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_save_stale"
-        )
-        snapshot_failures = int_watcher(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_failures"
-        )
-        snapshot_status = watcher_value(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_status"
         )
         heartbeat_failures = int_watcher(
             exe, args.machined, target, "reviver/cellappmgr/heartbeat_failures"
@@ -2282,23 +1705,10 @@ def wait_for_reviver_health(
             raise RuntimeError(f"reviver heartbeat_timeouts={timeouts}")
         if acks >= min_heartbeat_acks and ack_age_ms < 0:
             return False, "waiting for Reviver heartbeat last ack age"
-        snapshot_ok, snapshot_detail, snapshot_hard_failure = (
-            reviver_heartbeat_snapshot_health_detail(
-                acks,
-                min_heartbeat_acks,
-                baseline_snapshot_failures,
-                snapshot_dirty,
-                snapshot_stale,
-                snapshot_failures,
-                snapshot_status,
-            )
-        )
-        if snapshot_hard_failure:
-            raise RuntimeError(f"reviver heartbeat snapshot unhealthy; {snapshot_detail}")
-        return status == "active" and checks > 0 and snapshot_ok, (
+        return status == "active" and checks > 0, (
             f"waiting for reviver health_checks and heartbeat_acks; "
             f"status={status} health_checks={checks} heartbeat_sent={sent} "
-            f"heartbeat_last_ack_age_ms={ack_age_ms} {snapshot_detail}"
+            f"heartbeat_last_ack_age_ms={ack_age_ms}"
         )
 
     wait_until(args.timeout_sec, args.poll_sec, check)
@@ -2350,160 +1760,6 @@ def wait_for_restarted_mgr(
     return wait_until(args.timeout_sec, args.poll_sec, check)
 
 
-def wait_for_restore_convergence(
-    args: argparse.Namespace, exe: Path, target: str, expected_topology: str | None = None
-) -> str:
-    snapshot_path = watcher_value(exe, args.machined, target, "cellappmgr/ha/snapshot_path")
-    expected_backup_path = f"{snapshot_path}.bak"
-
-    def check():
-        restores = int_watcher(exe, args.machined, target, "cellappmgr/ha/snapshot_restores")
-        fallbacks = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_fallback_restores"
-        )
-        save_failures, restore_failures, failures = snapshot_failure_counters(args, exe, target)
-        restore_source = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_source"
-        )
-        restore_path = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_path"
-        )
-        restore_error = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_error"
-        )
-        restore_primary_error = watcher_value(
-            exe,
-            args.machined,
-            target,
-            "cellappmgr/ha/snapshot_last_restore_primary_error",
-        )
-        restore_status = watcher_value(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_restore_status"
-        )
-        restore_status_fields = summary_fields(restore_status)
-        restore_topology = None
-        restore_topology_pending = 0
-        restore_topology_pending_watcher = 0
-        restore_topology_ok = (
-            args.allow_empty_snapshot or args.allow_topology_change or expected_topology is None
-        )
-        restore_status_topology_ok = True
-        if (
-            expected_topology is not None
-            and not args.allow_empty_snapshot
-            and not args.allow_topology_change
-        ):
-            restore_topology, restore_topology_pending = read_restore_topology_fingerprint(
-                args, exe, target
-            )
-            restore_topology_pending_watcher = int_watcher(
-                exe,
-                args.machined,
-                target,
-                "cellappmgr/ha/snapshot_last_restore_topology_pending_ack",
-            )
-            restore_topology_ok = (
-                restore_topology == expected_topology
-                and restore_topology_pending == 0
-                and restore_topology_pending_watcher == 0
-            )
-            restore_status_topology_ok = (
-                summary_has(restore_status_fields, "topology_present", "1")
-                and summary_has(restore_status_fields, "topology_pending_ack", "0")
-            )
-        restore_attempt_age_ms = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_attempt_age_ms"
-        )
-        restore_age_ms = int_watcher(
-            exe, args.machined, target, "cellappmgr/ha/snapshot_last_restore_age_ms"
-        )
-        reattach_ok, reattach_status, has_stuck = read_reattach_health(
-            args, exe, target, require_restored=not args.allow_empty_snapshot
-        )
-        mismatch = snapshot_failure_counter_mismatch(save_failures, restore_failures, failures)
-        if mismatch:
-            return False, f"{mismatch}; {reattach_status}"
-        if failures:
-            return False, (
-                f"snapshot_failures={failures} save_failures={save_failures} "
-                f"restore_failures={restore_failures} restore_source={restore_source} "
-                f"restore_error={restore_error}; {reattach_status}"
-            )
-        if restore_error:
-            return False, (
-                f"snapshot restore_error={restore_error} restore_source={restore_source}; "
-                f"{reattach_status}"
-            )
-        restore_source_ok = args.allow_empty_snapshot or restore_source in {"primary", "backup"}
-        if restore_source == "backup" and fallbacks == 0:
-            restore_source_ok = False
-        restore_path_ok = args.allow_empty_snapshot or (
-            (restore_source == "primary" and restore_path == snapshot_path)
-            or (restore_source == "backup" and restore_path == expected_backup_path)
-        )
-        restore_status_ok = args.allow_empty_snapshot or (
-            (
-                restore_source == "primary"
-                and summary_has(restore_status_fields, "state", "primary")
-                and summary_has(restore_status_fields, "primary_error_present", "0")
-                and summary_has(restore_status_fields, "primary_error_detail", "none")
-                and summary_has(restore_status_fields, "error_detail", "none")
-                and not restore_primary_error
-            )
-            or (
-                restore_source == "backup"
-                and summary_has(restore_status_fields, "state", "fallback")
-                and summary_has(restore_status_fields, "error_detail", "none")
-            )
-        )
-        if restore_source == "backup":
-            restore_status_ok = (
-                restore_status_ok
-                and summary_has(restore_status_fields, "primary_error_present", "1")
-                and restore_status_fields.get("primary_error_detail", "none") != "none"
-                and bool(restore_primary_error)
-            )
-        restore_age_ok = args.allow_empty_snapshot or (
-            restore_attempt_age_ms >= 0 and restore_age_ms >= 0
-        )
-        if has_stuck:
-            raise RuntimeError(f"reattach stuck; {reattach_status}")
-        ok = (
-            (args.allow_empty_snapshot or restores > 0)
-            and restore_source_ok
-            and restore_path_ok
-            and restore_status_ok
-            and restore_age_ok
-            and reattach_ok
-            and restore_topology_ok
-            and restore_status_topology_ok
-        )
-        topology_status = "skipped"
-        if (
-            expected_topology is not None
-            and not args.allow_empty_snapshot
-            and not args.allow_topology_change
-        ):
-            topology_status = "matched" if restore_topology_ok else "stale"
-            if restore_topology_pending:
-                topology_status = f"pending_ack={restore_topology_pending}"
-            elif restore_topology_pending_watcher:
-                topology_status = f"pending_ack={restore_topology_pending_watcher}"
-        return ok, (
-            f"restores={restores} fallback_restores={fallbacks} "
-            f"restore_source={restore_source} restore_path={restore_path} "
-            f"restore_primary_error={restore_primary_error} "
-            f"restore_attempt_age_ms={restore_attempt_age_ms} "
-            f"restore_age_ms={restore_age_ms} "
-            f"restore_status={restore_status} "
-            f"restore_topology={topology_status} "
-            f"restore_status_topology={restore_status_topology_ok} "
-            f"{reattach_status}"
-        )
-
-    return wait_until(args.timeout_sec, args.poll_sec, check)
-
-
 def reviver_stability_snapshot(args: argparse.Namespace, exe: Path, target: str) -> dict[str, int]:
     paths = [
         "reviver/cellappmgr/active_generation",
@@ -2536,9 +1792,6 @@ def wait_for_reviver_stability(
 
     baseline = reviver_stability_snapshot(args, exe, target)
     start_acks = int_watcher(exe, args.machined, target, "reviver/cellappmgr/heartbeat_acks")
-    baseline_snapshot_failures = int_watcher(
-        exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_failures"
-    )
     deadline = time.monotonic() + args.stability_sec
     last_acks = start_acks
     while True:
@@ -2554,31 +1807,6 @@ def wait_for_reviver_stability(
         last_acks = int_watcher(exe, args.machined, target, "reviver/cellappmgr/heartbeat_acks")
         ack_age_ms = int_watcher(
             exe, args.machined, target, "reviver/cellappmgr/heartbeat_last_ack_age_ms"
-        )
-        snapshot_dirty = watcher_value(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_dirty"
-        )
-        snapshot_stale = watcher_value(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_save_stale"
-        )
-        snapshot_status = watcher_value(
-            exe, args.machined, target, "reviver/cellappmgr/heartbeat_snapshot_status"
-        )
-        snapshot_ok, snapshot_detail, snapshot_hard_failure = (
-            reviver_heartbeat_snapshot_health_detail(
-                last_acks,
-                start_acks,
-                baseline_snapshot_failures,
-                snapshot_dirty,
-                snapshot_stale,
-                int_watcher(
-                    exe,
-                    args.machined,
-                    target,
-                    "reviver/cellappmgr/heartbeat_snapshot_failures",
-                ),
-                snapshot_status,
-            )
         )
         if status != "active":
             raise RuntimeError(f"reviver status changed during stability window: {status}")
@@ -2607,12 +1835,6 @@ def wait_for_reviver_stability(
                 raise RuntimeError(
                     f"{path} changed during stability window: {value}->{current[path]}"
                 )
-        if not snapshot_ok:
-            reason = "unhealthy" if snapshot_hard_failure else "not ready"
-            raise RuntimeError(
-                f"reviver heartbeat snapshot {reason} during stability window; "
-                f"{snapshot_detail}"
-            )
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
@@ -2706,22 +1928,20 @@ def main() -> int:
 
         failure_stage = "reviver_health"
         wait_for_reviver_health(args, exe, reviver_target)
-        leader_lock_summary: dict | None = None
-        if args.check_leader_lock_mode:
-            failure_stage = "leader_lock_mode"
-            llh = read_cellappmgr_leader_lock_health(
-                exe, args.machined, reviver_target, args.check_leader_lock_mode)
-            if not llh.healthy:
-                raise RuntimeError(f"leader lock mode check failed: {llh.detail}")
-            leader_lock_summary = {
-                "mode": llh.mode,
-                "leader_active": llh.leader_active,
-                "holder_id": llh.holder_id,
-                "acquire_count": llh.acquire_count,
-                "lease_renew_count": llh.lease_renew_count,
-                "lease_failure_count": llh.lease_failure_count,
-                "healthy": llh.healthy,
-            }
+        arbitration_summary: dict | None = None
+        if args.check_active_reviver:
+            failure_stage = "check_active_reviver"
+            active = watcher_value(
+                exe, args.machined, reviver_target, "reviver/leader/active"
+            ) == "true"
+            priority = int_watcher(
+                exe, args.machined, reviver_target, "reviver/cellappmgr/priority"
+            )
+            if not active:
+                raise RuntimeError(
+                    f"selected Reviver is not the active monitor; priority={priority}"
+                )
+            arbitration_summary = {"active_reviver": active, "priority": priority}
         failure_stage = "reviver_baseline"
         active_generation = int_watcher(
             exe, args.machined, reviver_target, "reviver/cellappmgr/active_generation"
@@ -2731,15 +1951,9 @@ def main() -> int:
         )
         failure_stage = "reviver_output_path"
         output_path = require_reviver_output_path(args, exe, reviver_target)
-        failure_stage = "initial_snapshot_save"
-        wait_for_snapshot_save(args, exe, target)
         failure_stage = "initial_topology"
-        current_topology, current_topology_status = wait_for_topology_quiescence(
+        _, current_topology_status = wait_for_topology_quiescence(
             args, exe, target
-        )
-        failure_stage = "initial_snapshot_topology"
-        current_snapshot_status = wait_for_snapshot_save(
-            args, exe, target, expected_topology=current_topology
         )
         print(
             f"[verify_cellappmgr_ha] target={manager['name']} pid={manager['pid']} "
@@ -2849,7 +2063,7 @@ def main() -> int:
             recovery_report = wait_or_capture_recovery_health(
                 args, exe, target, require_restored=False, capture_unhealthy=True
             )
-            reattach_status = recovery_report.status
+            recovery_status_text = recovery_report.status
             load_report = recovery_report.payload["load_report"]
             output_status = (
                 "output_log=skipped" if output_path is None else f"output_log={output_path}"
@@ -2858,9 +2072,7 @@ def main() -> int:
                 "pid": active_pid,
                 "generation": active_generation,
                 "launch_count": launch_count,
-                "snapshot_status": current_snapshot_status,
                 "topology_status": current_topology_status,
-                "reattach_status": reattach_status,
                 "recovery_status": recovery_report.status,
                 "recovery": recovery_report.payload,
                 "load_report_status": load_report["detail"],
@@ -2877,6 +2089,8 @@ def main() -> int:
                     standby_health=standby_health_records,
                 ),
             }
+            if arbitration_summary is not None:
+                current["arbitration"] = arbitration_summary
             if reviver_failover_results:
                 current["reviver_failovers"] = [
                     result._asdict() for result in reviver_failover_results
@@ -2902,8 +2116,8 @@ def main() -> int:
             validate_summary_gates(payload)
             print(
                 f"[verify_cellappmgr_ha] PASS current HA watchers are reachable; "
-                f"{leadership.status}; {current_snapshot_status}; {current_topology_status}; "
-                f"{reattach_status}; {output_status}; {stability_status}"
+                f"{leadership.status}; {current_topology_status}; "
+                f"{recovery_status_text}; {output_status}; {stability_status}"
             )
             return 0
 
@@ -2912,15 +2126,9 @@ def main() -> int:
             cycle_started_at = time.monotonic()
             old_pid = manager["pid"]
             try:
-                stage = "pre_snapshot"
-                wait_for_snapshot_save(args, exe, target)
                 stage = "pre_topology"
                 cycle_topology, pre_topology_status = wait_for_topology_quiescence(
                     args, exe, target
-                )
-                stage = "pre_snapshot_topology"
-                pre_snapshot_status = wait_for_snapshot_save(
-                    args, exe, target, expected_topology=cycle_topology
                 )
                 takeover_start = time.monotonic()
                 stage = "shutdown"
@@ -2936,22 +2144,15 @@ def main() -> int:
                 reviver_retarget_ms = elapsed_ms(takeover_start)
                 stage = "reviver_health"
                 wait_for_reviver_health(args, exe, reviver_target, heartbeat_acks + 1)
-                stage = "restore_convergence"
-                status = wait_for_restore_convergence(
-                    args, exe, restored_target, expected_topology=cycle_topology
-                )
+                stage = "recovery_convergence"
+                status = wait_for_recovery_health(
+                    args, exe, restored_target,
+                    require_restored=not args.allow_empty_cluster,
+                ).status
                 restore_converged_ms = elapsed_ms(takeover_start)
                 stage = "restored_topology"
                 _, restored_topology_status = wait_for_topology_quiescence(
                     args, exe, restored_target, cycle_topology
-                )
-                stage = "post_restore_snapshot"
-                post_restore_snapshot_status = wait_for_snapshot_save(
-                    args,
-                    exe,
-                    restored_target,
-                    require_after_restore=True,
-                    expected_topology=cycle_topology,
                 )
                 takeover_elapsed_ms = elapsed_ms(takeover_start)
                 stage = "output_log"
@@ -2981,7 +2182,7 @@ def main() -> int:
                     args,
                     exe,
                     restored_target,
-                    require_restored=not args.allow_empty_snapshot,
+                    require_restored=not args.allow_empty_cluster,
                     capture_unhealthy=True,
                 )
                 stability_status = f"{stability_status}; {recovery_report.status}"
@@ -2994,11 +2195,8 @@ def main() -> int:
                         generation_after=new_generation,
                         launch_count_before=launch_count,
                         launch_count_after=new_launch_count,
-                        restore_status=status,
                         pre_topology_status=pre_topology_status,
-                        pre_snapshot_status=pre_snapshot_status,
                         restored_topology_status=restored_topology_status,
-                        post_restore_snapshot_status=post_restore_snapshot_status,
                         output_status=output_status,
                         stability_status=stability_status,
                         manager_restart_ms=manager_restart_ms,
@@ -3057,8 +2255,8 @@ def main() -> int:
                 f"restore_converged_ms={restore_converged_ms} "
                 f"takeover_elapsed_ms={takeover_elapsed_ms} "
                 f"launches={new_launch_count} generation={active_generation}->{new_generation}; "
-                f"{status}; {pre_topology_status}; {pre_snapshot_status}; "
-                f"{restored_topology_status}; {post_restore_snapshot_status}; "
+                f"{status}; {pre_topology_status}; "
+                f"{restored_topology_status}; "
                 f"{output_status}; {stability_status}"
             )
             manager = restarted
@@ -3076,7 +2274,7 @@ def main() -> int:
             args,
             exe,
             target,
-            require_restored=not args.allow_empty_snapshot,
+            require_restored=not args.allow_empty_cluster,
             capture_unhealthy=True,
         )
         load_report = recovery_report.payload["load_report"]
@@ -3101,8 +2299,8 @@ def main() -> int:
                 standby_health=standby_health_records,
             ),
         }
-        if leader_lock_summary is not None:
-            current["leader_lock"] = leader_lock_summary
+        if arbitration_summary is not None:
+            current["arbitration"] = arbitration_summary
         if reviver_failover_results:
             current["reviver_failovers"] = [
                 result._asdict() for result in reviver_failover_results

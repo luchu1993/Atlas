@@ -47,44 +47,6 @@ class SummaryFieldsTest(unittest.TestCase):
         self.assertTrue(verify_cellappmgr_ha.summary_has(fields, "completed_count", "2"))
 
 
-class LeaderLockHealthTest(unittest.TestCase):
-    def _make(self, *, mode="machined", leader_active="true", required_mode="machined",
-              acquire="1", renew="10", failures="0", holder="reviver@cellappmgr"):
-        watchers = {
-            "reviver/leader/mode": mode,
-            "reviver/leader/active": leader_active,
-            "reviver/leader/holder_id": holder,
-            "reviver/leader/acquire_count": acquire,
-            "reviver/leader/lease_renew_count": renew,
-            "reviver/leader/lease_failure_count": failures,
-        }
-        with mock.patch.object(verify_cellappmgr_ha, "watcher_value",
-                               side_effect=lambda exe, machined, target, path: watchers[path]):
-            with mock.patch.object(verify_cellappmgr_ha, "int_watcher",
-                                   side_effect=lambda exe, machined, target, path: int(
-                                       watchers[path])):
-                return verify_cellappmgr_ha.read_cellappmgr_leader_lock_health(
-                    Path("atlas_tool"), "machined", "reviver:reviver", required_mode)
-
-    def test_machined_mode_with_active_leader_is_healthy(self) -> None:
-        h = self._make()
-        self.assertTrue(h.healthy, h.detail)
-        self.assertEqual(h.mode, "machined")
-        self.assertTrue(h.leader_active)
-
-    def test_required_mode_mismatch_unhealthy(self) -> None:
-        h = self._make(mode="local", required_mode="machined")
-        self.assertFalse(h.healthy)
-
-    def test_machined_mode_without_active_leader_unhealthy(self) -> None:
-        h = self._make(leader_active="false")
-        self.assertFalse(h.healthy)
-
-    def test_empty_required_mode_passes(self) -> None:
-        h = self._make(mode="local", leader_active="false", required_mode="")
-        self.assertTrue(h.healthy)
-
-
 class WatcherValueTest(unittest.TestCase):
     def test_returns_empty_string_when_watcher_value_is_blank(self) -> None:
         with mock.patch.object(
@@ -733,201 +695,89 @@ class MainFailureSummaryTest(unittest.TestCase):
         self.assertEqual(payload["gates"]["run_health"]["metric"], "run.healthy")
 
 
-class ReattachHealthTest(unittest.TestCase):
-    def test_idle_reattach_health_passes_without_restored_cellapps(self) -> None:
-        ok, detail, stuck = verify_cellappmgr_ha.reattach_health_detail(
-            restored_cellapps=0,
-            pending=0,
-            completed_count=0,
-            stuck=0,
-            completed="true",
-            reattach_state="idle",
-            status="state=idle restored=0 pending=0 completed=1 stuck=0 completed_count=0",
-            min_cellapps=1,
-            require_restored=False,
-        )
+class RecoveryHealthTest(unittest.TestCase):
+    def _watchers(self, **overrides):
+        defaults = {
+            "cellappmgr/ha/recovery_window_active": "false",
+            "cellappmgr/ha/recovery_window_status":
+                "state=open active=0 remaining_ms=0 pending_geometry=0",
+            "cellappmgr/lb/pending_geometry_broadcasts": "0",
+            "cellappmgr/cellapp_count": "2",
+            "cellappmgr/space_count": "1",
+            "cellappmgr/lb/load_report_stale_count": "0",
+            "cellappmgr/lb/cellapps": (
+                "cellapps=2 app=1 addr=127.0.0.1:30001 load=0.100 entities=3 "
+                "retiring=0 load_age_ms=15 load_stale=0 app=2 addr=127.0.0.1:30002 "
+                "load=0.200 entities=4 retiring=0 load_age_ms=20 load_stale=0"
+            ),
+        }
+        defaults.update(overrides)
+        return defaults
 
-        self.assertTrue(ok, detail)
-        self.assertFalse(stuck)
+    def _read(self, args, watchers):
+        with (
+            mock.patch.object(
+                verify_cellappmgr_ha, "watcher_value",
+                side_effect=lambda exe, machined, target, path: watchers[path]),
+            mock.patch.object(
+                verify_cellappmgr_ha, "int_watcher",
+                side_effect=lambda exe, machined, target, path: int(watchers[path])),
+        ):
+            return verify_cellappmgr_ha.read_recovery_health(
+                args, Path("atlas_tool"), "cellappmgr:cellappmgr", require_restored=True)
 
-    def test_builds_structured_reattach_payload(self) -> None:
-        payload = verify_cellappmgr_ha.build_reattach_health_payload(
-            restored_cellapps=2,
-            pending=0,
-            completed_count=2,
-            stuck=0,
-            completed="true",
-            reattach_state="complete",
-            status="state=complete restored=2 pending=0 completed=1 stuck=0 completed_count=2",
-            min_cellapps=2,
-            require_restored=True,
-        )
+    def _args(self, min_cellapps=2):
+        return argparse.Namespace(
+            machined="m", min_cellapps=min_cellapps, max_load_report_age_ms=0)
 
-        self.assertTrue(payload["healthy"])
-        self.assertEqual(payload["restored_cellapps"], 2)
-        self.assertEqual(payload["expected_state"], "complete")
+    def test_recovered_when_window_closed_and_workers_rebuilt(self) -> None:
+        report = self._read(self._args(), self._watchers())
+        self.assertTrue(report.ok, report.status)
+        self.assertTrue(report.payload["recovery_window"]["healthy"])
+        self.assertTrue(report.payload["worker_rebuild"]["healthy"])
+        self.assertFalse(report.stuck)
 
-    def test_pending_reattach_health_fails_with_expected_state(self) -> None:
-        ok, detail, stuck = verify_cellappmgr_ha.reattach_health_detail(
-            restored_cellapps=2,
-            pending=1,
-            completed_count=1,
-            stuck=0,
-            completed="false",
-            reattach_state="pending",
-            status="state=pending restored=2 pending=1 completed=0 stuck=0 completed_count=1",
-            min_cellapps=1,
-            require_restored=True,
-        )
+    def test_open_recovery_window_is_unhealthy(self) -> None:
+        report = self._read(self._args(), self._watchers(**{
+            "cellappmgr/ha/recovery_window_active": "true",
+            "cellappmgr/ha/recovery_window_status":
+                "state=closed active=1 remaining_ms=800 pending_geometry=0",
+        }))
+        self.assertFalse(report.ok)
+        self.assertFalse(report.payload["recovery_window"]["healthy"])
 
-        self.assertFalse(ok)
-        self.assertFalse(stuck)
-        self.assertIn("reattach_state=pending/pending", detail)
+    def test_missing_cellapps_fails_worker_rebuild(self) -> None:
+        report = self._read(self._args(min_cellapps=3), self._watchers())
+        self.assertFalse(report.ok)
+        self.assertFalse(report.payload["worker_rebuild"]["healthy"])
 
-    def test_stuck_reattach_health_flags_immediate_failure(self) -> None:
-        ok, detail, stuck = verify_cellappmgr_ha.reattach_health_detail(
-            restored_cellapps=2,
-            pending=1,
-            completed_count=1,
-            stuck=1,
-            completed="false",
-            reattach_state="stuck",
-            status="state=stuck restored=2 pending=1 completed=0 stuck=1 completed_count=1",
-            min_cellapps=1,
-            require_restored=True,
-        )
-
-        self.assertFalse(ok)
-        self.assertTrue(stuck)
-        self.assertIn("reattach_status_ok=True", detail)
+    def test_pending_geometry_keeps_window_open(self) -> None:
+        report = self._read(self._args(), self._watchers(**{
+            "cellappmgr/lb/pending_geometry_broadcasts": "1",
+        }))
+        self.assertFalse(report.ok)
+        self.assertFalse(report.payload["recovery_window"]["healthy"])
 
     def test_wait_or_capture_recovery_health_keeps_unhealthy_report(self) -> None:
         args = argparse.Namespace(machined="machined", timeout_sec=1.0, poll_sec=0.0)
         exe = Path("atlas_tool")
         report = verify_cellappmgr_ha.RecoveryHealthReport(
             False,
-            "reattach stuck",
-            True,
-            {"healthy": False, "reattach": {"has_stuck": True}},
+            "recovery window still open",
+            False,
+            {"healthy": False, "recovery_window": {"healthy": False}},
         )
-
         with (
             mock.patch.object(
-                verify_cellappmgr_ha,
-                "wait_for_recovery_health",
-                side_effect=RuntimeError("reattach stuck"),
-            ),
+                verify_cellappmgr_ha, "wait_for_recovery_health",
+                side_effect=RuntimeError("recovery window still open")),
             mock.patch.object(
-                verify_cellappmgr_ha,
-                "read_recovery_health",
-                return_value=report,
-            ),
+                verify_cellappmgr_ha, "read_recovery_health", return_value=report),
         ):
             captured = verify_cellappmgr_ha.wait_or_capture_recovery_health(
-                args, exe, "cellappmgr:cellappmgr", True, capture_unhealthy=True
-            )
-
+                args, exe, "cellappmgr:cellappmgr", True, capture_unhealthy=True)
         self.assertFalse(captured.ok)
-        self.assertTrue(captured.payload["reattach"]["has_stuck"])
-
-
-class RestoreGateHealthTest(unittest.TestCase):
-    def test_restore_gate_health_passes_when_open(self) -> None:
-        ok, detail = verify_cellappmgr_ha.restore_gate_health_detail(
-            pending=0,
-            active="false",
-            pending_geometry=0,
-            blocked_pending_geometry=0,
-            status=(
-                "state=open active=0 lb_frozen=0 pending_reattach=0 "
-                "pending_geometry=0 blocked_pending_geometry=0"
-            ),
-        )
-
-        self.assertTrue(ok, detail)
-
-    def test_builds_structured_restore_gate_payload(self) -> None:
-        payload = verify_cellappmgr_ha.build_restore_gate_health_payload(
-            pending=0,
-            active="false",
-            pending_geometry=0,
-            blocked_pending_geometry=0,
-            status=(
-                "state=open active=0 lb_frozen=0 pending_reattach=0 "
-                "pending_geometry=0 blocked_pending_geometry=0"
-            ),
-        )
-
-        self.assertTrue(payload["healthy"])
-        self.assertFalse(payload["active"])
-        self.assertEqual(payload["pending_geometry"], 0)
-
-    def test_restore_gate_health_fails_while_reattach_pending(self) -> None:
-        ok, detail = verify_cellappmgr_ha.restore_gate_health_detail(
-            pending=1,
-            active="true",
-            pending_geometry=0,
-            blocked_pending_geometry=0,
-            status=(
-                "state=closed active=1 lb_frozen=1 pending_reattach=1 "
-                "pending_geometry=0 blocked_pending_geometry=0"
-            ),
-        )
-
-        self.assertFalse(ok)
-        self.assertIn("restore_gate_active=true/True", detail)
-
-    def test_restore_gate_health_fails_with_blocked_pending_geometry(self) -> None:
-        ok, detail = verify_cellappmgr_ha.restore_gate_health_detail(
-            pending=0,
-            active="true",
-            pending_geometry=1,
-            blocked_pending_geometry=1,
-            status=(
-                "state=closed active=1 lb_frozen=0 pending_reattach=0 "
-                "pending_geometry=1 blocked_pending_geometry=1"
-            ),
-        )
-
-        self.assertFalse(ok)
-        self.assertIn("restore_gate_blocked_pending_geometry=1", detail)
-
-
-class ReattachRegistryHealthTest(unittest.TestCase):
-    def test_registry_health_accepts_idle_state(self) -> None:
-        ok, detail = verify_cellappmgr_ha.reattach_registry_health_detail(
-            "state=idle audits=0 query_pending=0 pending_reattach=0 last_missing=0 "
-            "last_blocked=0 last_reconciled=0 reconciled_total=0 error_detail=none"
-        )
-
-        self.assertTrue(ok, detail)
-
-    def test_builds_structured_registry_payload(self) -> None:
-        payload = verify_cellappmgr_ha.build_reattach_registry_health_payload(
-            "state=healthy audits=1 query_pending=0 pending_reattach=0 last_missing=0 "
-            "last_blocked=0 last_reconciled=0 reconciled_total=0 error_detail=none"
-        )
-
-        self.assertTrue(payload["healthy"])
-        self.assertEqual(payload["state"], "healthy")
-        self.assertEqual(payload["error_detail"], "none")
-
-    def test_registry_health_accepts_reconciled_state_without_blocked_hosts(self) -> None:
-        ok, detail = verify_cellappmgr_ha.reattach_registry_health_detail(
-            "state=reconciled audits=1 query_pending=0 pending_reattach=0 last_missing=1 "
-            "last_blocked=0 last_reconciled=1 reconciled_total=1 error_detail=none"
-        )
-
-        self.assertTrue(ok, detail)
-
-    def test_registry_health_rejects_blocked_state(self) -> None:
-        ok, detail = verify_cellappmgr_ha.reattach_registry_health_detail(
-            "state=blocked audits=1 query_pending=0 pending_reattach=1 last_missing=1 "
-            "last_blocked=1 last_reconciled=0 reconciled_total=0 error_detail=none"
-        )
-
-        self.assertFalse(ok)
-        self.assertIn("reattach_registry_last_blocked=1", detail)
+        self.assertFalse(captured.payload["recovery_window"]["healthy"])
 
 
 class LoadReportHealthTest(unittest.TestCase):
@@ -1003,81 +853,6 @@ class LoadReportHealthTest(unittest.TestCase):
         self.assertEqual(report.payload["over_age_apps"], ["1"])
 
 
-class ReviverHeartbeatSnapshotHealthTest(unittest.TestCase):
-    def test_snapshot_health_passes_when_ready(self) -> None:
-        ok, detail, hard_failure = verify_cellappmgr_ha.reviver_heartbeat_snapshot_health_detail(
-            acks=3,
-            min_acks=2,
-            baseline_failures=0,
-            snapshot_dirty="false",
-            snapshot_stale="false",
-            snapshot_failures=0,
-            snapshot_status="state=ready saves=4 failures=0 dirty=0 stale=0 game_time=9",
-        )
-
-        self.assertTrue(ok, detail)
-        self.assertFalse(hard_failure)
-
-    def test_snapshot_health_waits_while_dirty(self) -> None:
-        ok, detail, hard_failure = verify_cellappmgr_ha.reviver_heartbeat_snapshot_health_detail(
-            acks=2,
-            min_acks=2,
-            baseline_failures=0,
-            snapshot_dirty="true",
-            snapshot_stale="false",
-            snapshot_failures=0,
-            snapshot_status="state=dirty saves=4 failures=0 dirty=1 stale=0 game_time=9",
-        )
-
-        self.assertFalse(ok)
-        self.assertFalse(hard_failure)
-        self.assertIn("heartbeat_snapshot_dirty=true", detail)
-
-    def test_snapshot_health_flags_failures(self) -> None:
-        ok, detail, hard_failure = verify_cellappmgr_ha.reviver_heartbeat_snapshot_health_detail(
-            acks=2,
-            min_acks=2,
-            baseline_failures=0,
-            snapshot_dirty="false",
-            snapshot_stale="false",
-            snapshot_failures=1,
-            snapshot_status="state=failed saves=4 failures=1 dirty=0 stale=0 game_time=9",
-        )
-
-        self.assertFalse(ok)
-        self.assertTrue(hard_failure)
-        self.assertIn("heartbeat_snapshot_failures=0->1", detail)
-
-    def test_snapshot_health_accepts_historical_failures(self) -> None:
-        ok, detail, hard_failure = verify_cellappmgr_ha.reviver_heartbeat_snapshot_health_detail(
-            acks=2,
-            min_acks=2,
-            baseline_failures=1,
-            snapshot_dirty="false",
-            snapshot_stale="false",
-            snapshot_failures=1,
-            snapshot_status="state=failed saves=4 failures=1 dirty=0 stale=0 game_time=9",
-        )
-
-        self.assertTrue(ok, detail)
-        self.assertFalse(hard_failure)
-
-    def test_snapshot_health_rejects_status_mismatch(self) -> None:
-        ok, detail, hard_failure = verify_cellappmgr_ha.reviver_heartbeat_snapshot_health_detail(
-            acks=2,
-            min_acks=2,
-            baseline_failures=0,
-            snapshot_dirty="false",
-            snapshot_stale="false",
-            snapshot_failures=0,
-            snapshot_status="state=dirty saves=4 failures=0 dirty=0 stale=0 game_time=9",
-        )
-
-        self.assertFalse(ok)
-        self.assertFalse(hard_failure)
-        self.assertIn("heartbeat_snapshot_status_ok=False", detail)
-
-
 class ReviverStabilityTest(unittest.TestCase):
     def test_wait_or_capture_reviver_stability_keeps_failure_status(self) -> None:
         args = argparse.Namespace()
@@ -1106,9 +881,8 @@ class HaSummaryPayloadTest(unittest.TestCase):
     def recovery_payload(self) -> dict[str, object]:
         return {
             "healthy": True,
-            "reattach": {"healthy": True, "pending": 0},
-            "restore_gate": {"healthy": True, "active": False},
-            "reattach_registry": {"healthy": True, "state": "healthy"},
+            "recovery_window": {"healthy": True, "active": False},
+            "worker_rebuild": {"healthy": True, "cellapp_count": 2},
             "load_report": {
                 "healthy": True,
                 "records": [{"app_id": 1, "load_age_ms": 15}],
@@ -1125,11 +899,8 @@ class HaSummaryPayloadTest(unittest.TestCase):
                 generation_after=4,
                 launch_count_before=5,
                 launch_count_after=6,
-                restore_status="restore=ok",
                 pre_topology_status="pre_topology=ok",
-                pre_snapshot_status="pre_snapshot=ok",
                 restored_topology_status="restored_topology=ok",
-                post_restore_snapshot_status="post_snapshot=ok",
                 output_status="output_log=ok",
                 stability_status="stability=5s",
                 manager_restart_ms=1200,
@@ -1154,11 +925,8 @@ class HaSummaryPayloadTest(unittest.TestCase):
                 generation_after=6,
                 launch_count_before=6,
                 launch_count_after=8,
-                restore_status="restore=ok",
                 pre_topology_status="pre_topology=ok",
-                pre_snapshot_status="pre_snapshot=ok",
                 restored_topology_status="restored_topology=ok",
-                post_restore_snapshot_status="post_snapshot=ok",
                 output_status="output_log=ok",
                 stability_status="stability=5s",
                 manager_restart_ms=1300,
@@ -1256,10 +1024,10 @@ class HaSummaryPayloadTest(unittest.TestCase):
     def test_summary_gates_reject_unhealthy_cycle_recovery(self) -> None:
         results = self.results()
         results[1] = results[1]._replace(
-            recovery_status="reattach stuck",
+            recovery_status="recovery window still open",
             recovery={
                 "healthy": False,
-                "reattach": {"healthy": False, "has_stuck": True},
+                "recovery_window": {"healthy": False},
                 "load_report": {"healthy": True, "records": []},
             },
         )
@@ -1284,9 +1052,8 @@ class HaSummaryPayloadTest(unittest.TestCase):
             recovery_status="load report stale",
             recovery={
                 "healthy": False,
-                "reattach": {"healthy": True},
-                "restore_gate": {"healthy": True},
-                "reattach_registry": {"healthy": True},
+                "recovery_window": {"healthy": True},
+                "worker_rebuild": {"healthy": True},
                 "load_report": {"healthy": False, "records": []},
             },
             load_report_status="load_report_stale_count=1",
@@ -1359,7 +1126,6 @@ class HaSummaryPayloadTest(unittest.TestCase):
     def test_summary_gates_reject_unhealthy_cycle_takeover(self) -> None:
         results = self.results()
         results[0] = results[0]._replace(
-            restore_status="takeover=failed stage=restart detail=timeout",
             takeover_healthy=False,
             failure_stage="restart",
         )
@@ -1395,7 +1161,7 @@ class HaSummaryPayloadTest(unittest.TestCase):
         self.assertFalse(result.takeover_healthy)
         self.assertEqual(result.failure_stage, "restart")
         self.assertEqual(result.generation_after, 7)
-        self.assertIn("takeover=failed", result.restore_status)
+        self.assertIn("takeover=failed", result.recovery_status)
 
     def test_builds_machine_readable_summary_payload(self) -> None:
         parameters = verify_cellappmgr_ha.summary_parameters(
@@ -1416,8 +1182,7 @@ class HaSummaryPayloadTest(unittest.TestCase):
                 max_load_report_age_ms=2000,
                 min_post_failover_standbys=1,
                 shutdown_reason=1,
-                allow_empty_snapshot=False,
-                allow_missing_backup_snapshot=False,
+                allow_empty_cluster=False,
                 allow_empty_output_log=False,
                 allow_topology_change=False,
                 no_inject=False,
@@ -1429,7 +1194,7 @@ class HaSummaryPayloadTest(unittest.TestCase):
             "inject", self.results(), parameters=parameters
         )
 
-        self.assertEqual(payload["schema_version"], 1)
+        self.assertEqual(payload["schema_version"], 2)
         self.assertEqual(payload["mode"], "inject")
         self.assertEqual(payload["parameters"]["min_revivers"], 2)
         self.assertEqual(payload["parameters"]["max_takeover_ms"], 8000)
@@ -1625,9 +1390,8 @@ class HaSummaryPayloadTest(unittest.TestCase):
     def test_summary_gates_reject_unhealthy_current_load_report(self) -> None:
         recovery = {
             "healthy": False,
-            "reattach": {"healthy": True},
-            "restore_gate": {"healthy": True},
-            "reattach_registry": {"healthy": True},
+            "recovery_window": {"healthy": True},
+            "worker_rebuild": {"healthy": True},
             "load_report": {"healthy": False, "records": []},
         }
         payload = verify_cellappmgr_ha.build_summary_payload(
@@ -1713,7 +1477,7 @@ class HaSummaryPayloadTest(unittest.TestCase):
             "inject",
             self.results(),
             verify_cellappmgr_ha.failed_run_current_payload(
-                "final_recovery", "reattach timed out"
+                "final_recovery", "recovery window stayed open"
             ),
         )
 
