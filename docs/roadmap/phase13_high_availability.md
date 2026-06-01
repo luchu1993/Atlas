@@ -73,8 +73,13 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   - **M4-1**（commit `5383521`，纯增量可逆）：UDP 广播传输原语——`Socket::SetBroadcast`
     （SO_BROADCAST）+ `network/broadcast.h`（limited 255.255.255.255 / directed
     `ip|~mask` 广播地址，网络字节序）。
-  - **M4-2~4 待落地**：NetworkInterface 广播端点 + mesh gossip/成员/IP-ring buddy 监控；
-    本地权威注册表 + 广播 birth/death/query 聚合；client 连本地 machined。
+  - **M4-2**（commit `4ba9e96`，纯逻辑无 I/O 可逆）：`MachinedMesh`——按 HELLO 学习
+    peer、按地址排成全节点一致的 ring，每节点只监控其 ring 后继（buddy）；
+    `ScanFailures` 返回自身后继方向连续超时的 peer（自身负责对外宣告的死亡，一次故障
+    一次宣告）并本地剪除所有超时 peer；`RecordHeartbeat` 按 incarnation 判定 new/restarted。
+  - **M4-3~4 待落地**：广播 HELLO wire 格式 + NetworkInterface 广播端点 + MachinedApp 接
+    mesh（周期广播 HELLO、buddy 死亡 → 宣告该机进程死亡）+ 本地权威注册表 + 广播
+    birth/death/query 聚合；client 连本地 machined。
   - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
