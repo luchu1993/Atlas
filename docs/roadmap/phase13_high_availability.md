@@ -7,7 +7,8 @@ self-snapshot、`mgr_generation` epoch、snapshot 文件或 reattach 对账机�
 Reviver 监督全局唯一 CellAppMgr 和 BaseAppMgr（multi-target），cold-start、direct
 heartbeat、manager health、registry audit；leader 选举已是 BigWorld 式
 priority+timeout 仲裁（被监控 Manager 端裁决，M3 落地），**不再有 leader lock /
-machined-lease**。**待落地：** M4（machined → per-host UDP 广播网格，不可逆点）。
+machined-lease**。**进行中：** M4（machined → per-host UDP 广播网格，不可逆点；
+M4-1 广播传输原语已落地）。
 **前置依赖:** Phase 11（分布式空间完整可用）
 **BigWorld 参考:** `server/reviver/`, `server/dbappmgr/`
 
@@ -66,9 +67,15 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   active Reviver 自己也死时 standby 按 priority-scaled grace + 注册表 dedup 经
   `AuditRevive` 接管。**删除 leader lock（本地文件锁 + machined-lease）、machined
   LeaseStore + lease wire 消息 + MachinedClient lease API + lease config**。
-- **M4 machined → per-host UDP 广播网格**（待落地，不可逆点）：每台机一个
+- **M4 machined → per-host UDP 广播网格**（进行中，不可逆点）：每台机一个
   machined，UDP 广播发现 + ring/buddy，单例 manager 靠"广播查询 → first-found"，
-  删单地址 TCP 中心模型。依赖 M3。
+  删单地址 TCP 中心模型。依赖 M3。分片：
+  - **M4-1**（commit `5383521`，纯增量可逆）：UDP 广播传输原语——`Socket::SetBroadcast`
+    （SO_BROADCAST）+ `network/broadcast.h`（limited 255.255.255.255 / directed
+    `ip|~mask` 广播地址，网络字节序）。
+  - **M4-2~4 待落地**：NetworkInterface 广播端点 + mesh gossip/成员/IP-ring buddy 监控；
+    本地权威注册表 + 广播 birth/death/query 聚合；client 连本地 machined。
+  - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
 
