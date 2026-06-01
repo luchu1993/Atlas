@@ -143,13 +143,11 @@ CellAppMgr / BaseAppMgr HA 当前是同机 HA MVP 和 CI / 压测基线：Revive
 重注册 + BSP 重报收敛，recovery 窗口期间冻结 topology 推进。
 
 后续接手先跑脚本级 + 单测回归，再跑 live fault injection（见下"验证基线"）。
-**注意（live 工具滞后，待改写）：** `verify_cellappmgr_ha.py` /
-`verify_baseappmgr_ha.py` 仍按旧 snapshot 模型断言（snapshot restore / heartbeat
-snapshot 摘要 / reattach 收敛）；`run_world_stress.py` 仍向 reviver / mgr 传已删的
-snapshot（`--*-snapshot-path`）和 lease（`--*-leader-lock-*`）CLI flag。M2+M3 已把
-engine 切到 worker-重建 + priority 仲裁，HA 模型已定型，这些 live 脚本需统一改写为
-校验 worker-重建恢复 + priority 仲裁接管（recovery 窗口收敛、worker BSP 重报、
-known_app_id 保留、priority failover），并清掉死的 snapshot/lease flag。
+live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha.py` / `verify_baseappmgr_ha.py`
+校验 worker-重建恢复（recovery 窗口收敛、worker BSP 重报、`cellapp_count` /
+`baseapp_count` 回升）+ priority 仲裁接管（`reviver/.../active_reviver`、
+`--check-active-reviver`、priority failover）；`run_world_stress.py` 用
+`--reviver-priority` 配置多 Reviver。
 
 ## 当前边界
 
@@ -209,10 +207,7 @@ known_app_id 保留、priority failover），并清掉死的 snapshot/lease flag
 
 1. **M4 — machined per-host UDP 广播网格**（不可逆点）：每台机一个 machined，UDP
    广播发现 + ring/buddy，删单地址 TCP 中心模型；断容器 / 云部署。
-2. **live 工具改写**：把 `verify_cellappmgr_ha.py` / `verify_baseappmgr_ha.py` 从
-   snapshot-restore 断言改为 worker-重建恢复 + priority 仲裁断言；`run_world_stress.py`
-   清掉死的 snapshot / lease CLI flag，按 priority 配置多 Reviver。
-3. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
+2. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
    原则实现（不再用 snapshot）。
 
 ## 验证基线
