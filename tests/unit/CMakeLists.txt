@@ -237,11 +237,6 @@ atlas_add_test(NAME test_machined_types
   DEPS atlas_network atlas_server
 )
 
-atlas_add_test(NAME test_lease_store
-  SOURCES test_lease_store.cpp
-  DEPS atlas_machined_lib atlas_network atlas_foundation
-)
-
 atlas_add_test(NAME test_reviver_subject
   SOURCES test_reviver_subject.cpp
   DEPS atlas_server atlas_network atlas_foundation

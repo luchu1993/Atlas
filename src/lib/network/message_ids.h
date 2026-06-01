@@ -41,8 +41,6 @@ enum class Machined : uint16_t {
   kWatcherForward = 1022,
   kWatcherReply = 1023,
   kShutdownTarget = 1030,
-  kLeaseRequest = 1040,
-  kLeaseResponse = 1041,
 };
 
 enum class BaseApp : uint16_t {
@@ -213,8 +211,6 @@ ATLAS_ASSERT_ID_RANGE(Machined::kWatcherResponse, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kWatcherForward, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kWatcherReply, 1000, 1099);
 ATLAS_ASSERT_ID_RANGE(Machined::kShutdownTarget, 1000, 1099);
-ATLAS_ASSERT_ID_RANGE(Machined::kLeaseRequest, 1000, 1099);
-ATLAS_ASSERT_ID_RANGE(Machined::kLeaseResponse, 1000, 1099);
 
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCreateBase, 2000, 2999);
 ATLAS_ASSERT_ID_RANGE(BaseApp::kCreateBaseFromDb, 2000, 2999);

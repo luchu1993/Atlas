@@ -92,10 +92,6 @@ auto MachinedApp::Init(int argc, char* argv[]) -> bool {
         OnShutdownTarget(src, ch, msg);
       });
 
-  (void)table.RegisterTypedHandler<LeaseRequest>(
-      [this](const Address& src, Channel* ch, const LeaseRequest& msg) {
-        OnLeaseRequest(src, ch, msg);
-      });
 
   ATLAS_LOG_INFO("MachinedApp: TCP listening on {}", Network().TcpAddress().ToString());
   return true;
@@ -129,25 +125,11 @@ void MachinedApp::RegisterWatchers() {
   reg.Add<std::string>("machined/watcher_pending", std::function<std::string()>{[this]() {
                          return std::to_string(watcher_forwarder_.PendingCount());
                        }});
-  reg.Add<uint64_t>("machined/leases/active",
-                    std::function<uint64_t()>{[this]() {
-                      return static_cast<uint64_t>(lease_store_.size());
-                    }});
-  reg.Add<uint64_t>("machined/leases/pruned_total",
-                    std::function<uint64_t()>{[this]() { return lease_store_.PrunedTotal(); }});
-  reg.Add<uint64_t>("machined/leases/dropped_on_disconnect_total",
-                    std::function<uint64_t()>{[this]() {
-                      return lease_store_.DroppedOnDisconnectTotal();
-                    }});
 }
 
 void MachinedApp::OnTickComplete() {
   CheckHeartbeatTimeouts();
   watcher_forwarder_.CheckTimeouts();
-  const auto pruned = lease_store_.PruneExpired(Clock::now());
-  if (pruned > 0) {
-    ATLAS_LOG_INFO("MachinedApp: pruned {} expired lease(s)", pruned);
-  }
 }
 
 void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const RegisterMessage& msg) {
@@ -371,48 +353,6 @@ void MachinedApp::OnDisconnect(Channel& ch) {
 
   std::erase_if(heartbeat_entries_, [&ch](const HeartbeatEntry& e) { return e.channel == &ch; });
   listener_manager_.RemoveAll(&ch);
-  const auto dropped_leases = lease_store_.DropByHolderAddress(ch.RemoteAddress());
-  if (dropped_leases > 0) {
-    ATLAS_LOG_INFO("MachinedApp: dropped {} lease(s) on disconnect from {}",
-                   dropped_leases, ch.RemoteAddress().ToString());
-  }
-}
-
-void MachinedApp::OnLeaseRequest(const Address& src, Channel* ch, const LeaseRequest& msg) {
-  if (ch == nullptr) return;
-  LeaseResponse resp;
-  resp.request_id = msg.request_id;
-  if (msg.key.empty() || msg.holder_id.empty()) {
-    resp.error = "lease key and holder_id must be non-empty";
-    (void)ch->SendMessage(resp);
-    return;
-  }
-  switch (msg.op) {
-    case LeaseOp::kAcquire:
-    case LeaseOp::kRenew: {
-      if (msg.ttl_ms == 0) {
-        resp.error = "lease ttl_ms must be > 0";
-        break;
-      }
-      auto outcome = lease_store_.Acquire(msg.key, msg.holder_id, msg.ttl_ms, src, Clock::now());
-      if (outcome.result == LeaseStore::AcquireResult::kRejected) {
-        resp.success = false;
-        resp.current_holder = std::move(outcome.current_holder);
-        resp.current_holder_expires_in_ms =
-            static_cast<uint32_t>(std::max<int64_t>(0, outcome.current_expires_in_ms));
-      } else {
-        resp.success = true;
-      }
-      break;
-    }
-    case LeaseOp::kRelease: {
-      const bool released = lease_store_.Release(msg.key, msg.holder_id);
-      resp.success = released;
-      if (!released) resp.error = "lease holder mismatch or unknown key";
-      break;
-    }
-  }
-  (void)ch->SendMessage(resp);
 }
 
 void MachinedApp::CheckHeartbeatTimeouts() {

@@ -4,10 +4,10 @@
 （M1 + M2 落地）：manager 是软状态，崩溃后由 Reviver 重启，新进程在 recovery
 窗口内等存活 worker 重报状态并重建注册表 / partition——**不再有 manager
 self-snapshot、`mgr_generation` epoch、snapshot 文件或 reattach 对账机制**。
-Reviver 监督全局唯一 CellAppMgr 和 BaseAppMgr（multi-target），支持 local /
-machined-lease leader lock、cold-start、direct heartbeat、manager health 和
-registry audit。**待落地：** M3（Reviver priority+timeout 仲裁替换 machined-lease）、
-M4（machined → per-host UDP 广播网格，不可逆点）。
+Reviver 监督全局唯一 CellAppMgr 和 BaseAppMgr（multi-target），cold-start、direct
+heartbeat、manager health、registry audit；leader 选举已是 BigWorld 式
+priority+timeout 仲裁（被监控 Manager 端裁决，M3 落地），**不再有 leader lock /
+machined-lease**。**待落地：** M4（machined → per-host UDP 广播网格，不可逆点）。
 **前置依赖:** Phase 11（分布式空间完整可用）
 **BigWorld 参考:** `server/reviver/`, `server/dbappmgr/`
 
@@ -60,9 +60,12 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   - **M2c**：删 mgr→worker 回放残留（`ReplayCellAppTopology` /
     `RequestCellAppState`）——worker 重注册后主动重报 BSP 并恢复周期 InformLoad，
     mgr 无需回放或轮询；补 BaseApp `known_app_id` echo（对称于 CellAppMgr）。
-- **M3 Reviver priority+timeout 仲裁**（待落地）：被监控对象端按 priority +
-  心跳超时裁决唯一活跃 Reviver，删 machined-lease leader lock。在 TCP machined
-  上做。
+- **M3 Reviver priority+timeout 仲裁** ✅：被监控 Manager 的 `ReviverSubject` 按
+  priority + 心跳超时裁决唯一活跃 Reviver（HealthProbe 带 priority、Ack 回传
+  is_active_reviver），监督动作门控其上；subject 死后 active monitor 立即重启，
+  active Reviver 自己也死时 standby 按 priority-scaled grace + 注册表 dedup 经
+  `AuditRevive` 接管。**删除 leader lock（本地文件锁 + machined-lease）、machined
+  LeaseStore + lease wire 消息 + MachinedClient lease API + lease config**。
 - **M4 machined → per-host UDP 广播网格**（待落地，不可逆点）：每台机一个
   machined，UDP 广播发现 + ring/buddy，单例 manager 靠"广播查询 → first-found"，
   删单地址 TCP 中心模型。依赖 M3。
@@ -91,7 +94,7 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   （同 channel）幂等 re-ack；同 pid / 地址的 birth replay 被忽略，新 pid 或
   新地址会触发重连。
 - **Reviver 监督全局唯一 Manager**：Reviver 重构为 multi-target，持有
-  `cellappmgr_target_` 和 `baseappmgr_target_`，各自独立 leader lock、heartbeat、
+  `cellappmgr_target_` 和 `baseappmgr_target_`，各自独立 priority、heartbeat、
   launch 预算、watcher 路径（`reviver/cellappmgr/*`、`reviver/baseappmgr/*`，
   CellAppMgr 兼容 legacy `reviver/leader/*` alias）。订阅 machined birth / death
   按进程名匹配目标，启动先查 registry 避免与已存在 manager 重复 cold-start。
@@ -109,9 +112,9 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   PID liveness；周期查 machined registry，活跃目标连续缺失即走异常重启路径。
   direct heartbeat 与 manager watcher 使用独立连续失败计数，任一达阈值都先终止
   旧 pid 再重启，避免挂死进程占用 internal port。
-- **Reviver leader lock**：启动后获取目标的进程级 leader lock；同机多实例只有
-  持锁者会 cold-start / restart，standby 保留进程和 watcher 但不动 Manager。
-  支持两种模式（见下"当前边界"）。
+- **Reviver 仲裁**：被监控 Manager 按 priority + 心跳超时裁决唯一 active monitor；
+  同机多实例只有 active 者会 cold-start / restart，standby 保留进程和 watcher 但
+  不动 Manager。无 leader lock（见下"当前边界"）。
 - **CellApp failure smoke**：普通 CellApp 崩溃由 CellAppMgr rehome（unsplit /
   rehome 孤儿 leaf）和 BaseApp death-restore 路径处理；`verify_cellapp_rehome.{bat,sh}`
   校验拓扑 rehome、BaseApp restore scheduled/restored/lost/timeout/pending 收敛、
@@ -131,7 +134,7 @@ snapshot 一致性难题。代价：全集群同时重启会丢失 manager 态�
 
 Reviver 负责"让唯一的 Manager 活着"——cold-start / restart / 终止挂死进程；它
 **不**尝试恢复 BSP 或 BaseApp 表，那是 Manager 自己从 worker 重建的职责。同机多
-Reviver 通过 leader lock 选唯一主动监督者。
+Reviver 由被监控 Manager 的 priority+timeout 仲裁选唯一主动监督者。
 
 ## 交接状态
 
@@ -140,40 +143,38 @@ CellAppMgr / BaseAppMgr HA 当前是同机 HA MVP 和 CI / 压测基线：Revive
 重注册 + BSP 重报收敛，recovery 窗口期间冻结 topology 推进。
 
 后续接手先跑脚本级 + 单测回归，再跑 live fault injection（见下"验证基线"）。
-**注意：** `verify_cellappmgr_ha.py` / `verify_baseappmgr_ha.py` 仍按旧 snapshot
-模型断言（snapshot restore / heartbeat snapshot 摘要 / reattach 收敛），M2 删除
-snapshot 后这些 live 脚本需要改写为校验 worker-重建恢复——排在 M3（Reviver 仲裁
-重构）之后做，避免 HA 模型未定型时返工。
+**注意（live 工具滞后，待改写）：** `verify_cellappmgr_ha.py` /
+`verify_baseappmgr_ha.py` 仍按旧 snapshot 模型断言（snapshot restore / heartbeat
+snapshot 摘要 / reattach 收敛）；`run_world_stress.py` 仍向 reviver / mgr 传已删的
+snapshot（`--*-snapshot-path`）和 lease（`--*-leader-lock-*`）CLI flag。M2+M3 已把
+engine 切到 worker-重建 + priority 仲裁，HA 模型已定型，这些 live 脚本需统一改写为
+校验 worker-重建恢复 + priority 仲裁接管（recovery 窗口收敛、worker BSP 重报、
+known_app_id 保留、priority failover），并清掉死的 snapshot/lease flag。
 
 ## 当前边界
 
 - Reviver 监督 CellAppMgr 和 BaseAppMgr（multi-target）；DBAppMgr 拆到
   Phase 15（`phase15_dbappmgr.md`）。
-- Reviver leader lock 现支持两种模式：
-  - `local`（默认）：per-host 文件锁，单机有效；
-  - `machined`：lease 由 machined 持有，跨机 Reviver 可竞争同一 key。machined 在
-    `OnTickComplete` 周期 prune 过期 lease，disconnect 时 drop 当前 channel 持有的
-    全部 lease。`--revive-leader-lock-mode machined` 切换；
-    `--revive-leader-lock-ttl-ms`（默认 8s）/ `--revive-leader-lock-renew-ms`
-    （默认 3s）/ `--revive-leader-lock-failure-threshold` 控制 renew 节奏与放弃
-    leadership 的阈值。
-  跨机集群仍需要 machined 本身可用——machined HA 不在 Phase 13 范围。**M3 将用
-  BigWorld 式 priority+timeout 仲裁替换 machined-lease。**
-- **lease drop-on-disconnect 语义**（machined 模式）：Reviver ↔ machined 的 TCP
-  控制连接断开时 `MachinedApp::OnDisconnect` 立即删除该 Reviver 的全部 lease，不等
-  ttl。优点：Reviver 崩溃 / 掉电时 standby 在下一个 audit tick（默认 1s）即可
-  acquire，active 切换 P95 保持秒级。代价：瞬时网络抖动也触发 lease 转移，ttl 设
-  过小会看到 lease ownership 频繁切换。可观测：
-  `machined/leases/dropped_on_disconnect_total` / `pruned_total` / `active`。
-- **machined 不可达 ops 剧本**（machined 崩溃 / 网络分区）：Reviver 侧
-  `reviver/{slug}/leader/lease_failure_count` 持续增长、`last_error` 含
-  "machined not connected" / "lease request timed out"、
-  `reviver/{slug}/leader/active` 在阈值次 renew 失败后变 false；被监督 Mgr 的
-  `heartbeat_acks` 停止增长。Mgr 本身 RUDP 控制面对 worker 仍跑，但 machined
-  listener 无法响应远程 watcher 查询。**窗口期内 Mgr 死亡不会自动重启，需 ops 介入；**
-  machined 恢复后 Reviver 自动重新竞争 lease。建议把 `reviver/+/last_error` 接告警。
+- **Reviver 仲裁（priority + timeout，无 leader lock）**：被监控 Manager 的
+  `ReviverSubject` 收集 ping 它的 Reviver `{addr→(priority, last_ping)}`，超时窗口
+  （默认 3s）外老化，指定最高优先级存活 Reviver 为唯一 active monitor（同优先级按
+  最低地址 tie-break，所有 subject 收敛一致），在 HealthProbeAck 回传
+  `is_active_reviver`。`--revive-cellappmgr-priority` / `--revive-baseappmgr-priority`
+  （默认 255 最高）设优先级，降低 standby 的值让它延后接管。无 fencing token——靠
+  端点身份 + 注册表收敛（BigWorld reviver_subject 模型）。watcher：
+  `reviver/{slug}/priority`、`/active_reviver`、`reviver/leader/active`
+  （legacy alias = is_active_reviver）。
+- **接管语义**：Manager 存活时 active monitor 在其死亡时立即重启；active Reviver
+  自己也死时，存活 standby 在 priority-scaled grace（`(255-priority)×20ms`）后经
+  `AuditRevive` 接管，启动前查 machined 注册表 dedup，确保只有一个 live Manager。
+  优雅退出（death reason 0）置 `intentional_down`，不被复活。
+- **machined 不可达 ops 剧本**（machined 崩溃 / 网络分区）：Reviver 收不到 birth/
+  death 通知、`AuditRevive` 的注册表 dedup 查询也失败，因此**窗口期内 Manager 死亡
+  不会自动重启 / 接管，需 ops 介入**；machined 恢复后 Reviver 自动恢复监督。Mgr 本身
+  RUDP 控制面对 worker 仍跑。建议把 `reviver/+/last_error` 接告警，配合 machined
+  `app/uptime_seconds` 监控。
 - 异常检测已有 machined death 通知、direct heartbeat、manager watcher health、本机
-  PID liveness 和 registry audit；跨机器误判防护仍依赖 leader lock / 共享状态方案。
+  PID liveness 和 registry audit；跨机器仲裁靠 priority+timeout + 注册表收敛。
 - 全集群同时重启会丢失 manager 态（与 BigWorld 同）；单 manager 重启由存活 worker
   重报恢复。
 - restore 后始终不重连的 CellApp：M2 删除 reattach 对账后，mgr 表里本就不存在
@@ -197,7 +198,7 @@ snapshot 后这些 live 脚本需要改写为校验 worker-重建恢复——排
   6021，nonce + game_time），Reviver 通过它校验 manager RUDP 控制面响应；watcher
   路径 `reviver/baseappmgr/*` 与 CellAppMgr 对齐。
 - **ServerConfig**：`revive_baseappmgr_*`（exe、name、internal_port、output_path、
-  update_hertz、launch_timeout_ms、on_start、leader_lock_path）平行于
+  update_hertz、priority、launch_timeout_ms、on_start）平行于
   `revive_cellappmgr_*`，支持 CLI 和 `reviver.baseappmgr` JSON 段。目标 enabled 当
   on_start 或 exe/port 任一已配置——未配置时该 target 完全 silent，旧 single-target
   Reviver 行为保持不变。
@@ -206,14 +207,12 @@ snapshot 后这些 live 脚本需要改写为校验 worker-重建恢复——排
 
 ## 后续工作
 
-1. **M3 — Reviver priority+timeout 仲裁**：多 Reviver 各带 priority，被监控对象端
-   按 priority + 心跳超时裁决唯一活跃 Reviver，删 machined-lease leader lock。
-2. **M4 — machined per-host UDP 广播网格**（不可逆点）：每台机一个 machined，UDP
+1. **M4 — machined per-host UDP 广播网格**（不可逆点）：每台机一个 machined，UDP
    广播发现 + ring/buddy，删单地址 TCP 中心模型；断容器 / 云部署。
-3. **verify 脚本改写**：把 `verify_cellappmgr_ha.py` / `verify_baseappmgr_ha.py`
-   从 snapshot-restore 断言改为 worker-重建恢复断言（recovery 窗口收敛、worker
-   BSP 重报、known_app_id 保留、topology fingerprint 连续性）。排在 M3 之后。
-4. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
+2. **live 工具改写**：把 `verify_cellappmgr_ha.py` / `verify_baseappmgr_ha.py` 从
+   snapshot-restore 断言改为 worker-重建恢复 + priority 仲裁断言；`run_world_stress.py`
+   清掉死的 snapshot / lease CLI flag，按 priority 配置多 Reviver。
+3. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
    原则实现（不再用 snapshot）。
 
 ## 验证基线
@@ -234,11 +233,14 @@ snapshot 后这些 live 脚本需要改写为校验 worker-重建恢复——排
 - `tests/integration/test_baseappmgr_registration.cpp`：重复注册拒绝且不消耗
   app_id、echoed `known_app_id` 保留 + 冲突回退、spoof 防护、分配 / dbid affinity /
   stale load 跳过。
-- `tests/integration/test_cellappmgr_process.cpp`：真实 Reviver cold-start
-  CellAppMgr、异常终止后重启到同一 internal port、同机多 Reviver leader lock 防止
-  重复 cold-start、late Reviver attach 不重启已有 mgr、leader 退出后 standby 接管、
-  direct heartbeat / forced termination / restart limit / manager health watcher
-  timeout / launched 进程不注册重试，并验证 revived CellAppMgr 继承配置中的 LB 权重。
+- `tests/integration/test_cellappmgr_process.cpp`（真实进程，Ninja + VS 构建均运行）：
+  Reviver cold-start CellAppMgr、异常终止后重启到同一 internal port、priority 仲裁
+  选唯一 active monitor 且 active Reviver 退出后 standby 接管（不重启存活 mgr）、
+  late attach 不重启已有 mgr、direct heartbeat / forced termination / restart limit /
+  manager health watcher timeout / launched 进程不注册重试、target-died-before-subscribe
+  接管，并验证 revived CellAppMgr 继承配置中的 LB 权重。
+- `tests/unit/test_reviver_subject.cpp`：priority 仲裁算法（最高优先级指定、同优先级
+  按最低地址 tie-break、超时老化后存活 standby 接管）。
 - `tests/integration/test_machined_registration.cpp`：machined 转发 shutdown 后目标
   deregister 的 death notification 保留原 reason。
 - `tools/bin/verify_cellapp_rehome.{bat,sh}`：CellApp crash app-level HA smoke

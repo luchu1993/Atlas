@@ -3,7 +3,6 @@
 
 #include <unordered_map>
 
-#include "machined/lease_store.h"
 #include "machined/listener_manager.h"
 #include "machined/process_registry.h"
 #include "machined/watcher_forwarder.h"
@@ -35,7 +34,6 @@ class MachinedApp : public ManagerApp {
   void OnWatcherRequest(const Address& src, Channel* ch, const WatcherRequest& msg);
   void OnWatcherReply(const Address& src, Channel* ch, const WatcherReply& msg);
   void OnShutdownTarget(const Address& src, Channel* ch, const ShutdownTarget& msg);
-  void OnLeaseRequest(const Address& src, Channel* ch, const LeaseRequest& msg);
 
   void OnAccept(Channel& ch);
 
@@ -48,7 +46,6 @@ class MachinedApp : public ManagerApp {
   ProcessRegistry process_registry_;
   ListenerManager listener_manager_;
   WatcherForwarder watcher_forwarder_;
-  LeaseStore lease_store_;
 
   static constexpr Duration kHeartbeatTimeout = std::chrono::seconds(15);
 

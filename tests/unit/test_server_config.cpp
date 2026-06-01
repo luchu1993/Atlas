@@ -148,14 +148,6 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "8000",
                  "--revive-max-restarts",
                  "7",
-                 "--revive-leader-lock-mode",
-                 "machined",
-                 "--revive-leader-lock-ttl-ms",
-                 "9000",
-                 "--revive-leader-lock-renew-ms",
-                 "3500",
-                 "--revive-leader-lock-failure-threshold",
-                 "5",
                  "--revive-cellappmgr-health-interval-ms",
                  "100",
                  "--revive-cellappmgr-heartbeat-timeout-ms",
@@ -168,8 +160,6 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "125",
                  "--revive-cellappmgr-missing-audit-threshold",
                  "4",
-                 "--revive-leader-lock-path",
-                 "run/reviver_cellappmgr.lock",
                  "--revive-cellappmgr-on-start",
                  "true",
                  "--revive-baseappmgr-exe",
@@ -184,8 +174,6 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "30",
                  "--revive-baseappmgr-launch-timeout-ms",
                  "700",
-                 "--revive-baseappmgr-leader-lock-path",
-                 "run/reviver_baseappmgr.lock",
                  "--revive-baseappmgr-on-start",
                  "true"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
@@ -200,17 +188,12 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
   EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
-  EXPECT_EQ(r->revive_leader_lock_mode, "machined");
-  EXPECT_EQ(r->revive_leader_lock_ttl_ms, 9000);
-  EXPECT_EQ(r->revive_leader_lock_renew_ms, 3500);
-  EXPECT_EQ(r->revive_leader_lock_failure_threshold, 5);
   EXPECT_EQ(r->revive_cellappmgr_health_interval_ms, 100);
   EXPECT_EQ(r->revive_cellappmgr_heartbeat_timeout_ms, 900);
   EXPECT_EQ(r->revive_cellappmgr_manager_health_timeout_ms, 450);
   EXPECT_EQ(r->revive_cellappmgr_health_failure_threshold, 3);
   EXPECT_EQ(r->revive_cellappmgr_audit_interval_ms, 125);
   EXPECT_EQ(r->revive_cellappmgr_missing_audit_threshold, 4);
-  EXPECT_EQ(r->revive_leader_lock_path, std::filesystem::path("run/reviver_cellappmgr.lock"));
   EXPECT_TRUE(r->revive_cellappmgr_on_start);
   EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
   EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
@@ -219,8 +202,6 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
             std::filesystem::path("logs/revived_baseappmgr.log"));
   EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
   EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
-  EXPECT_EQ(r->revive_baseappmgr_leader_lock_path,
-            std::filesystem::path("run/reviver_baseappmgr.lock"));
   EXPECT_TRUE(r->revive_baseappmgr_on_start);
 }
 
@@ -241,11 +222,6 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
             "restart_delay_ms": 75,
             "restart_backoff_cap_ms": 8000,
             "max_restarts": 7,
-            "leader_lock_mode": "machined",
-            "leader_lock_ttl_ms": 9000,
-            "leader_lock_renew_ms": 3500,
-            "leader_lock_failure_threshold": 5,
-            "leader_lock_path": "run/reviver_cellappmgr.lock",
             "cellappmgr": {
                 "exe": "bin/atlas_cellappmgr.exe",
                 "name": "cellappmgr_a",
@@ -268,7 +244,6 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
                 "output_path": "logs/revived_baseappmgr.log",
                 "update_hertz": 30,
                 "launch_timeout_ms": 700,
-                "leader_lock_path": "run/reviver_baseappmgr.lock",
                 "on_start": true
             }
         }
@@ -278,11 +253,6 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
   EXPECT_EQ(r->revive_restart_backoff_cap_ms, 8000);
   EXPECT_EQ(r->revive_max_restarts, 7);
-  EXPECT_EQ(r->revive_leader_lock_mode, "machined");
-  EXPECT_EQ(r->revive_leader_lock_ttl_ms, 9000);
-  EXPECT_EQ(r->revive_leader_lock_renew_ms, 3500);
-  EXPECT_EQ(r->revive_leader_lock_failure_threshold, 5);
-  EXPECT_EQ(r->revive_leader_lock_path, std::filesystem::path("run/reviver_cellappmgr.lock"));
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
@@ -304,8 +274,6 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
             std::filesystem::path("logs/revived_baseappmgr.log"));
   EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
   EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
-  EXPECT_EQ(r->revive_baseappmgr_leader_lock_path,
-            std::filesystem::path("run/reviver_baseappmgr.lock"));
   EXPECT_TRUE(r->revive_baseappmgr_on_start);
 }
 

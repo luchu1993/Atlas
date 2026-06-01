@@ -192,23 +192,6 @@ void MachinedClient::ExpirePendingRequests() {
     if (pending.cb) pending.cb(false, pending.target_name, {});
   }
 
-  std::vector<PendingLease> expired_leases;
-  for (auto it = pending_leases_.begin(); it != pending_leases_.end();) {
-    if (now - it->second.issued_at < request_timeout_) {
-      ++it;
-      continue;
-    }
-    expired_leases.push_back(std::move(it->second));
-    it = pending_leases_.erase(it);
-  }
-  for (auto& pending : expired_leases) {
-    if (pending.cb) {
-      LeaseResult r;
-      r.success = false;
-      r.error = "lease request timed out";
-      pending.cb(std::move(r));
-    }
-  }
 }
 
 void MachinedClient::FailPendingRequests() {
@@ -229,20 +212,6 @@ void MachinedClient::FailPendingRequests() {
     if (pending.cb) pending.cb(false, pending.target_name, {});
   }
 
-  std::vector<PendingLease> pending_leases;
-  pending_leases.reserve(pending_leases_.size());
-  for (auto& [_, pending] : pending_leases_) {
-    pending_leases.push_back(std::move(pending));
-  }
-  pending_leases_.clear();
-  for (auto& pending : pending_leases) {
-    if (pending.cb) {
-      LeaseResult r;
-      r.success = false;
-      r.error = "machined disconnected";
-      pending.cb(std::move(r));
-    }
-  }
 }
 
 void MachinedClient::MaybeReconnect() {
@@ -407,78 +376,6 @@ void MachinedClient::RequestShutdownTarget(ProcessType target_type, std::string_
   }
 }
 
-auto MachinedClient::SendLeaseRequest(machined::LeaseOp op, std::string_view key,
-                                      std::string_view holder_id, uint32_t ttl_ms,
-                                      LeaseCallback cb) -> uint32_t {
-  if (!IsConnected()) {
-    if (cb) {
-      LeaseResult r;
-      r.success = false;
-      r.error = "machined not connected";
-      cb(std::move(r));
-    }
-    return 0;
-  }
-  uint32_t rid = next_lease_request_id_++;
-  if (cb) {
-    pending_leases_.emplace(rid, PendingLease{std::move(cb), Clock::now()});
-  }
-
-  machined::LeaseRequest msg;
-  msg.request_id = rid;
-  msg.op = op;
-  msg.key = std::string(key);
-  msg.holder_id = std::string(holder_id);
-  msg.ttl_ms = ttl_ms;
-
-  if (auto r = channel_->SendMessage(msg); !r) {
-    ATLAS_LOG_ERROR("MachinedClient: failed to send lease request: {}", r.Error().Message());
-    auto it = pending_leases_.find(rid);
-    if (it != pending_leases_.end()) {
-      auto pending = std::move(it->second);
-      pending_leases_.erase(it);
-      if (pending.cb) {
-        LeaseResult res;
-        res.success = false;
-        res.error = std::string(r.Error().Message());
-        pending.cb(std::move(res));
-      }
-    }
-  }
-  return rid;
-}
-
-auto MachinedClient::AcquireLease(std::string_view key, std::string_view holder_id,
-                                  uint32_t ttl_ms, LeaseCallback cb) -> uint32_t {
-  return SendLeaseRequest(machined::LeaseOp::kAcquire, key, holder_id, ttl_ms, std::move(cb));
-}
-
-auto MachinedClient::RenewLease(std::string_view key, std::string_view holder_id, uint32_t ttl_ms,
-                                LeaseCallback cb) -> uint32_t {
-  return SendLeaseRequest(machined::LeaseOp::kRenew, key, holder_id, ttl_ms, std::move(cb));
-}
-
-auto MachinedClient::ReleaseLease(std::string_view key, std::string_view holder_id,
-                                  LeaseCallback cb) -> uint32_t {
-  return SendLeaseRequest(machined::LeaseOp::kRelease, key, holder_id, 0, std::move(cb));
-}
-
-void MachinedClient::OnLeaseResponse(const Address& /*src*/, Channel* /*ch*/,
-                                     const machined::LeaseResponse& msg) {
-  auto it = pending_leases_.find(msg.request_id);
-  if (it == pending_leases_.end()) return;
-  auto pending = std::move(it->second);
-  pending_leases_.erase(it);
-  if (pending.cb) {
-    LeaseResult r;
-    r.success = msg.success;
-    r.current_holder = msg.current_holder;
-    r.current_holder_expires_in_ms = msg.current_holder_expires_in_ms;
-    r.error = msg.error;
-    pending.cb(std::move(r));
-  }
-}
-
 void MachinedClient::RegisterHandlers() {
   auto& table = network_.InterfaceTable();
 
@@ -517,10 +414,6 @@ void MachinedClient::RegisterHandlers() {
         OnWatcherResponse(src, ch, msg);
       });
 
-  (void)table.RegisterTypedHandler<machined::LeaseResponse>(
-      [this](const Address& src, Channel* ch, const machined::LeaseResponse& msg) {
-        OnLeaseResponse(src, ch, msg);
-      });
 }
 
 void MachinedClient::OnRegisterAck(const Address& src, Channel* /*ch*/,
