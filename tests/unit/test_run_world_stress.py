@@ -30,10 +30,7 @@ class ReviverSpecTest(unittest.TestCase):
             reviver_heartbeat_timeout_ms=4000,
             reviver_restart_delay_ms=1000,
             reviver_max_restarts=3,
-            reviver_leader_lock_mode="local",
-            reviver_leader_lock_ttl_ms=8000,
-            reviver_leader_lock_renew_ms=3000,
-            cellappmgr_snapshot_interval_ms=250,
+            reviver_priority=255,
         )
 
     def test_builds_unique_reviver_specs(self) -> None:
@@ -58,7 +55,7 @@ class ReviverSpecTest(unittest.TestCase):
             ],
         )
 
-    def test_reviver_args_share_snapshot_and_leader_lock(self) -> None:
+    def test_reviver_args_carry_identity_output_and_priority(self) -> None:
         args = self.args()
         specs = run_world_stress.build_reviver_specs(args)
 
@@ -67,44 +64,31 @@ class ReviverSpecTest(unittest.TestCase):
             specs[1],
             "127.0.0.1:20018",
             Path("atlas_cellappmgr.exe"),
-            Path("ha/cellappmgr.bin"),
-            Path("ha/reviver.lock"),
             Path("logs/cellappmgr_revived.log"),
         )
 
         self.assertIn("reviver_01", reviver_args)
         self.assertIn("27011", reviver_args)
-        self.assertEqual(
-            reviver_args.count("--revive-cellappmgr-snapshot-path"),
-            1,
-        )
-        self.assertIn(str(Path("ha/cellappmgr.bin")), reviver_args)
-        self.assertIn(str(Path("ha/reviver.lock")), reviver_args)
         self.assertIn(str(Path("logs/cellappmgr_revived.log")), reviver_args)
-        # leader lock mode defaults preserved
-        self.assertIn("--revive-leader-lock-mode", reviver_args)
-        self.assertIn("local", reviver_args)
+        # ReviverPriority drives the subject's arbitration (no leader lock).
+        self.assertIn("--revive-cellappmgr-priority", reviver_args)
+        self.assertIn("255", reviver_args)
+        # The removed snapshot / lease flags must not resurface.
+        self.assertNotIn("--revive-cellappmgr-snapshot-path", reviver_args)
+        self.assertNotIn("--revive-leader-lock-mode", reviver_args)
 
-    def test_machined_lease_mode_passes_through(self) -> None:
+    def test_custom_priority_flows_through(self) -> None:
         args = self.args()
-        args.reviver_leader_lock_mode = "machined"
-        args.reviver_leader_lock_ttl_ms = 9500
-        args.reviver_leader_lock_renew_ms = 3200
+        args.reviver_priority = 200
         specs = run_world_stress.build_reviver_specs(args)
 
         reviver_args = run_world_stress.build_reviver_args(
             args, specs[0], "127.0.0.1:20018",
-            Path("atlas_cellappmgr.exe"), Path("ha/cellappmgr.bin"),
-            Path("ha/reviver.lock"), Path("logs/cellappmgr_revived.log"),
+            Path("atlas_cellappmgr.exe"), Path("logs/cellappmgr_revived.log"),
         )
 
-        # mode + ttl + renew all flow through to the spawned reviver CLI.
-        self.assertIn("--revive-leader-lock-mode", reviver_args)
-        self.assertIn("machined", reviver_args)
-        self.assertIn("--revive-leader-lock-ttl-ms", reviver_args)
-        self.assertIn("9500", reviver_args)
-        self.assertIn("--revive-leader-lock-renew-ms", reviver_args)
-        self.assertIn("3200", reviver_args)
+        self.assertIn("--revive-cellappmgr-priority", reviver_args)
+        self.assertIn("200", reviver_args)
 
 
 if __name__ == "__main__":

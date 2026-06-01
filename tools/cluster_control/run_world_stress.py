@@ -100,7 +100,7 @@ def parse_args() -> argparse.Namespace:
         "--cellappmgr-reviver-count",
         type=int,
         default=1,
-        help="Number of Reviver processes to start; >1 shares the leader lock as standby.",
+        help="Number of Reviver processes to start; >1 stand by via priority arbitration.",
     )
     parser.add_argument(
         "--reviver-port-stride",
@@ -108,29 +108,16 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Internal port stride for additional Reviver processes.",
     )
-    parser.add_argument(
-        "--cellappmgr-snapshot-path",
-        default=None,
-        help="CellAppMgr HA snapshot path. Defaults under .tmp when Reviver is enabled.",
-    )
-    parser.add_argument("--cellappmgr-snapshot-interval-ms", type=int, default=250)
-    parser.add_argument(
-        "--reviver-leader-lock-path",
-        default=None,
-        help="Reviver leader lock path. Defaults under .tmp when Reviver is enabled.",
-    )
     parser.add_argument("--reviver-restart-delay-ms", type=int, default=1000)
     parser.add_argument("--reviver-heartbeat-timeout-ms", type=int, default=4000)
     parser.add_argument("--reviver-max-restarts", type=int, default=3)
     parser.add_argument(
-        "--reviver-leader-lock-mode",
-        choices=("local", "machined"),
-        default="local",
-        help="Reviver leader lock backend: 'local' file lock (default, single host) or "
-             "'machined' distributed lease (cross-host capable).",
+        "--reviver-priority",
+        type=int,
+        default=255,
+        help="ReviverPriority (0-255, higher wins); the monitored Manager designates "
+             "the highest-priority live Reviver as the active monitor.",
     )
-    parser.add_argument("--reviver-leader-lock-ttl-ms", type=int, default=8000)
-    parser.add_argument("--reviver-leader-lock-renew-ms", type=int, default=3000)
     parser.add_argument("--clients", type=int, default=0)
     parser.add_argument("--account-pool", type=int, default=0)
     parser.add_argument("--account-index-base", type=int, default=0)
@@ -1160,8 +1147,6 @@ def build_reviver_args(
     spec: dict[str, object],
     machined_address: str,
     cellappmgr: Path,
-    cellappmgr_snapshot_path: Path | None,
-    reviver_leader_lock_path: Path | None,
     revived_cellappmgr_output_path: Path | None,
 ) -> list[str]:
     reviver_args = [
@@ -1193,25 +1178,11 @@ def build_reviver_args(
         str(args.reviver_restart_delay_ms),
         "--revive-max-restarts",
         str(args.reviver_max_restarts),
+        "--revive-cellappmgr-priority",
+        str(args.reviver_priority),
         "--log-level",
         "info",
     ]
-    if cellappmgr_snapshot_path is not None:
-        reviver_args.extend(
-            [
-                "--revive-cellappmgr-snapshot-path",
-                str(cellappmgr_snapshot_path),
-                "--revive-cellappmgr-snapshot-interval-ms",
-                str(args.cellappmgr_snapshot_interval_ms),
-            ]
-        )
-    if reviver_leader_lock_path is not None:
-        reviver_args.extend(["--revive-leader-lock-path", str(reviver_leader_lock_path)])
-    reviver_args.extend([
-        "--revive-leader-lock-mode", args.reviver_leader_lock_mode,
-        "--revive-leader-lock-ttl-ms", str(args.reviver_leader_lock_ttl_ms),
-        "--revive-leader-lock-renew-ms", str(args.reviver_leader_lock_renew_ms),
-    ])
     return reviver_args
 
 
@@ -1286,23 +1257,10 @@ def main() -> int:
     run_root = repo_root / ".tmp" / "world-stress" / timestamp
     log_dir = run_root / "logs"
     db_dir = run_root / "db"
-    ha_dir = run_root / "ha"
     db_config_path = run_root / "dbapp.json"
     revived_cellappmgr_output_path = (
         log_dir / "cellappmgr_revived.log" if args.with_cellappmgr_reviver else None
     )
-    cellappmgr_snapshot_path = resolve_optional_path(
-        repo_root, args.cellappmgr_snapshot_path
-    )
-    reviver_leader_lock_path = resolve_optional_path(
-        repo_root, args.reviver_leader_lock_path
-    )
-    if args.with_cellappmgr_reviver:
-        if cellappmgr_snapshot_path is None:
-            cellappmgr_snapshot_path = ha_dir / "cellappmgr.bin"
-        if reviver_leader_lock_path is None:
-            reviver_leader_lock_path = ha_dir / "reviver_cellappmgr.lock"
-
     capture_exe: Path | None = None
     capture_dir: Path | None = None
     if args.capture_dir:
@@ -1316,10 +1274,6 @@ def main() -> int:
 
     log_dir.mkdir(parents=True, exist_ok=True)
     db_dir.mkdir(parents=True, exist_ok=True)
-    if cellappmgr_snapshot_path is not None:
-        cellappmgr_snapshot_path.parent.mkdir(parents=True, exist_ok=True)
-    if reviver_leader_lock_path is not None:
-        reviver_leader_lock_path.parent.mkdir(parents=True, exist_ok=True)
 
     machined_address = f"{args.machined_host}:{args.machined_port}"
     db_config_path.write_text(
@@ -1437,15 +1391,6 @@ def main() -> int:
             "--log-level",
             "info",
         ]
-        if cellappmgr_snapshot_path is not None:
-            cellappmgr_args.extend(
-                [
-                    "--snapshot-path",
-                    str(cellappmgr_snapshot_path),
-                    "--snapshot-interval-ms",
-                    str(args.cellappmgr_snapshot_interval_ms),
-                ]
-            )
         processes.append(
             start_logged_process(
                 name="cellappmgr",
@@ -1471,8 +1416,6 @@ def main() -> int:
                             reviver_spec,
                             machined_address,
                             cellappmgr,
-                            cellappmgr_snapshot_path,
-                            reviver_leader_lock_path,
                             revived_cellappmgr_output_path,
                         ),
                     )
