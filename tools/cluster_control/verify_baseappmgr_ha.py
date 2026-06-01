@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Validate BaseAppMgr HA restart on a live Atlas cluster.
 
-Mirrors verify_cellappmgr_ha.py for the BaseAppMgr target — drives
-abnormal shutdown via machined, waits for the Reviver to relaunch
-BaseAppMgr, and checks that the new mgr restored its snapshot,
-re-acquired heartbeats, and the surviving BaseApps reattached.
+Mirrors verify_cellappmgr_ha.py for the BaseAppMgr target. Drives an
+abnormal shutdown via machined, waits for the active Reviver to relaunch
+BaseAppMgr, and checks the worker-rebuild recovery: the surviving BaseApps
+re-register with the fresh mgr (no snapshot, no reattach handshake) and the
+Reviver re-acquires heartbeats against the new pid.
+
+Reviver arbitration is soft: every Reviver pings the mgr, which designates
+the highest-priority live Reviver as the active monitor (reviver/.../priority
+and reviver/.../active_reviver). Failover kills the active monitor and a
+standby takes over without restarting the mgr.
 
 Required cluster shape: at least one Reviver supervising BaseAppMgr
 (needs --revive-baseappmgr-on-start true on the Reviver process).
@@ -22,11 +28,11 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterable, Optional
+from typing import Callable, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 PROC_RE = re.compile(
     r"^(?P<type>\w+)\s+(?P<name>\S+)\s+(?P<addr>\S+)\s+(?P<pid>\d+)\s+(?P<load>[\d.]+)%"
@@ -51,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--baseappmgr-name", default="baseappmgr",
                    help="target BaseAppMgr name (default: baseappmgr)")
     p.add_argument("--reviver-name", default="",
-                   help="target Reviver name (default: <single registered>)")
+                   help="target Reviver name (default: active monitor)")
     p.add_argument("--min-revivers", type=int, default=1,
                    help="minimum registered Revivers (default: 1)")
     p.add_argument("--min-baseapps", type=int, default=1,
@@ -59,26 +65,25 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--timeout-sec", type=float, default=60.0)
     p.add_argument("--poll-sec", type=float, default=1.0)
     p.add_argument("--stability-sec", type=float, default=5.0,
-                   help="post-restore window that must not show another Reviver restart")
+                   help="post-recovery window that must not show another Reviver relaunch")
     p.add_argument("--cycles", type=int, default=1,
                    help="number of abnormal BaseAppMgr restart cycles to inject (default: 1)")
     p.add_argument("--max-takeover-ms", type=int, default=0,
-                   help="maximum allowed shutdown-to-fresh-snapshot takeover time; 0 disables")
+                   help="maximum allowed shutdown-to-worker-rebuild takeover time; 0 disables")
     p.add_argument("--shutdown-reason", type=int, default=1,
                    help="machined shutdown reason (default: 1)")
-    p.add_argument("--allow-empty-snapshot", action="store_true",
-                   help="do not require baseappmgr/ha/snapshot_path or snapshot_saves > 0")
+    p.add_argument("--allow-empty-cluster", action="store_true",
+                   help="do not require baseapp_count to recover to the pre-kill survivor count")
     p.add_argument("--no-inject", action="store_true",
                    help="only verify current watchers without shutting down BaseAppMgr")
     p.add_argument("--verify-reviver-failover", action="store_true",
-                   help="kill the active Reviver leader and require standby to take over the"
+                   help="kill the active Reviver monitor and require a standby to take over the"
                         " BaseAppMgr without restarting it (requires --min-revivers >= 2)")
     p.add_argument("--max-reviver-failover-ms", type=int, default=0,
-                   help="max allowed shutdown-to-new-leader latency; 0 disables")
-    p.add_argument("--check-leader-lock-mode", default="",
-                   help="if non-empty, require reviver/baseappmgr/leader/mode to equal this"
-                        " value (e.g. 'machined') and (for 'machined') lease_renew_count to"
-                        " grow during the stability window")
+                   help="max allowed shutdown-to-new-monitor latency; 0 disables")
+    p.add_argument("--check-active-reviver", action="store_true",
+                   help="require the selected Reviver to be the mgr-designated active monitor"
+                        " (reviver/baseappmgr/active_reviver == true)")
     p.add_argument("--summary-json", type=Path, default=None,
                    help="write a machine-readable summary JSON after checks complete")
     return p.parse_args()
@@ -169,29 +174,10 @@ def summary_has(fields: "OrderedDict[str, str]", key: str, value: str) -> bool:
 
 
 @dataclass
-class SnapshotHealth:
-    saves: int
-    restores: int
-    fallback_restores: int
-    save_failures: int
-    restore_failures: int
-    failures: int
-    backup_skips: int
-    dirty: bool
-    save_stale: bool
-    status: str
-    healthy: bool
-    detail: str
-
-
-@dataclass
-class ReattachHealth:
-    restored: int
-    pending: int
-    completed_count: int
-    stuck: int
-    state: str
-    status: str
+class WorkerRebuildHealth:
+    baseapp_count: int
+    expected: int
+    recovered: bool
     healthy: bool
     detail: str
 
@@ -204,6 +190,8 @@ class ReviverHealth:
     launch_count: int
     heartbeat_acks: int
     heartbeat_last_ack_age_ms: int
+    priority: int
+    active_reviver: bool
     last_error: str
     status: str
     healthy: bool
@@ -211,23 +199,20 @@ class ReviverHealth:
 
 
 @dataclass
-class LeaderLockHealth:
-    mode: str
-    holder_id: str
-    leader_active: bool
-    acquire_count: int
-    lease_renew_count: int
-    lease_failure_count: int
+class ArbitrationHealth:
+    priority: int
+    active_reviver: bool
     healthy: bool
     detail: str
 
 
 @dataclass
 class ReviverFailoverResult:
-    old_leader: str
-    new_leader: str
+    old_monitor: str
+    new_monitor: str
     old_pid: int
     new_pid: int
+    new_priority: int
     manager_pid: int
     elapsed_ms: int
     healthy: bool
@@ -240,66 +225,18 @@ class CycleResult:
     old_pid: int
     new_pid: int
     takeover_elapsed_ms: int
-    snapshot: SnapshotHealth | None
-    reattach: ReattachHealth | None
+    rebuild: WorkerRebuildHealth | None
     reviver: ReviverHealth | None
     healthy: bool
     failure_stages: list[str] = field(default_factory=list)
 
 
-def read_snapshot_health(exe: Path, machined: str, target: str) -> SnapshotHealth:
-    saves = int_watcher(exe, machined, target, "baseappmgr/ha/snapshot_saves")
-    restores = int_watcher(exe, machined, target, "baseappmgr/ha/snapshot_restores")
-    fallback_restores = int_watcher(exe, machined, target,
-                                    "baseappmgr/ha/snapshot_fallback_restores")
-    save_failures = int_watcher(exe, machined, target, "baseappmgr/ha/snapshot_save_failures")
-    restore_failures = int_watcher(exe, machined, target,
-                                   "baseappmgr/ha/snapshot_restore_failures")
-    failures = int_watcher(exe, machined, target, "baseappmgr/ha/snapshot_failures")
-    backup_skips = int_watcher(exe, machined, target, "baseappmgr/ha/snapshot_backup_skips")
-    dirty = watcher_value(exe, machined, target, "baseappmgr/ha/snapshot_dirty") == "true"
-    save_stale = watcher_value(exe, machined, target, "baseappmgr/ha/snapshot_save_stale") == "true"
-    status = watcher_value(exe, machined, target, "baseappmgr/ha/snapshot_status")
-    fields = summary_fields(status)
-    healthy = (
-        save_failures == 0
-        and restore_failures == 0
-        and failures == 0
-        and not save_stale
-        and not dirty
-        and summary_has(fields, "error_present", "0")
-    )
-    detail = (
-        f"saves={saves} restores={restores} fallback_restores={fallback_restores}"
-        f" save_failures={save_failures} restore_failures={restore_failures}"
-        f" failures={failures} backup_skips={backup_skips} dirty={dirty}"
-        f" save_stale={save_stale} status={status}"
-    )
-    return SnapshotHealth(saves, restores, fallback_restores, save_failures, restore_failures,
-                          failures, backup_skips, dirty, save_stale, status, healthy, detail)
-
-
-def read_reattach_health(exe: Path, machined: str, target: str,
-                         require_restored: bool, min_baseapps: int) -> ReattachHealth:
-    restored = int_watcher(exe, machined, target, "baseappmgr/ha/restored_baseapps")
-    pending = int_watcher(exe, machined, target, "baseappmgr/ha/reattach_pending")
-    completed_count = int_watcher(exe, machined, target,
-                                  "baseappmgr/ha/reattach_completed_count")
-    stuck = int_watcher(exe, machined, target, "baseappmgr/ha/reattach_stuck")
-    state = watcher_value(exe, machined, target, "baseappmgr/ha/reattach_state")
-    status = watcher_value(exe, machined, target, "baseappmgr/ha/reattach_status")
-    expected_state = ("stuck" if stuck else "pending" if pending
-                      else "complete" if restored else "idle")
-    counts_ok = pending == 0 and completed_count == restored
-    if require_restored:
-        counts_ok = counts_ok and restored >= min_baseapps
-    healthy = counts_ok and stuck == 0 and state == expected_state
-    detail = (
-        f"restored={restored} pending={pending} completed_count={completed_count}"
-        f" stuck={stuck} state={state}/{expected_state} status={status}"
-    )
-    return ReattachHealth(restored, pending, completed_count, stuck, state, status, healthy,
-                          detail)
+def read_worker_rebuild_health(exe: Path, machined: str, mgr_target: str,
+                               expected: int) -> WorkerRebuildHealth:
+    count = int_watcher(exe, machined, mgr_target, "baseappmgr/baseapp_count")
+    recovered = count >= expected
+    detail = f"baseapp_count={count} expected>={expected} recovered={recovered}"
+    return WorkerRebuildHealth(count, expected, recovered, recovered, detail)
 
 
 def read_reviver_health(exe: Path, machined: str, target: str,
@@ -311,6 +248,9 @@ def read_reviver_health(exe: Path, machined: str, target: str,
     launch_count = int_watcher(exe, machined, target, "reviver/baseappmgr/launch_count")
     heartbeat_acks = int_watcher(exe, machined, target, "reviver/baseappmgr/heartbeat_acks")
     age_ms = int_watcher(exe, machined, target, "reviver/baseappmgr/heartbeat_last_ack_age_ms")
+    priority = int_watcher(exe, machined, target, "reviver/baseappmgr/priority")
+    active_reviver = watcher_value(exe, machined, target,
+                                   "reviver/baseappmgr/active_reviver") == "true"
     last_error = watcher_value(exe, machined, target, "reviver/baseappmgr/last_error")
     status = watcher_value(exe, machined, target, "reviver/baseappmgr/status")
     pid_ok = require_active_pid is None or active_pid == require_active_pid
@@ -318,52 +258,36 @@ def read_reviver_health(exe: Path, machined: str, target: str,
     detail = (
         f"active={active} active_pid={active_pid} active_generation={active_generation}"
         f" launch_count={launch_count} heartbeat_acks={heartbeat_acks}"
-        f" heartbeat_last_ack_age_ms={age_ms} last_error={last_error} status={status}"
+        f" heartbeat_last_ack_age_ms={age_ms} priority={priority}"
+        f" active_reviver={active_reviver} last_error={last_error} status={status}"
     )
     return ReviverHealth(active, active_pid, active_generation, launch_count, heartbeat_acks,
-                          age_ms, last_error, status, healthy, detail)
+                         age_ms, priority, active_reviver, last_error, status, healthy, detail)
 
 
-def read_leader_lock_health(exe: Path, machined: str, target: str,
-                            required_mode: str) -> LeaderLockHealth:
-    mode = watcher_value(exe, machined, target, "reviver/baseappmgr/leader/mode")
-    holder = watcher_value(exe, machined, target, "reviver/baseappmgr/leader/holder_id")
-    leader_active = watcher_value(exe, machined, target,
-                                   "reviver/baseappmgr/leader/active") == "true"
-    acquire_count = int_watcher(exe, machined, target,
-                                "reviver/baseappmgr/leader/acquire_count")
-    renew_count = int_watcher(exe, machined, target,
-                              "reviver/baseappmgr/leader/lease_renew_count")
-    failure_count = int_watcher(exe, machined, target,
-                                "reviver/baseappmgr/leader/lease_failure_count")
-    healthy = True
-    detail_parts = [
-        f"mode={mode}", f"leader_active={leader_active}", f"acquire_count={acquire_count}",
-        f"lease_renew_count={renew_count}", f"lease_failure_count={failure_count}"
-    ]
-    if required_mode and mode != required_mode:
-        healthy = False
-        detail_parts.append(f"required_mode={required_mode} mismatch")
-    if required_mode == "machined" and not leader_active:
-        healthy = False
-        detail_parts.append("leader not active under machined mode")
-    detail = " ".join(detail_parts)
-    return LeaderLockHealth(mode, holder, leader_active, acquire_count, renew_count,
-                            failure_count, healthy, detail)
+def read_arbitration_health(exe: Path, machined: str, target: str) -> ArbitrationHealth:
+    priority = int_watcher(exe, machined, target, "reviver/baseappmgr/priority")
+    active_reviver = watcher_value(exe, machined, target,
+                                   "reviver/baseappmgr/active_reviver") == "true"
+    detail = f"priority={priority} active_reviver={active_reviver}"
+    return ArbitrationHealth(priority, active_reviver, active_reviver, detail)
 
 
-def list_revivers_with_leadership(exe: Path, machined: str) -> list[dict[str, str]]:
+def list_revivers_with_arbitration(exe: Path, machined: str) -> list[dict[str, str]]:
     revivers = list_processes(exe, machined, "reviver")
     enriched: list[dict[str, str]] = []
     for r in revivers:
         target = f"reviver:{r['name']}"
         try:
-            r["baseappmgr_leader_active"] = watcher_value(
-                exe, machined, target, "reviver/baseappmgr/leader/active")
+            r["baseappmgr_active_reviver"] = watcher_value(
+                exe, machined, target, "reviver/baseappmgr/active_reviver")
+            r["baseappmgr_priority"] = watcher_value(
+                exe, machined, target, "reviver/baseappmgr/priority")
             r["baseappmgr_active_pid"] = watcher_value(
                 exe, machined, target, "reviver/baseappmgr/active_pid")
         except RuntimeError:
-            r["baseappmgr_leader_active"] = ""
+            r["baseappmgr_active_reviver"] = ""
+            r["baseappmgr_priority"] = "0"
             r["baseappmgr_active_pid"] = "0"
         enriched.append(r)
     return enriched
@@ -371,62 +295,64 @@ def list_revivers_with_leadership(exe: Path, machined: str) -> list[dict[str, st
 
 def run_reviver_failover(args: argparse.Namespace, exe: Path,
                          manager_pid: int) -> ReviverFailoverResult:
-    revivers = list_revivers_with_leadership(exe, args.machined)
+    revivers = list_revivers_with_arbitration(exe, args.machined)
     if len(revivers) < 2:
         raise RuntimeError(
             f"reviver failover requires >= 2 Revivers; found {len(revivers)}")
-    leaders = [r for r in revivers if r["baseappmgr_leader_active"] == "true"]
-    if len(leaders) == 0:
-        raise RuntimeError("no Reviver currently holds the BaseAppMgr leader lock")
-    if len(leaders) > 1:
+    monitors = [r for r in revivers if r["baseappmgr_active_reviver"] == "true"]
+    if len(monitors) == 0:
+        raise RuntimeError("no Reviver is currently the active BaseAppMgr monitor")
+    if len(monitors) > 1:
         raise RuntimeError(
-            f"multiple Revivers hold BaseAppMgr leader lock: "
-            f"{[r['name'] for r in leaders]}")
-    leader = leaders[0]
-    standbys = [r for r in revivers if r is not leader]
+            f"multiple Revivers claim active BaseAppMgr monitor: "
+            f"{[r['name'] for r in monitors]}")
+    monitor = monitors[0]
+    standbys = [r for r in revivers if r is not monitor]
 
     start = time.monotonic()
     try:
-        shutdown_process(exe, args.machined, f"reviver:{leader['name']}",
+        shutdown_process(exe, args.machined, f"reviver:{monitor['name']}",
                          args.shutdown_reason)
     except RuntimeError as ex:
-        raise RuntimeError(f"failed to shutdown leader Reviver: {ex}") from ex
+        raise RuntimeError(f"failed to shutdown active monitor Reviver: {ex}") from ex
 
     def check():
         try:
-            current = list_revivers_with_leadership(exe, args.machined)
+            current = list_revivers_with_arbitration(exe, args.machined)
         except RuntimeError as ex:
             return False, str(ex)
-        new_leaders = [r for r in current if r["baseappmgr_leader_active"] == "true"
-                       and r["name"] != leader["name"]]
-        if len(new_leaders) == 1:
-            return True, new_leaders[0]
-        return False, f"waiting for standby takeover; leaders={[r['name'] for r in new_leaders]}"
+        new_monitors = [r for r in current if r["baseappmgr_active_reviver"] == "true"
+                        and r["name"] != monitor["name"]]
+        if len(new_monitors) == 1:
+            return True, new_monitors[0]
+        return False, f"waiting for standby takeover; monitors={[r['name'] for r in new_monitors]}"
 
-    new_leader = wait_until(args.timeout_sec, args.poll_sec, check)
+    new_monitor = wait_until(args.timeout_sec, args.poll_sec, check)
     elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    # Confirm the BaseAppMgr did NOT restart — pid should match.
+    # A standby adopts the live mgr; it must NOT restart it — pid stays put.
     try:
         mgr = select_baseappmgr(exe, args)
         new_mgr_pid = int(mgr["pid"])
     except RuntimeError as ex:
         return ReviverFailoverResult(
-            old_leader=leader["name"], new_leader=new_leader["name"],
-            old_pid=int(leader["pid"]), new_pid=int(new_leader["pid"]),
+            old_monitor=monitor["name"], new_monitor=new_monitor["name"],
+            old_pid=int(monitor["pid"]), new_pid=int(new_monitor["pid"]),
+            new_priority=int(new_monitor["baseappmgr_priority"] or 0),
             manager_pid=manager_pid, elapsed_ms=elapsed_ms, healthy=False,
             detail=f"manager lookup failed after failover: {ex}")
     pid_unchanged = new_mgr_pid == manager_pid
     healthy = pid_unchanged
     detail = (
-        f"old_leader={leader['name']} new_leader={new_leader['name']}"
-        f" old_pid={leader['pid']} new_pid={new_leader['pid']}"
+        f"old_monitor={monitor['name']} new_monitor={new_monitor['name']}"
+        f" new_priority={new_monitor['baseappmgr_priority']}"
         f" manager_pid={manager_pid}/{new_mgr_pid} pid_unchanged={pid_unchanged}"
         f" elapsed_ms={elapsed_ms} surviving_standbys={len(standbys) - 1}"
     )
     return ReviverFailoverResult(
-        old_leader=leader["name"], new_leader=new_leader["name"],
-        old_pid=int(leader["pid"]), new_pid=int(new_leader["pid"]),
+        old_monitor=monitor["name"], new_monitor=new_monitor["name"],
+        old_pid=int(monitor["pid"]), new_pid=int(new_monitor["pid"]),
+        new_priority=int(new_monitor["baseappmgr_priority"] or 0),
         manager_pid=manager_pid, elapsed_ms=elapsed_ms, healthy=healthy, detail=detail)
 
 
@@ -442,23 +368,11 @@ def wait_for_reviver_target(args: argparse.Namespace, exe: Path,
     return wait_until(args.timeout_sec, args.poll_sec, check)
 
 
-def wait_for_snapshot_health(args: argparse.Namespace, exe: Path,
-                             mgr_target: str, baseline_saves: int) -> SnapshotHealth:
+def wait_for_worker_rebuild(args: argparse.Namespace, exe: Path, mgr_target: str,
+                            expected: int) -> WorkerRebuildHealth:
     def check():
         try:
-            h = read_snapshot_health(exe, args.machined, mgr_target)
-            return h.healthy and h.saves > baseline_saves, h
-        except RuntimeError as ex:
-            return False, str(ex)
-    return wait_until(args.timeout_sec, args.poll_sec, check)
-
-
-def wait_for_reattach(args: argparse.Namespace, exe: Path, mgr_target: str,
-                      require_restored: bool) -> ReattachHealth:
-    def check():
-        try:
-            h = read_reattach_health(exe, args.machined, mgr_target, require_restored,
-                                     args.min_baseapps)
+            h = read_worker_rebuild_health(exe, args.machined, mgr_target, expected)
             return h.healthy, h
         except RuntimeError as ex:
             return False, str(ex)
@@ -479,11 +393,11 @@ def select_reviver(exe: Path, args: argparse.Namespace) -> dict[str, str]:
             if r["name"] == args.reviver_name:
                 return r
         raise RuntimeError(f"requested Reviver {args.reviver_name} not registered")
-    # Prefer the one with baseappmgr leader lock; otherwise first.
+    # Prefer the mgr-designated active monitor; otherwise first.
     for r in revivers:
         try:
             if watcher_value(exe, args.machined, f"reviver:{r['name']}",
-                             "reviver/baseappmgr/leader/active") == "true":
+                             "reviver/baseappmgr/active_reviver") == "true":
                 return r
         except RuntimeError:
             continue
@@ -510,41 +424,33 @@ def run_no_inject(args: argparse.Namespace, exe: Path,
     mgr_target = f"baseappmgr:{mgr['name']}"
     reviver_target = f"reviver:{reviver['name']}"
 
-    snapshot = read_snapshot_health(exe, args.machined, mgr_target)
-    reattach = read_reattach_health(exe, args.machined, mgr_target,
-                                     require_restored=False,
-                                     min_baseapps=args.min_baseapps)
+    expected = 0 if args.allow_empty_cluster else args.min_baseapps
+    rebuild = read_worker_rebuild_health(exe, args.machined, mgr_target, expected)
     reviver_health = read_reviver_health(exe, args.machined, reviver_target)
 
     summary["current"] = {
         "manager_pid": mgr["pid"],
         "reviver_name": reviver["name"],
-        "snapshot": _snapshot_to_dict(snapshot),
-        "reattach": _reattach_to_dict(reattach),
+        "rebuild": _rebuild_to_dict(rebuild),
         "reviver": _reviver_to_dict(reviver_health),
     }
 
     failure_stages: list[str] = []
-    if not args.allow_empty_snapshot and snapshot.saves == 0:
-        failure_stages.append("snapshot_saves_zero")
-    if not snapshot.healthy:
-        failure_stages.append("snapshot_unhealthy")
-    if not reattach.healthy:
-        failure_stages.append("reattach_unhealthy")
+    if not rebuild.healthy:
+        failure_stages.append("worker_rebuild_below_min")
     if not reviver_health.healthy:
         failure_stages.append("reviver_unhealthy")
+    if args.check_active_reviver and not reviver_health.active_reviver:
+        failure_stages.append("not_active_monitor")
 
     if not failure_stages:
         # post-check stability window
         time.sleep(args.stability_sec)
-        post_snapshot = read_snapshot_health(exe, args.machined, mgr_target)
         post_reviver = read_reviver_health(exe, args.machined, reviver_target)
-        if post_snapshot.save_failures > snapshot.save_failures:
-            failure_stages.append("stability_snapshot_save_failures")
-        if post_snapshot.restore_failures > snapshot.restore_failures:
-            failure_stages.append("stability_snapshot_restore_failures")
         if post_reviver.launch_count > reviver_health.launch_count:
             failure_stages.append("stability_reviver_relaunch")
+        if not post_reviver.healthy:
+            failure_stages.append("stability_reviver_unhealthy")
         summary["current"]["stability_healthy"] = len(failure_stages) == 0
     else:
         summary["current"]["stability_healthy"] = False
@@ -559,8 +465,10 @@ def run_cycle(args: argparse.Namespace, exe: Path, cycle: int,
     mgr_target = f"baseappmgr:{mgr['name']}"
     reviver_target = f"reviver:{reviver['name']}"
 
-    baseline_snapshot = read_snapshot_health(exe, args.machined, mgr_target)
-    baseline_reviver = read_reviver_health(exe, args.machined, reviver_target)
+    # Surviving BaseApps must reattach to the rebuilt mgr; the Reviver only
+    # relaunches the mgr, never the workers, so the pre-kill count is the bar.
+    pre_kill_baseapps = int_watcher(exe, args.machined, mgr_target, "baseappmgr/baseapp_count")
+    expected = 0 if args.allow_empty_cluster else max(args.min_baseapps, pre_kill_baseapps)
     start = time.monotonic()
     failure_stages: list[str] = []
 
@@ -569,7 +477,6 @@ def run_cycle(args: argparse.Namespace, exe: Path, cycle: int,
     except RuntimeError as ex:
         raise RuntimeError(f"shutdown failed: {ex}") from ex
 
-    # Wait for Reviver to retarget + new manager to register
     def manager_restarted():
         try:
             registered = list_processes(exe, args.machined, "baseappmgr")
@@ -584,44 +491,32 @@ def run_cycle(args: argparse.Namespace, exe: Path, cycle: int,
         return False, "manager not restarted yet"
     try:
         new_mgr = wait_until(args.timeout_sec, args.poll_sec, manager_restarted)
-    except RuntimeError as ex:
+    except RuntimeError:
         failure_stages.append("manager_restart")
         raise
 
     new_pid = int(new_mgr["pid"])
 
-    # Wait for Reviver to recognise the new manager and finish heartbeat handshake.
+    # Wait for the active monitor to recognise the new mgr and re-handshake.
     try:
         reviver_health = wait_for_reviver_target(args, exe, reviver_target, new_pid)
     except RuntimeError as ex:
         failure_stages.append("reviver_retarget")
         raise RuntimeError(f"Reviver did not retarget new BaseAppMgr: {ex}") from ex
 
-    # Wait for new manager to restore and write a fresh snapshot.
+    # Wait for surviving BaseApps to re-register with the rebuilt mgr.
     try:
-        snapshot = wait_for_snapshot_health(args, exe, mgr_target,
-                                            baseline_saves=0)
+        rebuild = wait_for_worker_rebuild(args, exe, mgr_target, expected)
     except RuntimeError as ex:
-        failure_stages.append("snapshot_restore")
-        raise RuntimeError(f"new BaseAppMgr did not write fresh snapshot: {ex}") from ex
+        failure_stages.append("worker_rebuild")
+        raise RuntimeError(f"BaseApp worker-rebuild did not converge: {ex}") from ex
 
     takeover_elapsed_ms = int((time.monotonic() - start) * 1000)
 
-    # Wait for surviving BaseApps to reattach.
-    try:
-        reattach = wait_for_reattach(args, exe, mgr_target,
-                                      require_restored=not args.allow_empty_snapshot)
-    except RuntimeError as ex:
-        failure_stages.append("reattach")
-        raise RuntimeError(f"BaseApp reattach did not converge: {ex}") from ex
-
     # Stability window — ensure no second restart in this period.
     time.sleep(args.stability_sec)
-    post_snapshot = read_snapshot_health(exe, args.machined, mgr_target)
     post_reviver = read_reviver_health(exe, args.machined, reviver_target,
                                        require_active_pid=new_pid)
-    if post_snapshot.save_failures > snapshot.save_failures:
-        failure_stages.append("stability_snapshot_save_failures")
     if post_reviver.launch_count > reviver_health.launch_count:
         failure_stages.append("stability_reviver_relaunch")
     if not post_reviver.healthy:
@@ -633,39 +528,20 @@ def run_cycle(args: argparse.Namespace, exe: Path, cycle: int,
         old_pid=old_pid,
         new_pid=new_pid,
         takeover_elapsed_ms=takeover_elapsed_ms,
-        snapshot=post_snapshot,
-        reattach=reattach,
+        rebuild=rebuild,
         reviver=post_reviver,
         healthy=healthy,
         failure_stages=failure_stages,
     )
 
 
-def _snapshot_to_dict(s: SnapshotHealth) -> dict:
+def _rebuild_to_dict(r: WorkerRebuildHealth) -> dict:
     return {
-        "saves": s.saves,
-        "restores": s.restores,
-        "fallback_restores": s.fallback_restores,
-        "save_failures": s.save_failures,
-        "restore_failures": s.restore_failures,
-        "failures": s.failures,
-        "backup_skips": s.backup_skips,
-        "dirty": s.dirty,
-        "save_stale": s.save_stale,
-        "healthy": s.healthy,
-        "status": s.status,
-    }
-
-
-def _reattach_to_dict(r: ReattachHealth) -> dict:
-    return {
-        "restored": r.restored,
-        "pending": r.pending,
-        "completed_count": r.completed_count,
-        "stuck": r.stuck,
-        "state": r.state,
+        "baseapp_count": r.baseapp_count,
+        "expected": r.expected,
+        "recovered": r.recovered,
         "healthy": r.healthy,
-        "status": r.status,
+        "detail": r.detail,
     }
 
 
@@ -677,6 +553,8 @@ def _reviver_to_dict(r: ReviverHealth) -> dict:
         "launch_count": r.launch_count,
         "heartbeat_acks": r.heartbeat_acks,
         "heartbeat_last_ack_age_ms": r.heartbeat_last_ack_age_ms,
+        "priority": r.priority,
+        "active_reviver": r.active_reviver,
         "last_error": r.last_error,
         "status": r.status,
         "healthy": r.healthy,
@@ -691,8 +569,7 @@ def _cycle_to_dict(c: CycleResult) -> dict:
         "takeover_elapsed_ms": c.takeover_elapsed_ms,
         "healthy": c.healthy,
         "failure_stages": c.failure_stages,
-        "snapshot": _snapshot_to_dict(c.snapshot) if c.snapshot else None,
-        "reattach": _reattach_to_dict(c.reattach) if c.reattach else None,
+        "rebuild": _rebuild_to_dict(c.rebuild) if c.rebuild else None,
         "reviver": _reviver_to_dict(c.reviver) if c.reviver else None,
     }
 
@@ -717,8 +594,11 @@ def build_summary(args: argparse.Namespace, cycles: list[CycleResult],
             "poll_sec": args.poll_sec,
             "stability_sec": args.stability_sec,
             "max_takeover_ms": args.max_takeover_ms,
+            "max_reviver_failover_ms": args.max_reviver_failover_ms,
             "shutdown_reason": args.shutdown_reason,
-            "allow_empty_snapshot": args.allow_empty_snapshot,
+            "allow_empty_cluster": args.allow_empty_cluster,
+            "check_active_reviver": args.check_active_reviver,
+            "verify_reviver_failover": args.verify_reviver_failover,
             "no_inject": args.no_inject,
         },
         "summary": {
@@ -754,7 +634,6 @@ def main() -> int:
     summary_scratch: dict = {}
 
     reviver_failover: ReviverFailoverResult | None = None
-    leader_lock_health: LeaderLockHealth | None = None
 
     try:
         if args.no_inject:
@@ -774,23 +653,17 @@ def main() -> int:
             current_healthy = all(c.healthy for c in cycles)
             failure_stages = [s for c in cycles for s in c.failure_stages]
 
-        if args.check_leader_lock_mode:
+        if args.check_active_reviver:
             mgr, reviver = precheck_topology(exe, args)
             reviver_target = f"reviver:{reviver['name']}"
-            llh = read_leader_lock_health(exe, args.machined, reviver_target,
-                                          args.check_leader_lock_mode)
-            leader_lock_health = llh
-            summary_scratch.setdefault("current", {})["leader_lock"] = {
-                "mode": llh.mode,
-                "holder_id": llh.holder_id,
-                "leader_active": llh.leader_active,
-                "acquire_count": llh.acquire_count,
-                "lease_renew_count": llh.lease_renew_count,
-                "lease_failure_count": llh.lease_failure_count,
-                "healthy": llh.healthy,
+            arb = read_arbitration_health(exe, args.machined, reviver_target)
+            summary_scratch.setdefault("current", {})["arbitration"] = {
+                "priority": arb.priority,
+                "active_reviver": arb.active_reviver,
+                "healthy": arb.healthy,
             }
-            if not llh.healthy:
-                failure_stages.append("leader_lock_mode")
+            if not arb.healthy:
+                failure_stages.append("not_active_monitor")
                 current_healthy = False
 
         if args.verify_reviver_failover:
@@ -798,8 +671,9 @@ def main() -> int:
             manager_pid = int(mgr["pid"])
             reviver_failover = run_reviver_failover(args, exe, manager_pid)
             summary_scratch.setdefault("current", {})["reviver_failover"] = {
-                "old_leader": reviver_failover.old_leader,
-                "new_leader": reviver_failover.new_leader,
+                "old_monitor": reviver_failover.old_monitor,
+                "new_monitor": reviver_failover.new_monitor,
+                "new_priority": reviver_failover.new_priority,
                 "manager_pid": reviver_failover.manager_pid,
                 "new_pid": reviver_failover.new_pid,
                 "old_pid": reviver_failover.old_pid,
