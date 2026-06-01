@@ -565,6 +565,62 @@ TEST(JoltPhysicsQuery, AddHeightFieldHoleSamplesHaveNoCollision) {
   jolt::Shutdown();
 }
 
+TEST(JoltPhysicsQuery, HeightFieldRaycastTracksColumnHeightAndAcceptsOddCount) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  HeightFieldGeometry hf;
+  hf.origin = {0.0f, 0.0f, 0.0f};
+  hf.scale = {10.0f, 1.0f, 10.0f};  // 5x5 grid (odd) spans [0,40]x[0,40]
+  hf.sample_count = 5;              // odd: Jolt rounds the sample count up internally
+  hf.samples.resize(25);
+  // Height rises with the x column only (flat along z): surface plane y = 2 + x_index.
+  for (uint32_t z = 0; z < 5; ++z)
+    for (uint32_t x = 0; x < 5; ++x) hf.samples[z * 5 + x] = 2.0f + static_cast<float>(x);
+  hf.layer = 0;
+  query.AddHeightField(hf);
+
+  auto height_at = [&](float wx, float wz) {
+    RaycastQuery rq;
+    rq.origin = {wx, 100.0f, wz};
+    rq.direction = {0.0f, -1.0f, 0.0f};
+    rq.max_distance_m = 200.0f;
+    return query.Raycast(rq);
+  };
+  // world x=15 → x_index 1.5 → y=3.5; world x=25 → x_index 2.5 → y=4.5. Tied to x, not z:
+  // a z/x transpose would make both (same z=15) equal and fail.
+  const auto a = height_at(15.0f, 15.0f);
+  const auto b = height_at(25.0f, 15.0f);
+  ASSERT_TRUE(a.hit);
+  ASSERT_TRUE(b.hit);
+  EXPECT_NEAR(a.position.y, 3.5f, 1e-2f);
+  EXPECT_NEAR(b.position.y, 4.5f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
+TEST(JoltPhysicsQuery, GroundProbeStandsOnHeightFieldTerrain) {
+  jolt::Initialize();
+  JoltPhysicsQuery query;
+  HeightFieldGeometry hf;
+  hf.origin = {0.0f, 0.0f, 0.0f};
+  hf.scale = {10.0f, 1.0f, 10.0f};
+  hf.sample_count = 4;
+  hf.samples.assign(16, 3.0f);  // flat terrain at y=3
+  hf.layer = 0;
+  query.AddHeightField(hf);
+
+  GroundProbeQuery gp;
+  gp.origin = {15.0f, 10.0f, 15.0f};
+  gp.max_distance_m = 100.0f;
+  gp.radius_m = 0.35f;
+  const auto hit = query.GroundProbe(gp);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_NEAR(hit.position.y, 3.0f, 1e-2f);
+  EXPECT_NEAR(hit.normal.y, 1.0f, 1e-2f);
+
+  jolt::Shutdown();
+}
+
 TEST(JoltCollisionBackend, BuildsHeightFieldCacheWithoutStampDependency) {
   jolt::Initialize();
   LoadedCollisionCache cache;

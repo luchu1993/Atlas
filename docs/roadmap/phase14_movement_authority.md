@@ -3,7 +3,7 @@
 **Status:** 🟨 14.1 主链路已可用——输入帧协议、CellApp 权威 step、owner
 预测和解、MovementCommand fanout、Static physics query、collision asset v1、
 position history 都已落地。当前重心是协议边界硬化、验证矩阵和文档对齐。
-已交付能力清单、收紧的 wire contract、最小回归命令集见
+收紧的 wire contract 与最小回归命令集见
 [`phase14_status.md`](phase14_status.md)。
 
 **前置依赖:** Phase 10 (CellApp / Witness / volatile 位置流)、Phase 11
@@ -13,9 +13,9 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 ## 工作上下文
 
 继续工作时不要重置当前脏工作树；大量未提交改动都属于 Phase 14 推进中的
-上下文。UE 源码根目录为 `E:\UE\UnrealEngine`。已交付能力详单、wire contract
-快照、最小回归命令集统一放在 [`phase14_status.md`](phase14_status.md)；
-本文件只承载目标 / 验收 / 里程碑 / 决策日志 / 红线，不重复 status。
+上下文。UE 源码根目录为 `E:\UE\UnrealEngine`。现行 wire contract 与最小回归
+命令集放在 [`phase14_status.md`](phase14_status.md)；本文件只承载目标 / 验收 /
+里程碑 / 决策日志 / 红线，不重复 status。
 
 ## 里程碑驱动的下一步
 
@@ -24,18 +24,16 @@ position history 都已落地。当前重心是协议边界硬化、验证矩阵
 
 ### 14.2 Jolt query backend（里程碑）
 
-（M1a / M1b / M1c / M2 / M3 / M4 / M5 / M5b 均已交付，见
-[`phase14_status.md`](phase14_status.md)。后续遇到再做：heightfield、chunking、
+（M1a / M1b / M1c / M2 / M3 / M4 / M5 / M5b 均已交付。后续遇到再做：chunking、
 moving platform、ladder、跨 cell 物理。）
 
 ### 14.3 Unity 导出 MVP（里程碑）
 
-（M7 已交付，见 [`phase14_status.md`](phase14_status.md)。后续遇到再做：
-mesh / heightfield / volume export。）
+（M7、mesh / heightfield export 均已交付。后续遇到再做：volume export。）
 
 ### 之后
 
-按遇到再做：heightfield、chunking、moving platform、ladder、跨 cell 物理、
+按遇到再做：chunking、moving platform、ladder、跨 cell 物理、
 完整 data-driven skill timeline、pathfinding。**不提前规划**。
 
 ## 决策日志

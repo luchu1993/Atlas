@@ -122,10 +122,10 @@ scans `ServerColliderAuthoring` components with `exportToServer = true`:
   rotation/scale is fine. The server uses Jolt's triangle `MeshShape` or
   `ConvexHullShape` respectively — a convex collider's server shape is the hull,
   matching Unity's own convex behaviour.
-- `TerrainCollider` → `{shape: heightfield, ...}`: the terrain heightmap is
-  exported as an N×N sample grid in the `.bin` (N = heightmap resolution − 1,
-  trimmed to an even count; the far-edge row/column is dropped). Terrain holes
-  aren't exported yet.
+- `TerrainCollider` → `{shape: heightfield, ...}`: the full heightmap ships as an
+  N×N sample grid in the `.bin` (N = heightmap resolution); Jolt rounds the count
+  up to its block size and pads the slack with no-collision. Terrain holes export
+  as `FLT_MAX` samples.
 - Rotated boxes, non-uniform-scaled / non-Y capsules, and negative scale are
   logged and skipped.
 

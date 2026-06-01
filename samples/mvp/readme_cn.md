@@ -97,9 +97,9 @@ tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.js
   （`main.collision.json` ↔ `main.collision.bin`），顶点已 bake，任意旋转/缩放都可。
   服务端分别用 Jolt 的三角 `MeshShape` / `ConvexHullShape` —— convex collider 的
   服务端形状就是凸包，与 Unity 自身行为一致。
-- `TerrainCollider` → `{shape: heightfield, ...}`：地形 heightmap 导成 N×N 样本
-  网格写进 `.bin`（N = heightmap 分辨率 − 1，裁成偶数；丢弃远边一行/列）。
-  Terrain holes 暂未导出。
+- `TerrainCollider` → `{shape: heightfield, ...}`：完整 heightmap 导成 N×N 样本
+  网格写进 `.bin`（N = heightmap 分辨率）；Jolt 把样本数向上取整到自身 block size
+  并以无碰撞 padding 补齐。Terrain holes 导成 `FLT_MAX` 样本。
 - 旋转的 box、非 uniform / 非 Y 轴 capsule 与负缩放都会打 warning 并跳过。
 
 `run_mvp_cluster` 启动时会把 `samples/mvp/maps/main.collision.json` cook 成

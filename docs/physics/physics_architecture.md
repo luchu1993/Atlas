@@ -148,12 +148,13 @@ Atlas collision asset 是长期稳定边界。它应包含：
 - `convex` (v2+)：`layer` / `vertex_byte_offset` / `vertex_count`（点云,
   >= 4 点，无索引）；顶点放在同一 `.bin` 侧车。backend 在加载时重建凸包，
   不进 cooked blob，也不受 `jolt_version_stamp` 失效约束
-- `heightfield` (v2+)：`layer` / `origin` / `scale` / `sample_count`（>= 4 且
-  偶数）/ `sample_byte_offset`；`sample_count²` 个 float 高度样本（行主序）放在
-  同一 `.bin` 侧车，surface = `origin + scale * (x, sample[y*N+x], y)`，样本值
-  `FLT_MAX` 表示 hole（无碰撞）。同样在加载时重建、不 cook（大地形的 cook 优化
-  后置）。Unity `TerrainCollider` → heightfield 的 exporter 已落地（N = 分辨率
-  − 1 裁偶数；holes 暂未导）
+- `heightfield` (v2+)：`layer` / `origin` / `scale` / `sample_count`（>= 4）/
+  `sample_byte_offset`；`sample_count²` 个 float 高度样本（行主序）放在同一 `.bin`
+  侧车，surface = `origin + scale * (x, sample[y*N+x], y)`，样本值 `FLT_MAX` 表示
+  hole（无碰撞）。backend 把 `sample_count` 向上取整到自身 block size 并以无碰撞
+  padding 补齐，故不要求偶数。同样在加载时重建、不 cook（大地形的 cook 优化后置）。
+  Unity `TerrainCollider` → heightfield 的 exporter 导出完整分辨率，hole cell 写
+  `FLT_MAX`
 
 `.bin` 侧车布局（小端）：
 
@@ -172,7 +173,7 @@ Atlas `layer`（Jolt 用作 object layer），query 只命中 mask 命中位的 
 Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
 清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
-heightfield、material、volume 和 chunk 仍属于后续导出 / cook 阶段。
+material、volume 和 chunk 仍属于后续导出 / cook 阶段。
 
 **Cooked cache** (M5+)：`atlas_tool cook_collision <input.collision.json>` 把
 source JSON + side-car bin 打成单个 `.collisioncache` 文件，便于部署只下发

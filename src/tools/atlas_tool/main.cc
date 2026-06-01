@@ -5,6 +5,7 @@
 #include <format>
 #include <iostream>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -318,6 +319,28 @@ static auto CmdCookCollision(std::string_view input_path,
   return std::nullopt;
 }
 
+// Compares the source .json/.bin on disk to the copy embedded in the cache; a
+// difference means an edit the jolt stamp alone can't see, so the cache is stale.
+[[nodiscard]] static auto SourceContentChanged(std::span<const std::byte> cache_bytes,
+                                               const std::filesystem::path& src)
+    -> std::optional<std::string> {
+  auto env = physics::ReadCollisionCacheSources(cache_bytes);
+  if (!env) return std::nullopt;
+  auto json = fs::ReadTextFile(src);
+  if (!json) return std::nullopt;
+  if (*json != env->source_json) return std::string{"source .json changed since cook"};
+
+  auto bin_path = src;
+  bin_path.replace_extension(".bin");
+  std::vector<std::byte> bin;
+  if (std::filesystem::exists(bin_path)) {
+    auto bytes = fs::ReadFile(bin_path);
+    if (bytes) bin = std::move(*bytes);
+  }
+  if (bin != env->source_bin) return std::string{"source .bin changed since cook"};
+  return std::nullopt;
+}
+
 static auto CmdRecookInvalid(std::string_view dir_path) -> int {
   std::filesystem::path dir(dir_path);
   if (!std::filesystem::is_directory(dir)) {
@@ -337,7 +360,14 @@ static auto CmdRecookInvalid(std::string_view dir_path) -> int {
     if (entry.path().extension() != ".collisioncache") continue;
     ++scanned;
 
-    auto loaded = physics::LoadCollisionCacheFromFile(entry.path());
+    auto bytes = fs::ReadFile(entry.path());
+    if (!bytes) {
+      ++failed;
+      std::cerr << std::format("recook: {} unreadable: {}\n", entry.path().string(),
+                                bytes.Error().Message());
+      continue;
+    }
+    auto loaded = physics::LoadCollisionCacheFromBytes(std::span<const std::byte>(*bytes));
     if (!loaded) {
       ++failed;
       std::cerr << std::format("recook: {} unreadable: {}\n", entry.path().string(),
@@ -345,13 +375,16 @@ static auto CmdRecookInvalid(std::string_view dir_path) -> int {
       continue;
     }
 
-    auto reason = IsCacheStale(*loaded);
-    if (!reason) continue;
-    ++stale;
-
     // map.collision.collisioncache → map.collision.json
     auto src = entry.path();
     src.replace_extension(".json");
+    auto reason = IsCacheStale(*loaded);
+    if (!reason && std::filesystem::exists(src)) {
+      reason = SourceContentChanged(std::span<const std::byte>(*bytes), src);
+    }
+    if (!reason) continue;
+    ++stale;
+
     if (!std::filesystem::exists(src)) {
       ++failed;
       std::cerr << std::format("recook: {} stale ({}) but source {} missing\n",

@@ -332,7 +332,7 @@ TEST(CollisionAsset, LoadsHeightFieldFromSideCar) {
   EXPECT_FLOAT_EQ(asset->heightfields[0].scale.x, 10.0f);
 }
 
-TEST(CollisionAsset, RejectsHeightFieldWithOddOrTinySampleCount) {
+TEST(CollisionAsset, RejectsHeightFieldWithTooFewSamples) {
   const auto buffer = MakeFlatHeightFieldBuffer(4, 0.0f);
   auto bad = [&](int n) {
     return LoadCollisionAssetFromJson(
@@ -342,8 +342,22 @@ TEST(CollisionAsset, RejectsHeightFieldWithOddOrTinySampleCount) {
             "scale": [1,1,1], "sample_count": {}, "sample_byte_offset": 8}}]}})", n),
         std::span<const std::byte>(buffer));
   };
-  EXPECT_FALSE(bad(3).HasValue());  // odd
+  EXPECT_FALSE(bad(3).HasValue());  // < 4
   EXPECT_FALSE(bad(2).HasValue());  // < 4
+}
+
+TEST(CollisionAsset, AcceptsOddSampleCountHeightField) {
+  const auto buffer = MakeFlatHeightFieldBuffer(5, 1.0f);  // odd grid; backend pads the slack
+  auto asset = LoadCollisionAssetFromJson(
+      R"({"version": 2,
+        "coordinate_system": "x_right_y_up_z_forward_meters", "source_hash": "u",
+        "objects": [{"shape": "heightfield", "layer": 0, "origin": [0,0,0],
+          "scale": [1,1,1], "sample_count": 5, "sample_byte_offset": 8}]})",
+      std::span<const std::byte>(buffer));
+  ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();
+  ASSERT_EQ(asset->heightfields.size(), 1u);
+  EXPECT_EQ(asset->heightfields[0].sample_count, 5u);
+  EXPECT_EQ(asset->heightfields[0].samples.size(), 25u);
 }
 
 TEST(CollisionAsset, RejectsConvexWithTooFewPoints) {

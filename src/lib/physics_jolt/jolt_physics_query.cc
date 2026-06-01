@@ -229,7 +229,7 @@ void JoltPhysicsQuery::AddConvexHull(std::span<const math::Vector3> points,
 
 void JoltPhysicsQuery::AddHeightField(const HeightFieldGeometry& hf) {
   const uint32_t n = hf.sample_count;
-  if (n < 4 || (n % 2) != 0) return;
+  if (n < 4) return;
   if (hf.samples.size() != static_cast<std::size_t>(n) * n) return;
 
   JPH::HeightFieldShapeSettings shape_settings(

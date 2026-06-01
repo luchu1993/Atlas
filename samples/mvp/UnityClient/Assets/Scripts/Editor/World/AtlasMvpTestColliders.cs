@@ -6,10 +6,8 @@ using UnityEngine.SceneManagement;
 
 namespace Atlas.Mvp.Editor
 {
-    // Seeds the MVP scene with the server collision obstacles the collision
-    // pipeline demo expects: an invisible ground slab (replaces the implicit
-    // flat ground that LoadCollisionAsset removes) plus a visible wall and
-    // platform. Re-runnable; rebuilds the AtlasServerColliders root each time.
+    // Rebuilds the AtlasServerColliders root with one obstacle per exportable
+    // server collision shape, so the export → cook → load pipeline has inputs.
     public static class AtlasMvpTestColliders
     {
         const string kRootName = "AtlasServerColliders";

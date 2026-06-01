@@ -342,9 +342,8 @@ void AppendPlaneObj(std::string& out, const StaticPlane& plane, std::size_t inde
   }
   auto sample_count = RequiredUint(object, path, "sample_count");
   if (!sample_count) return sample_count.Error();
-  if (*sample_count < 4 || (*sample_count % 2) != 0) {
-    return Invalid(std::format("{}: sample_count must be >= 4 and even, got {}", path,
-                               *sample_count));
+  if (*sample_count < 4) {
+    return Invalid(std::format("{}: sample_count must be >= 4, got {}", path, *sample_count));
   }
   auto sbo = RequiredUint(object, path, "sample_byte_offset");
   if (!sbo) return sbo.Error();
@@ -608,8 +607,8 @@ auto WriteCollisionCacheToFile(const std::filesystem::path& source_json_path,
   return fs::WriteFile(cache_path, std::span<const std::byte>(bytes));
 }
 
-auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
-    -> Result<LoadedCollisionCache> {
+auto ReadCollisionCacheSources(std::span<const std::byte> bytes)
+    -> Result<CollisionCacheSources> {
   if (bytes.size() < 8) {
     return Invalid("cache: shorter than 8-byte magic/version header");
   }
@@ -625,15 +624,16 @@ auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
                              *cache_version, kCollisionCacheVersion)};
   }
 
-  uint64_t jolt_stamp = 0;
+  CollisionCacheSources out;
+  out.cache_version = *cache_version;
   if (*cache_version == 1u) {
     auto stamp32 = ReadUint32(bytes, cursor, "jolt_version_stamp");
     if (!stamp32) return stamp32.Error();
-    jolt_stamp = *stamp32;
+    out.jolt_version_stamp = *stamp32;
   } else {
     auto stamp64 = ReadUint64(bytes, cursor, "jolt_version_stamp");
     if (!stamp64) return stamp64.Error();
-    jolt_stamp = *stamp64;
+    out.jolt_version_stamp = *stamp64;
   }
 
   auto hash_len = ReadUint32(bytes, cursor, "source_hash_len");
@@ -641,7 +641,7 @@ auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
   if (cursor + *hash_len > bytes.size()) {
     return Invalid("cache: truncated reading source_hash");
   }
-  std::string source_hash(reinterpret_cast<const char*>(bytes.data() + cursor), *hash_len);
+  out.source_hash.assign(reinterpret_cast<const char*>(bytes.data() + cursor), *hash_len);
   cursor += *hash_len;
 
   auto json_len = ReadUint32(bytes, cursor, "json_len");
@@ -649,7 +649,7 @@ auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
   if (cursor + *json_len > bytes.size()) {
     return Invalid("cache: truncated reading json bytes");
   }
-  std::string_view json_view(reinterpret_cast<const char*>(bytes.data() + cursor), *json_len);
+  out.source_json.assign(reinterpret_cast<const char*>(bytes.data() + cursor), *json_len);
   cursor += *json_len;
 
   auto bin_len = ReadUint32(bytes, cursor, "bin_len");
@@ -657,29 +657,36 @@ auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
   if (cursor + *bin_len > bytes.size()) {
     return Invalid("cache: truncated reading bin bytes");
   }
-  std::span<const std::byte> bin_view(bytes.data() + cursor, *bin_len);
+  out.source_bin.assign(bytes.data() + cursor, bytes.data() + cursor + *bin_len);
   cursor += *bin_len;
 
-  std::vector<std::byte> cooked;
   if (*cache_version >= 2u) {
     auto cooked_len = ReadUint32(bytes, cursor, "cooked_len");
     if (!cooked_len) return cooked_len.Error();
     if (cursor + *cooked_len > bytes.size()) {
       return Invalid("cache: truncated reading cooked bytes");
     }
-    cooked.assign(bytes.data() + cursor, bytes.data() + cursor + *cooked_len);
+    out.cooked.assign(bytes.data() + cursor, bytes.data() + cursor + *cooked_len);
     cursor += *cooked_len;
   }
+  return out;
+}
 
-  auto asset = LoadCollisionAssetImpl(json_view, bin_view);
+auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
+    -> Result<LoadedCollisionCache> {
+  auto sources = ReadCollisionCacheSources(bytes);
+  if (!sources) return sources.Error();
+
+  auto asset = LoadCollisionAssetImpl(sources->source_json, sources->source_bin);
   if (!asset) return asset.Error();
-  if (asset->source_hash != source_hash) {
+  if (asset->source_hash != sources->source_hash) {
     return Invalid(std::format(
         "cache: header source_hash '{}' differs from JSON source_hash '{}' — "
         "cache is corrupt",
-        source_hash, asset->source_hash));
+        sources->source_hash, asset->source_hash));
   }
-  return LoadedCollisionCache{std::move(*asset), jolt_stamp, std::move(cooked)};
+  return LoadedCollisionCache{std::move(*asset), sources->jolt_version_stamp,
+                              std::move(sources->cooked)};
 }
 
 auto LoadCollisionCacheFromFile(const std::filesystem::path& path)

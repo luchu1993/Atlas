@@ -43,13 +43,13 @@ struct ConvexGeometry {
   ObjectLayer layer{0};
 };
 
-// Square grid of height samples. Surface point (x, y in [0, sample_count)) sits
-// at origin + scale * (x, samples[y * sample_count + x], y). A sample of
-// FLT_MAX marks a hole (no collision). Rebuilt by the backend; no cooked blob.
+// Square grid of samples; surface point (x,z) = origin + scale*(x,
+// samples[z*sample_count+x], z). FLT_MAX sample = hole. Backend rebuilds; no cook.
 struct HeightFieldGeometry {
   math::Vector3 origin{0.0f, 0.0f, 0.0f};
   math::Vector3 scale{1.0f, 1.0f, 1.0f};  // x/z = sample spacing, y = height scale
-  uint32_t sample_count{0};               // samples per side; >= 4 and even
+  uint32_t sample_count{0};               // samples per side; >= 4 (backend rounds up to its
+                                          // block size, padding the slack with no-collision)
   std::vector<float> samples;             // row-major, sample_count * sample_count
   ObjectLayer layer{0};
 };
@@ -99,6 +99,19 @@ struct LoadedCollisionCache {
 [[nodiscard]] auto WriteCollisionCacheToFile(const std::filesystem::path& source_json_path,
                                               const std::filesystem::path& cache_path)
     -> Result<void>;
+// The source json/bin/cooked bytes a cache embeds, extracted without parsing the
+// asset — lets the cook tool detect a stale cache by diffing against on-disk source.
+struct CollisionCacheSources {
+  uint32_t cache_version{0};
+  uint64_t jolt_version_stamp{0};
+  std::string source_hash;
+  std::string source_json;
+  std::vector<std::byte> source_bin;
+  std::vector<std::byte> cooked;
+};
+[[nodiscard]] auto ReadCollisionCacheSources(std::span<const std::byte> bytes)
+    -> Result<CollisionCacheSources>;
+
 [[nodiscard]] auto LoadCollisionCacheFromBytes(std::span<const std::byte> bytes)
     -> Result<LoadedCollisionCache>;
 [[nodiscard]] auto LoadCollisionCacheFromFile(const std::filesystem::path& path)

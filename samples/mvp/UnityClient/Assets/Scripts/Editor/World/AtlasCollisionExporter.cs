@@ -339,12 +339,8 @@ namespace Atlas.Mvp.Editor
             return true;
         }
 
-        // Unity terrains are axis-aligned (no rotation/scale on the heightmap), so
-        // origin = transform position and spacing comes from terrainData.size. The
-        // heightmap resolution is 2^k+1 (odd); Atlas needs an even sample count, so
-        // the last row/column is dropped (a one-sample sliver at the far edge).
-        // Unity terrain holes are per-cell and not exported yet (Atlas supports
-        // FLT_MAX hole samples; the exporter just doesn't emit them here).
+        // Unity terrains are axis-aligned: origin = transform position, spacing = size/(res-1).
+        // All res samples ship (Jolt rounds up to its block size); hole cells become FLT_MAX.
         static bool TryEmitHeightField(TerrainCollider col, ServerColliderAuthoring auth,
                                        StringBuilder objects, ref bool first, ExportResult result)
         {
@@ -356,22 +352,27 @@ namespace Atlas.Mvp.Editor
                 return false;
             }
             int res = data.heightmapResolution;
-            int n = res - 1;  // 2^k+1 → 2^k, always even
-            if (n < 4 || (n % 2) != 0)
+            if (res < 4)
             {
                 result.Skipped++;
-                result.Warnings.Add($"{Trace(col.gameObject)}: heightmap resolution {res} → {n} samples (need >= 4, even), skip");
+                result.Warnings.Add($"{Trace(col.gameObject)}: heightmap resolution {res} < 4 samples, skip");
                 return false;
             }
 
             var size = data.size;
             var heights = data.GetHeights(0, 0, res, res);  // [z, x] normalized [0,1]
+            // Holes are per-cell ([res-1]^2); a cell maps to its min-corner sample, so a hole
+            // also clears the three cells sharing that corner (Jolt holes are per-sample).
+            var holes = data.GetHoles(0, 0, res - 1, res - 1);
             var bin = result.MeshBin;
             if (bin.Count == 0) WriteMeshBinHeader(bin);
             int sampleByteOffset = bin.Count;
-            for (int z = 0; z < n; z++)
-                for (int x = 0; x < n; x++)
-                    AppendFloat(bin, heights[z, x]);  // normalized; Atlas scale.y = size.y
+            for (int z = 0; z < res; z++)
+                for (int x = 0; x < res; x++)
+                {
+                    bool hole = x < res - 1 && z < res - 1 && !holes[z, x];
+                    AppendFloat(bin, hole ? float.MaxValue : heights[z, x]);  // scale.y = size.y
+                }
 
             var origin = col.transform.position;
             float spacingX = size.x / (res - 1);
@@ -381,7 +382,7 @@ namespace Atlas.Mvp.Editor
             objects.Append("\n    ");
             objects.AppendFormat(CultureInfo.InvariantCulture,
                 "{{\"shape\": \"heightfield\", \"layer\": {0}, \"origin\": [{1:G9}, {2:G9}, {3:G9}], \"scale\": [{4:G9}, {5:G9}, {6:G9}], \"sample_count\": {7}, \"sample_byte_offset\": {8}}}",
-                auth.layer, origin.x, origin.y, origin.z, spacingX, size.y, spacingZ, n,
+                auth.layer, origin.x, origin.y, origin.z, spacingX, size.y, spacingZ, res,
                 sampleByteOffset);
             return true;
         }
