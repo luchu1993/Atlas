@@ -53,6 +53,29 @@ TEST(MeshTransport, DeliversDirectedHello) {
   EXPECT_EQ(got_src.Port(), sender.LocalAddress().Port());
 }
 
+TEST(MeshTransport, BroadcastHelloSendsToConfiguredAddress) {
+  EventDispatcher disp{"mesh_test"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  MeshTransport receiver(disp);
+  ASSERT_TRUE(receiver.Open(Loopback(0), Loopback(0)).HasValue());
+
+  // Point the sender's broadcast address at the receiver so BroadcastHello's
+  // delivery is deterministic (real 255.255.255.255 routing is exercised live).
+  MeshTransport sender(disp);
+  ASSERT_TRUE(sender.Open(Loopback(0), receiver.LocalAddress()).HasValue());
+
+  std::optional<machined::MeshHello> got;
+  receiver.SetHelloCallback([&](const Address&, const machined::MeshHello& h) { got = h; });
+
+  machined::MeshHello hello;
+  hello.machined_addr = sender.LocalAddress();
+  hello.incarnation = 7;
+  ASSERT_TRUE(sender.BroadcastHello(hello).HasValue());
+
+  ASSERT_TRUE(poll_until(disp, [&] { return got.has_value(); }));
+  EXPECT_EQ(got->incarnation, 7u);
+}
+
 TEST(MeshTransport, SendBeforeOpenFails) {
   EventDispatcher disp{"mesh_test"};
   MeshTransport t(disp);

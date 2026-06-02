@@ -43,6 +43,9 @@ struct MeshHello {
     MeshHello msg;
     auto ver = r.Read<uint8_t>();
     if (!ver) return ver.Error();
+    if (*ver != kMeshProtocolVersion) {
+      return Error{ErrorCode::kInvalidArgument, "MeshHello: incompatible protocol version"};
+    }
     msg.protocol_version = *ver;
     auto ip = r.Read<uint32_t>();
     if (!ip) return ip.Error();

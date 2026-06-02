@@ -56,6 +56,19 @@ TEST(MeshGossip, RejectsWrongMessageType) {
   EXPECT_FALSE(got.HasValue());
 }
 
+TEST(MeshGossip, RejectsIncompatibleVersion) {
+  BinaryWriter w;
+  w.Write<uint8_t>(static_cast<uint8_t>(MeshMessageType::kHello));
+  w.Write<uint8_t>(kMeshProtocolVersion + 1);  // unknown version
+  w.Write<uint32_t>(0);
+  w.Write<uint16_t>(0);
+  w.Write<uint64_t>(0);
+
+  BinaryReader r(w.Data());
+  auto got = MeshHello::Deserialize(r);
+  EXPECT_FALSE(got.HasValue());
+}
+
 TEST(MeshGossip, RejectsTruncatedDatagram) {
   MeshHello sent;
   sent.machined_addr = Address("127.0.0.1", 20018);

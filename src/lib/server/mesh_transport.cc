@@ -20,6 +20,7 @@ MeshTransport::MeshTransport(EventDispatcher& dispatcher) : dispatcher_(dispatch
 MeshTransport::~MeshTransport() { Close(); }
 
 auto MeshTransport::Open(const Address& bind_addr, const Address& broadcast_addr) -> Result<void> {
+  Close();  // Drop any prior socket + reader so a re-Open never leaks the fd.
   auto sock = Socket::CreateUdp();
   if (!sock) return sock.Error();
   if (auto r = sock->SetReuseAddr(true); !r) return r.Error();
