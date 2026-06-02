@@ -2360,9 +2360,18 @@ void CellApp::OnOffloadEntityAck(const Address& src, Channel* /*ch*/,
   }
   const Address target = pending_it->second.target_addr;
   const auto age = Clock::now() - pending_it->second.sent_at;
+  const bool was_teleport = pending_it->second.is_teleport;
 
   if (msg.success) {
     pending_offloads_.erase(pending_it);
+    // Teleport's Real lives in another space, so no GhostMaintainer would ever
+    // update/delete this source Ghost - remove it with an AoI-leave fan-out.
+    if (was_teleport) {
+      if (auto* e = FindEntity(msg.entity_id); e != nullptr && e->IsGhost()) {
+        entity_population_.erase(msg.entity_id);
+        e->GetSpace().RemoveEntity(msg.entity_id);
+      }
+    }
     ATLAS_LOG_INFO("CellApp: Offload of entity_id={} to {}:{} succeeded (rtt={} ms)", msg.entity_id,
                    target.Ip(), target.Port(),
                    std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
@@ -3094,6 +3103,7 @@ void CellApp::ProcessOffload(CellEntity& entity, Channel* peer, const Address& t
   po.movement_command = msg.movement_command;
   po.persistent_blob = msg.persistent_blob;
   po.type_id = entity.TypeId();
+  po.is_teleport = msg.is_teleport;
   pending_offloads_[entity.Id()] = std::move(po);
 
   // Silent C# teardown for migration: OnDestroy stays reserved for real
@@ -3227,6 +3237,11 @@ void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_add
   msg.target_cell_id = 0;
   msg.position = pos;
   msg.direction = dir;
+  // Teleport is a discontinuous jump: arrive at rest with no carried velocity,
+  // in-progress command, or old-space lag-comp history.
+  msg.has_movement_state = false;
+  msg.has_movement_command = false;
+  msg.movement_position_history.clear();
   ProcessOffload(entity, peer, target_addr, std::move(msg));
 }
 

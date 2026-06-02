@@ -421,6 +421,12 @@ CellAppMgr 广播映射表更新有延迟（< 1 秒），其间消息可能 misr
 传送窗口内客户端发来的 cell 消息缓冲后按序转发到新 space——与 cell 间 offload
 同一套保证。传送前先 DeleteGhost 清掉旧 space 的 haunts（它们在新 space 无意义）。
 
+**与同 space offload 的两点差异**：
+- **源副本移除**：同 space offload 后源变 Ghost 并由新 Real 的 GhostMaintainer 接管；
+  跨 space 后源 Ghost 在旧 space 无人接管，故 ack 成功时**移除源副本**（带 AoI leave 扇出），
+  失败/超时仍走 revert 复原为 Real。
+- **不带进行中运动**：传送是不连续跳变，丢弃在途 MovementCommand、速度与 lag-comp 历史，落地静止。
+
 **前置条件 / 限制**：
 - 目标 space 必须已被某 cellapp host；解析不到 host 时传送中止，实体留在原地。
 - 暂不支持目标落在**同一 cellapp**（需本地 re-home，无指向自身的 peer 通道）；

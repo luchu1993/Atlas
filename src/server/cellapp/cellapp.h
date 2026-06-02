@@ -248,6 +248,9 @@ class CellApp : public EntityApp, public CellMovementHost {
     std::vector<MovementPositionSample> movement_position_history;
     bool has_movement_command{false};
     movement::MovementCommand movement_command;
+    // Cross-space teleport: on ack success the source Ghost is removed (no peer
+    // GhostMaintainer owns a Ghost whose Real lives in another space).
+    bool is_teleport{false};
   };
 
   // No-op if the pending entry is already resolved.

@@ -291,9 +291,10 @@ TEST(OffloadTraversal, CrossSpaceTeleport_RehydratesInTargetSpace) {
       PumpUntil(host_a, host_b, [&] { return host_a.app.PendingOffloadsForTest().empty(); }))
       << "A's pending_offloads_ never drained after teleport";
 
-  auto* on_a = host_a.app.FindEntity(100);
-  ASSERT_NE(on_a, nullptr);
-  EXPECT_TRUE(on_a->IsGhost());
+  // The source Ghost is orphaned across spaces, so teleport removes it on ack
+  // success rather than leaving a frozen Ghost like a same-space Offload.
+  EXPECT_EQ(host_a.app.FindEntity(100), nullptr)
+      << "source entity should be removed after cross-space teleport, not left as a Ghost";
 
   auto* on_b = host_b.app.FindEntity(100);
   ASSERT_NE(on_b, nullptr);
