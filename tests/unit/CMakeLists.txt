@@ -262,6 +262,11 @@ atlas_add_test(NAME test_mesh_transport
   DEPS atlas_server atlas_network atlas_foundation
 )
 
+atlas_add_test(NAME test_machined_mesh_node
+  SOURCES test_machined_mesh_node.cpp
+  DEPS atlas_server atlas_network atlas_foundation
+)
+
 atlas_add_test(NAME test_script_events
   SOURCES test_script_events.cpp
   DEPS atlas_script

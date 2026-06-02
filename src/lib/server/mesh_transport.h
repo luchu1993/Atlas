@@ -36,6 +36,10 @@ class MeshTransport {
 
   void SetHelloCallback(HelloCallback cb) { hello_cb_ = std::move(cb); }
 
+  // Retargets BroadcastHello after Open (e.g. once the directed peer or subnet
+  // broadcast address is known).
+  void SetBroadcastTarget(const Address& addr) { broadcast_addr_ = addr; }
+
   [[nodiscard]] auto BroadcastHello(const machined::MeshHello& hello) -> Result<std::size_t>;
   [[nodiscard]] auto SendHelloTo(const Address& dest, const machined::MeshHello& hello)
       -> Result<std::size_t>;
