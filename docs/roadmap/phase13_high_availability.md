@@ -80,9 +80,13 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   - **M4-3**（commit `25b2acb`，纯 wire 无 I/O 可逆）：mesh gossip 协议——`MeshHello`
     发现数据报（裸 UDP 广播，自带 `MeshMessageType` 帧头，载 mesh 端点 + incarnation）
     + `PeekMeshType`（收包侧先窥探帧头再派发）。
-  - **M4-4 待落地（I/O）**：NetworkInterface 广播端点（共享 UDP socket 启广播 + 收发派发）
-    + MachinedApp 接 mesh（周期广播 HELLO、喂 `MachinedMesh`、buddy 死亡 → 宣告该机进程
-    死亡）+ 本地权威注册表 + 广播 birth/death/query 聚合；client 连本地 machined。
+  - **M4-4a**（commit `7d56170`，增量可逆 I/O）：`MeshTransport`——自持广播 UDP socket
+    （SO_REUSEADDR + SO_BROADCAST），向 dispatcher 注册自己的 fd（不复用 NetworkInterface
+    的 channel 机制）；`Open`/`Close`、`BroadcastHello`/`SendHelloTo`、`OnReadable` 解析
+    `MeshHello` 回调（每回调限额防 timer 饿死）。集成测试驱动 live dispatcher。
+  - **M4-4b 待落地（live MachinedApp）**：MachinedApp 接 mesh——周期广播 HELLO（带 boot
+    incarnation）、喂 `MachinedMesh`、buddy 死亡 → 宣告该机进程死亡 + 本地权威注册表 + 广播
+    birth/death/query 聚合；client 连本地 machined。
   - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
