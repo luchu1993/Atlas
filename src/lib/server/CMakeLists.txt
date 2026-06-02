@@ -13,6 +13,7 @@ add_library(atlas_server STATIC
   ipv4_networks.cc
   machined_client.cc
   manager_app.cc
+  mesh_transport.cc
   script_app.cc
   server_app.cc
   server_config.cc
