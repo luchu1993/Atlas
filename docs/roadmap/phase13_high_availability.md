@@ -84,9 +84,14 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
     （SO_REUSEADDR + SO_BROADCAST），向 dispatcher 注册自己的 fd（不复用 NetworkInterface
     的 channel 机制）；`Open`/`Close`、`BroadcastHello`/`SendHelloTo`、`OnReadable` 解析
     `MeshHello` 回调（每回调限额防 timer 饿死）。集成测试驱动 live dispatcher。
-  - **M4-4b 待落地（live MachinedApp）**：MachinedApp 接 mesh——周期广播 HELLO（带 boot
-    incarnation）、喂 `MachinedMesh`、buddy 死亡 → 宣告该机进程死亡 + 本地权威注册表 + 广播
-    birth/death/query 聚合；client 连本地 machined。
+  - **M4-4b 待落地（live MachinedApp，epic 设计重头）**：MachinedApp 接 mesh——周期广播
+    HELLO、喂 `MachinedMesh`、buddy 死亡 → 宣告该机进程死亡 + 本地权威注册表 + 跨机查询聚合；
+    client 连本地 machined。**起步前需先定的设计点（M4-1~4a 只是地基，这些尚未决）**：
+    (1) 新增 `MeshProcessDeath` wire 消息——buddy 检测到死亡后广播，各节点据此丢弃该机进程缓存；
+    (2) 跨机查询 `MeshQuery`/`MeshQueryResponse` + 聚合（"广播查询 → first-found"，HELLO 不带进程表）；
+    (3) mesh UDP 端口（现 machined 是 TCP 20018，同号还是兄弟端口）；
+    (4) boot incarnation 来源（MachinedApp 启动时生成，如 boot 时间戳）；
+    (5) buddy 死亡接到现有 `ProcessRegistry` / `DeathNotification` 监听者路径。
   - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
