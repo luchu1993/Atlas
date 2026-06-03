@@ -258,6 +258,7 @@ class CellApp : public EntityApp, public CellMovementHost {
 
   // Script-initiated cross-space teleport awaiting a ResolveSpaceHostReply.
   struct PendingTeleport {
+    EntityID entity_id{kInvalidEntityID};
     SpaceID target_space_id{kInvalidSpaceID};
     math::Vector3 position{0.f, 0.f, 0.f};
     math::Vector3 direction{1.f, 0.f, 0.f};

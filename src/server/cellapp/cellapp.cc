@@ -2171,6 +2171,20 @@ void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::Of
         return;
       }
     }
+  } else if (msg.is_teleport) {
+    // Teleport ships geometry_version=0; resolve the arrival cell from our own
+    // BSP and reject if non-local, else the entity becomes a Real in no Cell.
+    if (auto* tree = space->GetBspTree(); tree != nullptr) {
+      const auto* info = tree->FindCell(msg.position.x, msg.position.z);
+      target_cell = info != nullptr ? space->FindLocalCell(info->cell_id) : nullptr;
+    }
+    if (target_cell == nullptr) {
+      ATLAS_LOG_WARNING(
+          "CellApp: teleport entity_id={} pos not in a local cell of space {} - rejecting",
+          msg.entity_id, msg.space_id);
+      SendOffloadReject(ch, src, msg.entity_id, cellapp::OffloadRejectReason::kStaleGeometry);
+      return;
+    }
   }
 
   CellEntity* entity = nullptr;
@@ -3162,7 +3176,8 @@ auto CellApp::RequestTeleport(EntityID entity_id, SpaceID target_space_id, math:
                       r.Error().Message());
     return false;
   }
-  pending_teleports_[request_id] = PendingTeleport{target_space_id, pos, dir, Clock::now()};
+  pending_teleports_[request_id] =
+      PendingTeleport{entity_id, target_space_id, pos, dir, Clock::now()};
   return true;
 }
 
@@ -3248,12 +3263,13 @@ void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_add
 void CellApp::TickTeleportTimeouts() {
   if (pending_teleports_.empty()) return;
   const auto now = Clock::now();
-  std::vector<uint32_t> timed_out;
+  std::vector<std::pair<uint32_t, EntityID>> timed_out;
   for (const auto& [rid, pt] : pending_teleports_) {
-    if (now - pt.sent_at >= kTeleportResolveTimeout) timed_out.push_back(rid);
+    if (now - pt.sent_at >= kTeleportResolveTimeout) timed_out.emplace_back(rid, pt.entity_id);
   }
-  for (auto rid : timed_out) {
-    ATLAS_LOG_WARNING("CellApp: teleport resolve request_id={} timed out - entity stays put", rid);
+  for (auto [rid, eid] : timed_out) {
+    ATLAS_LOG_WARNING("CellApp: teleport resolve request_id={} entity_id={} timed out - stays put",
+                      rid, eid);
     pending_teleports_.erase(rid);
   }
 }

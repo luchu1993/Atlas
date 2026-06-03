@@ -369,7 +369,7 @@ atlas_add_test(NAME test_offload_revert
 
 atlas_add_test(NAME test_teleport
   SOURCES test_teleport.cpp
-  DEPS atlas_cellapp_lib atlas_space atlas_network atlas_serialization
+  DEPS atlas_cellapp_lib atlas_cellappmgr_bsp atlas_space atlas_network atlas_serialization
 )
 
 atlas_add_test(NAME test_cell

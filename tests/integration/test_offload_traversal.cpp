@@ -273,7 +273,7 @@ TEST(OffloadTraversal, CrossSpaceTeleport_RehydratesInTargetSpace) {
   // naming B as the destination host.
   const math::Vector3 dst_pos{12.f, 0.f, 9.f};
   host_a.app.PendingTeleportsForTest()[1] =
-      CellApp::PendingTeleport{kDstSpace, dst_pos, {1.f, 0.f, 0.f}, Clock::now()};
+      CellApp::PendingTeleport{100, kDstSpace, dst_pos, {1.f, 0.f, 0.f}, Clock::now()};
   cellappmgr::ResolveSpaceHostReply reply;
   reply.request_id = 1;
   reply.entity_id = 100;

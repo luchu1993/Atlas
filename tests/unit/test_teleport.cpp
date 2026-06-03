@@ -15,6 +15,7 @@
 #include "cell.h"
 #include "cell_entity.h"
 #include "cellapp.h"
+#include "cellappmgr/bsp_tree.h"
 #include "foundation/intrusive_ptr.h"
 #include "intercell_messages.h"
 #include "math/vector3.h"
@@ -216,6 +217,38 @@ TEST(Teleport, OnOffloadTeleportToUnhostedSpaceRejects) {
   EXPECT_EQ(ack.entity_id, 100u);
   EXPECT_FALSE(ack.success);
   EXPECT_EQ(ack.reject_reason, cellapp::OffloadRejectReason::kTargetMissing);
+}
+
+TEST(Teleport, OnOffloadTeleportToPositionOutsideLocalCellRejects) {
+  Harness h;
+  const Address src = MakeAddr(50000);
+  auto* src_ch = RecordingChan();
+  h.app.PeerRegistryForTest().InsertForTest(src, src_ch);
+
+  // Space is hosted (local cell id=7) but the BSP maps the arrival pos to leaf
+  // id=1, which isn't local here - the leaf moved away between resolve and arrival.
+  auto& spaces = h.app.Spaces();
+  auto* space = spaces.emplace(2, std::make_unique<Space>(2)).first->second.get();
+  space->AddLocalCell(std::make_unique<Cell>(*space, /*cell_id=*/7, CellBounds{}));
+  BSPTree tree;
+  tree.InitSingleCell(CellInfo{/*cell_id=*/1, MakeAddr(60000), /*bounds=*/{}, 0.f, 0});
+  space->SetBspTree(std::move(tree));
+
+  cellapp::OffloadEntity msg;
+  msg.entity_id = 101;
+  msg.type_id = 1;
+  msg.space_id = 2;
+  msg.is_teleport = true;
+  msg.geometry_version = 0;
+  msg.position = {5.f, 0.f, 5.f};
+  msg.base_addr = MakeAddr(20000);
+  h.app.OnOffloadEntity(src, src_ch, msg);
+
+  auto ack = FirstAck(*src_ch);
+  EXPECT_EQ(ack.entity_id, 101u);
+  EXPECT_FALSE(ack.success);
+  EXPECT_EQ(ack.reject_reason, cellapp::OffloadRejectReason::kStaleGeometry);
+  EXPECT_EQ(h.app.EntityPopulationForTest().count(101), 0u);  // not stranded
 }
 
 }  // namespace
