@@ -284,5 +284,13 @@ TEST(Teleport, ResolveNotFoundFiresTeleportFailedCallback) {
   EXPECT_EQ(g_teleport_failed_reason, static_cast<uint8_t>(TeleportFailReason::kTargetUnhosted));
 }
 
+TEST(Teleport, RequestRejectedWhenPendingAtCap) {
+  Harness h;
+  SeedReal(h, /*id=*/100, /*sid=*/1);
+  auto& pending = h.app.PendingTeleportsForTest();
+  for (uint32_t i = 1; i <= 1024; ++i) pending[i] = CellApp::PendingTeleport{};  // kMaxPendingTeleports
+  EXPECT_FALSE(h.app.RequestTeleport(100, /*target_space=*/2, {1, 0, 1}, {1, 0, 0}));
+}
+
 }  // namespace
 }  // namespace atlas

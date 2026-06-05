@@ -526,6 +526,9 @@ class CellApp : public EntityApp, public CellMovementHost {
   uint64_t create_cell_entity_death_restore_failures_total_{0};
   uint64_t create_cell_entity_death_restore_promoted_total_{0};
   uint64_t ghost_promoted_to_real_total_{0};
+  uint64_t teleport_requested_total_{0};
+  uint64_t teleport_succeeded_total_{0};
+  uint64_t teleport_failed_total_{0};
   CellMovementSystem movement_system_;
 
  public:
@@ -592,6 +595,8 @@ class CellApp : public EntityApp, public CellMovementHost {
 
   static constexpr Duration kOffloadAckTimeout = std::chrono::seconds(5);
   static constexpr Duration kTeleportResolveTimeout = std::chrono::seconds(5);
+  // Safety bound on un-resolved teleports; new requests drop when full.
+  static constexpr std::size_t kMaxPendingTeleports = 1024;
 
   // Reject AvatarUpdate displacement beyond 50 m/tick (~500 m/s at
   // 10 Hz - well above any realistic player speed).

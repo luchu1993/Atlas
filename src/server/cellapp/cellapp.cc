@@ -598,6 +598,12 @@ void CellApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] {
                      return ghost_promoted_to_real_total_;
                    }));
+  wr.Add<uint64_t>("cellapp/teleport_requested_total",
+                   std::function<uint64_t()>([this] { return teleport_requested_total_; }));
+  wr.Add<uint64_t>("cellapp/teleport_succeeded_total",
+                   std::function<uint64_t()>([this] { return teleport_succeeded_total_; }));
+  wr.Add<uint64_t>("cellapp/teleport_failed_total",
+                   std::function<uint64_t()>([this] { return teleport_failed_total_; }));
   wr.Add<uint64_t>("cellapp/inform_cell_load_send_failures_total",
                    std::function<uint64_t()>([this] {
                      return inform_cell_load_send_failures_;
@@ -2385,6 +2391,7 @@ void CellApp::OnOffloadEntityAck(const Address& src, Channel* /*ch*/,
         entity_population_.erase(msg.entity_id);
         e->GetSpace().RemoveEntity(msg.entity_id);
       }
+      ++teleport_succeeded_total_;
     }
     ATLAS_LOG_INFO("CellApp: Offload of entity_id={} to {}:{} succeeded (rtt={} ms)", msg.entity_id,
                    target.Ip(), target.Port(),
@@ -3167,6 +3174,11 @@ auto CellApp::RequestTeleport(EntityID entity_id, SpaceID target_space_id, math:
                       entity_id);
     return false;
   }
+  if (pending_teleports_.size() >= kMaxPendingTeleports) {
+    ATLAS_LOG_WARNING("CellApp: RequestTeleport entity_id={} dropped - pending teleports at cap {}",
+                      entity_id, kMaxPendingTeleports);
+    return false;
+  }
   const uint32_t request_id = next_teleport_request_id_++;
   cellappmgr::ResolveSpaceHostRequest req;
   req.space_id = target_space_id;
@@ -3180,6 +3192,7 @@ auto CellApp::RequestTeleport(EntityID entity_id, SpaceID target_space_id, math:
   }
   pending_teleports_[request_id] =
       PendingTeleport{entity_id, target_space_id, pos, dir, Clock::now()};
+  ++teleport_requested_total_;
   return true;
 }
 
@@ -3281,6 +3294,7 @@ void CellApp::TickTeleportTimeouts() {
 }
 
 void CellApp::NotifyTeleportFailed(EntityID entity_id, TeleportFailReason reason) {
+  ++teleport_failed_total_;
   if (native_provider_ == nullptr) return;
   if (auto fn = native_provider_->teleport_failed_fn(); fn != nullptr) {
     fn(entity_id, static_cast<uint8_t>(reason));
