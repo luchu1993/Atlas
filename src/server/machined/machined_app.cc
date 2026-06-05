@@ -111,9 +111,11 @@ void MachinedApp::StartMesh() {
   }
 
   const uint16_t mesh_port = static_cast<uint16_t>(cfg.internal_port + 2);
-  const uint32_t self_ip = cfg.machined_address.Ip();
-  const Address self_mesh =
-      (self_ip != 0) ? Address(self_ip, mesh_port) : Address("127.0.0.1", mesh_port);
+  // machined_address is loopback under the local-connect convention, so peers
+  // need an explicit advertise IP to reach this host across the mesh.
+  const Address self_mesh = !cfg.mesh_advertise_ip.empty()
+                                ? Address(cfg.mesh_advertise_ip, mesh_port)
+                                : Address("127.0.0.1", mesh_port);
   const uint64_t incarnation =
       static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                 std::chrono::system_clock::now().time_since_epoch())

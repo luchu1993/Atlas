@@ -143,6 +143,7 @@ static const CliField kCliFields[] = {
         &ServerConfig::revive_baseappmgr_launch_timeout_ms},
     {"revive-baseappmgr-on-start",  &ServerConfig::revive_baseappmgr_on_start},
     {"mesh-enabled",                &ServerConfig::mesh_enabled},
+    {"mesh-advertise-ip",           &ServerConfig::mesh_advertise_ip},
 };
 // clang-format on
 

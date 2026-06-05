@@ -30,6 +30,9 @@ struct ServerConfig {
 
   // Decentralized per-host machined UDP mesh (M4); off keeps the central TCP model.
   bool mesh_enabled = false;
+  // Address peers reach this machined at on the mesh; empty falls back to
+  // loopback (single-host only). Set to the host's reachable IP for multi-host.
+  std::string mesh_advertise_ip;
 
   int update_hertz = 10;
   // Empty frame_name derives from process_name at startup; Tracy stores the
