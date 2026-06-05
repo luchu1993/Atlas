@@ -99,10 +99,15 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   - **M4-4b-3a**（commit `669c644`，纯逻辑无 I/O）：`MeshRegistry`——按拥有者 machined 缓存
     远端进程（`UpdateOwner`/`DropOwner`/`FindByType` 跨拥有者合并）。远端进程无本地 channel
     （不能本地 shutdown），故与本地 `ProcessRegistry` 分开，查询时合并。5 单测。
-  - **M4-4b-3b+ 待落地（wire + 集成，含 mesh-enabled 集成测试）**：`MeshRegistry` gossip 消息
-    （周期广播本机进程表 → peer `UpdateOwner`）+ `MeshProcessDeath`（buddy 广播 → 各节点
-    `DropOwner` + 对该机远端进程发 `DeathNotification` 给监听者）；MachinedApp `OnQuery` 合并
-    本地 + 远端；多机 self-IP advertising（现退回 loopback）；client 连本地 machined。
+  - **M4-4b-3b**（commits `a8fe9b1` wire · `7138002` transport 泛化 · `984b69e` node 路由 ·
+    `15dd3ac` MachinedApp 集成）：跨机可见性打通——`MeshRegistryMsg`（周期广播本机进程表）+
+    `MeshProcessDeath`（owner 广播，`ScanFailures` 现返回 `{owned 广播, pruned 全部本地驱逐}`
+    保证漏播也能清缓存）；`MeshTransport` 泛化成按类型派发的 datagram pipe；`MachinedMeshNode`
+    路由三类消息 + `BroadcastRegistry`；MachinedApp `OnQuery` 合并本地+远端、死亡 → `TakeOwner`
+    + 给监听者发 `DeathNotification`。watcher `machined/mesh/remote_processes`。
+  - **M4-4b-3b 余项待落地**：registry-diff 发远端 `BirthNotification`（监听者看到远端 birth，
+    不止 query）+ 单进程远端 death；多机 self-IP advertising（现退回 loopback）；mesh-enabled
+    集成测试。
   - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
