@@ -121,6 +121,21 @@ atlas_add_test(NAME test_collision_asset
   DEPS atlas_physics
 )
 
+atlas_add_test(NAME test_nav_query
+  SOURCES test_nav_query.cpp
+  DEPS atlas_navigation
+)
+
+atlas_add_test(NAME test_nav_params
+  SOURCES test_nav_params.cpp
+  DEPS atlas_navigation
+)
+
+atlas_add_test(NAME test_nav_input
+  SOURCES test_nav_input.cpp
+  DEPS atlas_navigation
+)
+
 atlas_add_test(NAME test_movement_sim
   SOURCES test_movement_sim.cpp
   DEPS atlas_movement_sim

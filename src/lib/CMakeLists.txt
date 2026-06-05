@@ -6,6 +6,7 @@ add_subdirectory(physics)
 if(ATLAS_ENABLE_JOLT)
   add_subdirectory(physics_jolt)
 endif()
+add_subdirectory(navigation)
 add_subdirectory(movement_sim)
 add_subdirectory(script)
 
