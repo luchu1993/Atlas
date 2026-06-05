@@ -286,6 +286,8 @@ class CellApp : public EntityApp, public CellMovementHost {
     return pending_teleports_;
   }
 
+  [[nodiscard]] auto ResolveSelfAddrForTest() -> Address { return ResolveSelfAddr(); }
+
   // Test hook for handlers that normally seed entity_population_.
   [[nodiscard]] auto EntityPopulationForTest() -> std::unordered_map<EntityID, CellEntity*>& {
     return entity_population_;
@@ -566,10 +568,18 @@ class CellApp : public EntityApp, public CellMovementHost {
   void ProcessOffload(CellEntity& entity, Channel* peer, const Address& target_addr,
                       cellapp::OffloadEntity&& msg);
 
+  // OnOffloadEntity's body after the trust gate; rebuilds the Real from `msg`.
+  // Called in-process (ch=nullptr) by the same-cellapp teleport re-home.
+  void ReceiveOffload(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg);
+
   // Resolved-host continuation of RequestTeleport: builds a teleport-flavored
   // OffloadEntity (geometry_version=0) and routes it through ProcessOffload.
   void BeginTeleportOffload(CellEntity& entity, const Address& target_addr, SpaceID target_space_id,
                             math::Vector3 pos, math::Vector3 dir);
+
+  // Same-cellapp teleport: no peer channel to self, so tear the source Real
+  // down and rebuild it in the target space via ReceiveOffload.
+  void LocalTeleportRehome(CellEntity& entity, cellapp::OffloadEntity&& msg);
 
   // Fires the native teleport-failed callback so script learns of an async
   // failure; no-op if the entity is gone or the runtime predates the callback.

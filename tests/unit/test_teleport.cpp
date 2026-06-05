@@ -292,5 +292,42 @@ TEST(Teleport, RequestRejectedWhenPendingAtCap) {
   EXPECT_FALSE(h.app.RequestTeleport(100, /*target_space=*/2, {1, 0, 1}, {1, 0, 0}));
 }
 
+TEST(Teleport, SameCellAppRehomesAcrossSpaces) {
+  Harness h;
+  auto* src = SeedReal(h, /*id=*/100, /*sid=*/1);
+  src->SetBaseAddr(Address{});  // NPC: skip the base CurrentCell network send
+  ASSERT_EQ(src->GetSpace().Id(), 1u);
+
+  const Address self = h.app.ResolveSelfAddrForTest();
+
+  // Destination space 2 hosted on THIS cellapp.
+  auto& spaces = h.app.Spaces();
+  auto* dst = spaces.emplace(2, std::make_unique<Space>(2)).first->second.get();
+  dst->AddLocalCell(std::make_unique<Cell>(*dst, /*cell_id=*/1, CellBounds{}));
+  BSPTree tree;
+  tree.InitSingleCell(CellInfo{/*cell_id=*/1, self, /*bounds=*/{}, 0.f, 0});
+  dst->SetBspTree(std::move(tree));
+
+  const math::Vector3 pos{12.f, 0.f, 9.f};
+  h.app.PendingTeleportsForTest()[1] =
+      CellApp::PendingTeleport{100, 2, pos, {1.f, 0.f, 0.f}, Clock::now()};
+  cellappmgr::ResolveSpaceHostReply reply;
+  reply.request_id = 1;
+  reply.entity_id = 100;
+  reply.space_id = 2;
+  reply.found = true;
+  reply.host_addr = self;  // same-cellapp path
+  h.app.OnResolveSpaceHostReply(self, h.mgr_ch, reply);
+
+  auto* moved = h.app.FindEntity(100);  // src is dangling after the re-home
+  ASSERT_NE(moved, nullptr);
+  EXPECT_TRUE(moved->IsReal());
+  EXPECT_EQ(moved->GetSpace().Id(), 2u);
+  EXPECT_FLOAT_EQ(moved->Position().x, pos.x);
+  EXPECT_FLOAT_EQ(moved->Position().z, pos.z);
+  EXPECT_TRUE(dst->FindLocalCell(1)->HasRealEntity(moved));
+  EXPECT_EQ(spaces.at(1)->FindEntity(100), nullptr);  // gone from the source space
+}
+
 }  // namespace
 }  // namespace atlas

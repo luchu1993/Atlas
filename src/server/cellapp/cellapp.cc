@@ -2128,7 +2128,10 @@ void CellApp::OnGhostSetNextReal(const Address& src, Channel* /*ch*/,
 
 void CellApp::OnOffloadEntity(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg) {
   if (RejectUntrustedCellAppPeer(src, "OffloadEntity")) return;
+  ReceiveOffload(src, ch, msg);
+}
 
+void CellApp::ReceiveOffload(const Address& src, Channel* ch, const cellapp::OffloadEntity& msg) {
   auto* space = FindSpace(msg.space_id);
   if (msg.is_teleport) {
     // Teleport requires a fully-hosted destination; never auto-create a
@@ -3225,27 +3228,36 @@ void CellApp::OnResolveSpaceHostReply(const Address& /*src*/, Channel* ch,
 
 void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_addr,
                                    SpaceID target_space_id, math::Vector3 pos, math::Vector3 dir) {
-  // Same-cellapp cross-space teleport would need a local re-home (no peer
-  // channel to self); not yet supported, so abort leaving the Real in place.
-  if (target_addr == ResolveSelfAddr()) {
-    ATLAS_LOG_WARNING(
-        "CellApp: teleport entity_id={} to space={} lands on this cellapp - "
-        "same-cellapp cross-space teleport unsupported; entity stays put",
-        entity.Id(), target_space_id);
-    NotifyTeleportFailed(entity.Id(), TeleportFailReason::kSameCellApp);
-    return;
+  const bool same_cellapp = target_addr == ResolveSelfAddr();
+  Channel* peer = nullptr;
+  if (same_cellapp) {
+    // Validate the local target is hosted with a cell at pos BEFORE any
+    // teardown, so a failed re-home leaves the source Real in place.
+    Cell* dst_cell = nullptr;
+    if (auto* dst = FindSpace(target_space_id); dst != nullptr) {
+      if (auto* tree = dst->GetBspTree(); tree != nullptr) {
+        const auto* info = tree->FindCell(pos.x, pos.z);
+        dst_cell = info != nullptr ? dst->FindLocalCell(info->cell_id) : nullptr;
+      }
+    }
+    if (dst_cell == nullptr) {
+      ATLAS_LOG_WARNING("CellApp: teleport entity_id={} same-cellapp target space {} not hosted here",
+                        entity.Id(), target_space_id);
+      NotifyTeleportFailed(entity.Id(), TeleportFailReason::kSameCellApp);
+      return;
+    }
+  } else {
+    peer = FindPeerChannel(target_addr);
+    if (peer == nullptr) {
+      ATLAS_LOG_WARNING("CellApp: teleport entity_id={} target {}:{} has no peer channel",
+                        entity.Id(), target_addr.Ip(), target_addr.Port());
+      NotifyTeleportFailed(entity.Id(), TeleportFailReason::kNoPeer);
+      return;
+    }
   }
-  Channel* peer = FindPeerChannel(target_addr);
-  if (peer == nullptr) {
-    ATLAS_LOG_WARNING("CellApp: teleport entity_id={} target {}:{} has no peer channel",
-                      entity.Id(), target_addr.Ip(), target_addr.Port());
-    NotifyTeleportFailed(entity.Id(), TeleportFailReason::kNoPeer);
-    return;
-  }
-  // Anchor the pose to the teleport target before BuildOffloadMessage so the
-  // destination re-localizes against its own BSP at the new coordinates.
-  entity.SetPositionAndDirection(pos, dir);
 
+  // Anchor the pose so the destination re-localizes at the new coordinates.
+  entity.SetPositionAndDirection(pos, dir);
   // Drop OLD-space ghosts via DeleteGhost (not a cross-space GhostSetReal
   // redirect); they are meaningless once the Real lives in another space.
   if (auto* rd = entity.GetRealData()) {
@@ -3261,8 +3273,8 @@ void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_add
       cancel_fn != nullptr) {
     cancel_fn(entity.Id());
   }
-  // Source has no BSP for the destination space: geometry_version=0 makes the
-  // receiver skip stale-geometry validation and place via its own tree.
+  // geometry_version=0 makes the receiver skip stale-geometry validation and
+  // place via its own tree; teleport arrives at rest (no carried motion).
   auto msg = BuildOffloadMessage(entity, /*target_cell_id=*/0);
   msg.is_teleport = true;
   msg.space_id = target_space_id;
@@ -3270,12 +3282,39 @@ void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_add
   msg.target_cell_id = 0;
   msg.position = pos;
   msg.direction = dir;
-  // Teleport is a discontinuous jump: arrive at rest with no carried velocity,
-  // in-progress command, or old-space lag-comp history.
   msg.has_movement_state = false;
   msg.has_movement_command = false;
   msg.movement_position_history.clear();
-  ProcessOffload(entity, peer, target_addr, std::move(msg));
+
+  if (same_cellapp) {
+    LocalTeleportRehome(entity, std::move(msg));
+  } else {
+    ProcessOffload(entity, peer, target_addr, std::move(msg));
+  }
+}
+
+void CellApp::LocalTeleportRehome(CellEntity& entity, cellapp::OffloadEntity&& msg) {
+  const EntityID id = entity.Id();
+  // Tear the source Real down: silent C# teardown (no OnDestroy), drop movement
+  // + cell membership + population, leave the source space (AoI-leave fan-out).
+  if (native_provider_) {
+    if (auto fn = native_provider_->entity_migrating_out_fn()) {
+      fn(id);
+    } else if (auto df = native_provider_->entity_destroyed_fn()) {
+      df(id);
+    }
+  }
+  movement_system_.EraseEntity(id);
+  entity_load_counters_.erase(id);
+  auto& src_space = entity.GetSpace();
+  for (auto& [_, cell] : src_space.LocalCells()) cell->RemoveRealEntity(&entity);
+  entity_population_.erase(id);
+  src_space.RemoveEntity(id);  // `entity` is dangling after this
+
+  // Rebuild in the target space via the shared receive core. ch=nullptr skips
+  // the ack; existing_haunts is empty so no GhostSetReal fan-out.
+  ReceiveOffload(ResolveSelfAddr(), /*ch=*/nullptr, msg);
+  ++teleport_succeeded_total_;
 }
 
 void CellApp::TickTeleportTimeouts() {

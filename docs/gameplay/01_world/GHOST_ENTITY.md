@@ -426,15 +426,14 @@ CellAppMgr 广播映射表更新有延迟（< 1 秒），其间消息可能 misr
   跨 space 后源 Ghost 在旧 space 无人接管，故 ack 成功时**移除源副本**（带 AoI leave 扇出），
   失败/超时仍走 revert 复原为 Real。
 - **不带进行中运动**：传送是不连续跳变，丢弃在途 MovementCommand、速度与 lag-comp 历史，落地静止。
+- **同 cellapp 走本地 re-home**：目标落在本 cellapp（无指向自身的 peer 通道）时，
+  拆除源 Real 后用 `ReceiveOffload` 在目标 space 原地重建，复用同一套重建逻辑。
 
 **失败通知**：`Teleport()` 返回 true 只表示请求已派发；异步失败（目标未 host、resolve
-超时、目标拒绝、同-cellapp 等）通过 `CellServerEntity.OnTeleportFailed(reason)` 回调脚本，
-实体保持在原 space。
+超时、目标拒绝等）通过 `CellServerEntity.OnTeleportFailed(reason)` 回调脚本，实体保持在原 space。
 
 **前置条件 / 限制**：
 - 目标 space 必须已被某 cellapp host；解析不到 host 时传送中止，实体留在原地。
-- 暂不支持目标落在**同一 cellapp**（需本地 re-home，无指向自身的 peer 通道）；
-  此时传送中止并记录日志，实体保持 Real。
 
 ---
 
