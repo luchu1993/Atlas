@@ -32,6 +32,16 @@ class MeshRegistry {
   // Drops everything owned by `owner` (the peer machined died or left the mesh).
   auto DropOwner(const Address& owner) -> bool { return by_owner_.erase(owner) != 0; }
 
+  // Removes and returns `owner`'s processes (empty if none), so a caller can
+  // notify listeners of a dead host's processes as they are evicted.
+  auto TakeOwner(const Address& owner) -> std::vector<machined::ProcessInfo> {
+    auto it = by_owner_.find(owner);
+    if (it == by_owner_.end()) return {};
+    auto out = std::move(it->second);
+    by_owner_.erase(it);
+    return out;
+  }
+
   // Every known remote process of `type`, across all owners.
   [[nodiscard]] auto FindByType(ProcessType type) const -> std::vector<machined::ProcessInfo> {
     std::vector<machined::ProcessInfo> out;

@@ -118,10 +118,11 @@ void MachinedApp::StartMesh() {
                                 .count());
 
   mesh_node_.emplace(Dispatcher(), self_mesh);
-  mesh_node_->SetDeathCallback([this](const Address& dead) {
-    ++mesh_dead_buddies_;
-    ATLAS_LOG_WARNING("MachinedApp: mesh buddy {} declared dead", dead.ToString());
-  });
+  mesh_node_->SetDeathCallback([this](const Address& dead) { OnMeshPeerDeath(dead); });
+  mesh_node_->SetRegistryCallback(
+      [this](const Address& owner, std::vector<ProcessInfo> processes) {
+        mesh_registry_.UpdateOwner(owner, std::move(processes));
+      });
   mesh_node_->SetPeerEventCallback([](const Address& peer, MachinedMesh::Observation obs) {
     ATLAS_LOG_INFO("MachinedApp: mesh peer {} {}", peer.ToString(),
                    obs == MachinedMesh::Observation::kRestarted ? "restarted" : "joined");
@@ -137,6 +138,43 @@ void MachinedApp::StartMesh() {
   }
   ATLAS_LOG_INFO("MachinedApp: mesh enabled on UDP port {} (incarnation {})", mesh_port,
                  incarnation);
+}
+
+auto MachinedApp::LocalProcessList() const -> std::vector<ProcessInfo> {
+  std::vector<ProcessInfo> out;
+  process_registry_.ForEach([&](const ProcessEntry& e) {
+    ProcessInfo info;
+    info.process_type = e.process_type;
+    info.name = e.name;
+    info.internal_addr = e.internal_addr;
+    info.external_addr = e.external_addr;
+    info.pid = e.pid;
+    info.load = e.load;
+    out.push_back(std::move(info));
+  });
+  return out;
+}
+
+void MachinedApp::BroadcastLocalRegistryIfDue(TimePoint now) {
+  if (!mesh_node_) return;
+  if (now - last_registry_broadcast_ < kMeshRegistryBroadcastInterval) return;
+  mesh_node_->BroadcastRegistry(LocalProcessList());
+  last_registry_broadcast_ = now;
+}
+
+void MachinedApp::OnMeshPeerDeath(const Address& dead) {
+  ++mesh_dead_buddies_;
+  auto gone = mesh_registry_.TakeOwner(dead);
+  for (const auto& p : gone) {
+    DeathNotification notif;
+    notif.process_type = p.process_type;
+    notif.name = p.name;
+    notif.internal_addr = p.internal_addr;
+    notif.reason = 2;  // the owning machined left the mesh, so its processes are gone
+    listener_manager_.NotifyDeath(notif);
+  }
+  ATLAS_LOG_WARNING("MachinedApp: mesh peer {} died; evicted {} remote process(es)",
+                    dead.ToString(), gone.size());
 }
 
 void MachinedApp::Fini() {
@@ -181,12 +219,19 @@ void MachinedApp::RegisterWatchers() {
   reg.Add<std::string>("machined/mesh/dead_buddies", std::function<std::string()>{[this]() {
                          return std::to_string(mesh_dead_buddies_);
                        }});
+  reg.Add<std::string>("machined/mesh/remote_processes", std::function<std::string()>{[this]() {
+                         return std::to_string(mesh_registry_.ProcessCount());
+                       }});
 }
 
 void MachinedApp::OnTickComplete() {
   CheckHeartbeatTimeouts();
   watcher_forwarder_.CheckTimeouts();
-  if (mesh_node_) mesh_node_->Tick(Clock::now());
+  if (mesh_node_) {
+    const auto now = Clock::now();
+    mesh_node_->Tick(now);
+    BroadcastLocalRegistryIfDue(now);
+  }
 }
 
 void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const RegisterMessage& msg) {
@@ -318,6 +363,11 @@ void MachinedApp::OnQuery(const Address& /*src*/, Channel* ch, const QueryMessag
     info.pid = e.pid;
     info.load = e.load;
     resp.processes.push_back(std::move(info));
+  }
+  // Merge processes other hosts gossiped onto the mesh so a query resolves the
+  // whole cluster, not just this machined's local registrations.
+  for (auto& remote : mesh_registry_.FindByType(msg.process_type)) {
+    resp.processes.push_back(std::move(remote));
   }
   (void)ch->SendMessage(resp);
 }

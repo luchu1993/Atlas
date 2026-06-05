@@ -10,6 +10,7 @@
 #include "machined/watcher_forwarder.h"
 #include "network/frequent_task.h"
 #include "server/machined_mesh_node.h"
+#include "server/mesh_registry.h"
 #include "server/manager_app.h"
 
 namespace atlas::machined {
@@ -46,6 +47,9 @@ class MachinedApp : public ManagerApp {
   auto TakePendingShutdownReason(Channel* ch, uint8_t fallback) -> uint8_t;
   void CheckHeartbeatTimeouts();
   void StartMesh();
+  void BroadcastLocalRegistryIfDue(TimePoint now);
+  void OnMeshPeerDeath(const Address& dead);
+  [[nodiscard]] auto LocalProcessList() const -> std::vector<ProcessInfo>;
 
   ProcessRegistry process_registry_;
   ListenerManager listener_manager_;
@@ -62,7 +66,11 @@ class MachinedApp : public ManagerApp {
 
   uint16_t heartbeat_udp_port_{0};
 
+  static constexpr Duration kMeshRegistryBroadcastInterval = std::chrono::seconds(2);
+
   std::optional<MachinedMeshNode> mesh_node_;
+  MeshRegistry mesh_registry_;
+  TimePoint last_registry_broadcast_{};
   uint64_t mesh_dead_buddies_{0};
 };
 
