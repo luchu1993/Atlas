@@ -33,6 +33,8 @@ class MachinedMeshNode {
   using DeathCallback = std::function<void(const Address& dead_machined)>;
   using PeerEventCallback =
       std::function<void(const Address& peer, MachinedMesh::Observation observation)>;
+  using RegistryCallback =
+      std::function<void(const Address& owner, std::vector<machined::ProcessInfo> processes)>;
 
   static constexpr Duration kDefaultBroadcastInterval =
       std::chrono::duration_cast<Duration>(std::chrono::seconds(2));
@@ -57,6 +59,16 @@ class MachinedMeshNode {
   void SetBroadcastTarget(const Address& addr) { transport_.SetBroadcastTarget(addr); }
   void SetDeathCallback(DeathCallback cb) { death_cb_ = std::move(cb); }
   void SetPeerEventCallback(PeerEventCallback cb) { peer_cb_ = std::move(cb); }
+  void SetRegistryCallback(RegistryCallback cb) { registry_cb_ = std::move(cb); }
+
+  // Broadcasts this host's local process table; peers fold it into their mesh
+  // registry under this node's address.
+  void BroadcastRegistry(std::vector<machined::ProcessInfo> processes) {
+    machined::MeshRegistryMsg msg;
+    msg.owner = self_;
+    msg.processes = std::move(processes);
+    BroadcastMsg(msg);
+  }
 
   // Folds queued HELLOs into the ring, re-broadcasts on the interval, and emits
   // the death callback for each dead buddy this node owns announcing.
@@ -73,14 +85,18 @@ class MachinedMeshNode {
       machined::MeshHello hello;
       hello.machined_addr = self_;
       hello.incarnation = incarnation_;
-      BinaryWriter w;
-      hello.Serialize(w);
-      (void)transport_.Broadcast(w.Data());
+      BroadcastMsg(hello);
       last_broadcast_ = now;
     }
 
-    for (const auto& dead : mesh_.ScanFailures(now)) {
-      if (death_cb_) death_cb_(dead);
+    const auto scan = mesh_.ScanFailures(now);
+    for (const auto& owned : scan.owned) {
+      machined::MeshProcessDeath death;
+      death.dead_machined = owned;
+      BroadcastMsg(death);
+    }
+    for (const auto& pruned : scan.pruned) {
+      if (death_cb_) death_cb_(pruned);
     }
   }
 
@@ -100,10 +116,30 @@ class MachinedMeshNode {
     BinaryReader r(payload);
     auto type = machined::PeekMeshType(r);
     if (!type) return;
-    if (*type == machined::MeshMessageType::kHello) {
-      auto hello = machined::MeshHello::Deserialize(r);
-      if (hello) pending_.push_back(Pending{hello->machined_addr, hello->incarnation});
+    switch (*type) {
+      case machined::MeshMessageType::kHello: {
+        auto hello = machined::MeshHello::Deserialize(r);
+        if (hello) pending_.push_back(Pending{hello->machined_addr, hello->incarnation});
+        break;
+      }
+      case machined::MeshMessageType::kRegistry: {
+        auto msg = machined::MeshRegistryMsg::Deserialize(r);
+        if (msg && registry_cb_) registry_cb_(msg->owner, std::move(msg->processes));
+        break;
+      }
+      case machined::MeshMessageType::kProcessDeath: {
+        auto msg = machined::MeshProcessDeath::Deserialize(r);
+        if (msg && death_cb_) death_cb_(msg->dead_machined);
+        break;
+      }
     }
+  }
+
+  template <typename Msg>
+  void BroadcastMsg(const Msg& msg) {
+    BinaryWriter w;
+    msg.Serialize(w);
+    (void)transport_.Broadcast(w.Data());
   }
 
   Address self_;
@@ -115,6 +151,7 @@ class MachinedMeshNode {
   std::vector<Pending> pending_;
   DeathCallback death_cb_;
   PeerEventCallback peer_cb_;
+  RegistryCallback registry_cb_;
 };
 
 }  // namespace atlas

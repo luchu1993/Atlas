@@ -3,12 +3,17 @@
 #include <chrono>
 #include <optional>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "foundation/clock.h"
+#include "foundation/process_type.h"
 #include "network/address.h"
 #include "network/event_dispatcher.h"
+#include "network/mesh_gossip.h"
+#include "serialization/binary_stream.h"
+#include "server/mesh_transport.h"
 
 using namespace atlas;
 
@@ -107,4 +112,68 @@ TEST(MachinedMeshNode, RestartedPeerReportsRestartObservation) {
 
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[1], MachinedMesh::Observation::kRestarted);
+}
+
+TEST(MachinedMeshNode, ReceivesRegistryGossip) {
+  EventDispatcher disp{"mesh_node_test"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  MachinedMeshNode node(disp, Mesh(7001));
+  ASSERT_TRUE(node.Open(Mesh(0), Mesh(0), 100).HasValue());
+  MeshTransport sender(disp);
+  ASSERT_TRUE(sender.Open(Mesh(0), Mesh(0)).HasValue());
+
+  std::optional<Address> got_owner;
+  std::vector<machined::ProcessInfo> got_procs;
+  node.SetRegistryCallback([&](const Address& owner, std::vector<machined::ProcessInfo> procs) {
+    got_owner = owner;
+    got_procs = std::move(procs);
+  });
+
+  machined::MeshRegistryMsg msg;
+  msg.owner = Mesh(7002);
+  machined::ProcessInfo p;
+  p.process_type = ProcessType::kCellApp;
+  p.name = "cellapp-1";
+  p.pid = 5;
+  msg.processes.push_back(p);
+  BinaryWriter w;
+  msg.Serialize(w);
+  ASSERT_TRUE(sender.SendTo(node.BoundAddress(), w.Data()).HasValue());
+
+  ASSERT_TRUE(poll_until(disp, [&] { return got_owner.has_value(); }));
+  EXPECT_EQ(*got_owner, Mesh(7002));
+  ASSERT_EQ(got_procs.size(), 1u);
+  EXPECT_EQ(got_procs[0].name, "cellapp-1");
+}
+
+TEST(MachinedMeshNode, DeathDetectionBroadcastsToPeers) {
+  EventDispatcher disp{"mesh_node_test"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  MachinedMeshNode a(disp, Mesh(7001));
+  MachinedMeshNode b(disp, Mesh(7002));
+  MachinedMeshNode c(disp, Mesh(7003));
+  a.SetPeerTimeout(std::chrono::duration_cast<Duration>(std::chrono::seconds(1)));
+  ASSERT_TRUE(a.Open(Mesh(0), Mesh(0), 1).HasValue());
+  ASSERT_TRUE(b.Open(Mesh(0), Mesh(0), 2).HasValue());
+  ASSERT_TRUE(c.Open(Mesh(0), Mesh(0), 3).HasValue());
+  b.SetBroadcastTarget(a.BoundAddress());  // b's HELLO reaches a
+  a.SetBroadcastTarget(c.BoundAddress());  // a's death announcement reaches c
+
+  std::optional<Address> c_saw_dead;
+  c.SetDeathCallback([&](const Address& d) { c_saw_dead = d; });
+
+  const auto t0 = TimePoint{} + std::chrono::seconds(10);
+  b.Tick(t0);
+  Pump(disp, std::chrono::milliseconds(60));
+  a.Tick(t0);
+  ASSERT_EQ(a.PeerCount(), 1u);
+
+  // b goes silent; a (its ring predecessor) detects + announces the death, which
+  // reaches c even though c never monitored b.
+  const auto t1 = t0 + std::chrono::seconds(2);
+  a.Tick(t1);
+  Pump(disp, std::chrono::milliseconds(60));
+
+  ASSERT_TRUE(c_saw_dead.has_value());
+  EXPECT_EQ(*c_saw_dead, Mesh(7002));
 }

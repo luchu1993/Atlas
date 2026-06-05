@@ -16,7 +16,7 @@ TEST(MachinedMesh, SoloMeshHasNoBuddyOrFailures) {
   MachinedMesh mesh(Addr(20));
   const auto now = TimePoint{} + std::chrono::seconds(1);
   EXPECT_FALSE(mesh.Buddy().has_value());
-  EXPECT_TRUE(mesh.ScanFailures(now).empty());
+  EXPECT_TRUE(mesh.ScanFailures(now).owned.empty());
   EXPECT_EQ(mesh.KnownPeerCount(), 0u);
 }
 
@@ -67,8 +67,8 @@ TEST(MachinedMesh, ScanFailuresClaimsTimedOutBuddy) {
   mesh.RecordHeartbeat(Addr(40), 1, t1);
 
   const auto dead = mesh.ScanFailures(t1);
-  ASSERT_EQ(dead.size(), 1u);
-  EXPECT_EQ(dead[0], Addr(30));
+  ASSERT_EQ(dead.owned.size(), 1u);
+  EXPECT_EQ(dead.owned[0], Addr(30));
   EXPECT_FALSE(mesh.Contains(Addr(30)));
   EXPECT_EQ(mesh.KnownPeerCount(), 2u);
   // The next live successor takes over as buddy.
@@ -86,9 +86,9 @@ TEST(MachinedMesh, ScanFailuresWalksConsecutiveDeadRun) {
   mesh.RecordHeartbeat(Addr(40), 1, t1);  // alive, stops the run
 
   const auto dead = mesh.ScanFailures(t1);
-  ASSERT_EQ(dead.size(), 2u);
-  EXPECT_EQ(dead[0], Addr(20));
-  EXPECT_EQ(dead[1], Addr(30));
+  ASSERT_EQ(dead.owned.size(), 2u);
+  EXPECT_EQ(dead.owned[0], Addr(20));
+  EXPECT_EQ(dead.owned[1], Addr(30));
   EXPECT_EQ(mesh.KnownPeerCount(), 1u);
   EXPECT_TRUE(mesh.Contains(Addr(40)));
 }
@@ -105,7 +105,9 @@ TEST(MachinedMesh, ScanFailuresPrunesNonSuccessorDeathsWithoutClaimingThem) {
   // self=10's successor 20 is alive, so self announces nothing, yet still drops
   // the stale 30 locally (its ring predecessor 20 owns announcing it).
   const auto dead = mesh.ScanFailures(t1);
-  EXPECT_TRUE(dead.empty());
+  EXPECT_TRUE(dead.owned.empty());
+  ASSERT_EQ(dead.pruned.size(), 1u);  // 30 is pruned locally though self doesn't own announcing it
+  EXPECT_EQ(dead.pruned[0], Addr(30));
   EXPECT_FALSE(mesh.Contains(Addr(30)));
   EXPECT_EQ(mesh.KnownPeerCount(), 2u);
 }
@@ -115,7 +117,7 @@ TEST(MachinedMesh, AliveBuddyYieldsNoFailures) {
   mesh.SetPeerTimeout(std::chrono::duration_cast<Duration>(std::chrono::seconds(1)));
   const auto now = TimePoint{} + std::chrono::seconds(10);
   mesh.RecordHeartbeat(Addr(20), 1, now);
-  EXPECT_TRUE(mesh.ScanFailures(now).empty());
+  EXPECT_TRUE(mesh.ScanFailures(now).owned.empty());
   EXPECT_EQ(mesh.KnownPeerCount(), 1u);
 }
 

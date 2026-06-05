@@ -57,11 +57,17 @@ class MachinedMesh {
     return std::nullopt;
   }
 
-  // Per-tick failure scan. Returns the contiguous run of timed-out peers
-  // clockwise of self (the deaths self announces cluster-wide), and drops every
-  // timed-out peer so a death broadcast we missed cannot linger in the ring.
-  auto ScanFailures(TimePoint now) -> std::vector<Address> {
-    std::vector<Address> owned;
+  struct FailureScan {
+    std::vector<Address> owned;   // deaths self announces cluster-wide
+    std::vector<Address> pruned;  // every peer dropped this scan (owned is a subset)
+  };
+
+  // Per-tick failure scan. `owned` is the contiguous run of timed-out peers
+  // clockwise of self (the deaths self broadcasts, one announcer per death);
+  // `pruned` is every timed-out peer, dropped so a missed death broadcast cannot
+  // linger and so a non-announcer can still evict the dead host's cached state.
+  auto ScanFailures(TimePoint now) -> FailureScan {
+    FailureScan result;
     const auto ring = Ring();
     const std::size_t n = ring.size();
     if (n > 1) {
@@ -77,16 +83,21 @@ class MachinedMesh {
         auto it = peers_.find(cand);
         if (it == peers_.end()) continue;
         if (now - it->second.last_seen >= peer_timeout_) {
-          owned.push_back(cand);
+          result.owned.push_back(cand);
         } else {
           break;
         }
       }
     }
     for (auto it = peers_.begin(); it != peers_.end();) {
-      it = (now - it->second.last_seen >= peer_timeout_) ? peers_.erase(it) : std::next(it);
+      if (now - it->second.last_seen >= peer_timeout_) {
+        result.pruned.push_back(it->first);
+        it = peers_.erase(it);
+      } else {
+        it = std::next(it);
+      }
     }
-    return owned;
+    return result;
   }
 
   [[nodiscard]] auto KnownPeerCount() const -> std::size_t { return peers_.size(); }
