@@ -7,8 +7,9 @@ self-snapshot、`mgr_generation` epoch、snapshot 文件或 reattach 对账机�
 Reviver 监督全局唯一 CellAppMgr 和 BaseAppMgr（multi-target），cold-start、direct
 heartbeat、manager health、registry audit；leader 选举已是 BigWorld 式
 priority+timeout 仲裁（被监控 Manager 端裁决，M3 落地），**不再有 leader lock /
-machined-lease**。**进行中：** M4（machined → per-host UDP 广播网格，不可逆点；
-M4-1 广播传输原语已落地）。
+machined-lease**。**进行中：** M4（machined → per-host UDP 广播网格，不可逆点）——
+M4-1~4b 已落地（per-host mesh 功能完整、opt-in `--mesh-enabled`、可逆）；仅剩 M4-5
+不可逆切换（删中心 TCP 单例模型），待显式放行。
 **前置依赖:** Phase 11（分布式空间完整可用）
 **BigWorld 参考:** `server/reviver/`, `server/dbappmgr/`
 
@@ -105,10 +106,15 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
     保证漏播也能清缓存）；`MeshTransport` 泛化成按类型派发的 datagram pipe；`MachinedMeshNode`
     路由三类消息 + `BroadcastRegistry`；MachinedApp `OnQuery` 合并本地+远端、死亡 → `TakeOwner`
     + 给监听者发 `DeathNotification`。watcher `machined/mesh/remote_processes`。
-  - **M4-4b-3b 余项待落地**：registry-diff 发远端 `BirthNotification`（监听者看到远端 birth，
-    不止 query）+ 单进程远端 death；多机 self-IP advertising（现退回 loopback）；mesh-enabled
-    集成测试。
-  - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
+  - **M4-4b-3b 余项**（已落地）：`922c281` registry-diff 发远端 `Birth`/`DeathNotification`
+    （监听者看到远端 birth + 单进程 death，不止 query）；`79850b8` `--mesh-advertise-ip` 多机
+    self-IP；`da7f828` mesh-enabled 集成测试（gossip 远端进程 → TCP 查询解析）。
+  - **M4-4b-4**（约定满足）：进程连本地 machined——`machined_address` 默认 `127.0.0.1:20018`
+    即本地，mesh 部署不指向远端中心即可，无代码改动。
+  - **M4-4b 小结**：per-host mesh 已功能完整且可逆（opt-in `--mesh-enabled`）——发现、ring/buddy
+    监控、跨机注册表 gossip、查询聚合、birth/death 传播全通，单测 + 节点级 + 集成测试覆盖。
+  - **M4-5 待落地（不可逆切换，需显式放行）**：删中心 TCP machined 单例模型，使 per-host mesh
+    成为唯一形态（断容器/云部署，与 BigWorld 同）。
 
 ## 当前已落地能力
 
