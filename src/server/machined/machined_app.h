@@ -49,6 +49,7 @@ class MachinedApp : public ManagerApp {
   void StartMesh();
   void BroadcastLocalRegistryIfDue(TimePoint now);
   void OnMeshPeerDeath(const Address& dead);
+  void OnMeshRegistry(const Address& owner, std::vector<ProcessInfo> processes);
   [[nodiscard]] auto LocalProcessList() const -> std::vector<ProcessInfo>;
 
   ProcessRegistry process_registry_;

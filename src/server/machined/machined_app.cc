@@ -1,6 +1,8 @@
 #include "machined/machined_app.h"
 
 #include <algorithm>
+#include <set>
+#include <utility>
 
 #include "foundation/clock.h"
 #include "foundation/log.h"
@@ -121,7 +123,7 @@ void MachinedApp::StartMesh() {
   mesh_node_->SetDeathCallback([this](const Address& dead) { OnMeshPeerDeath(dead); });
   mesh_node_->SetRegistryCallback(
       [this](const Address& owner, std::vector<ProcessInfo> processes) {
-        mesh_registry_.UpdateOwner(owner, std::move(processes));
+        OnMeshRegistry(owner, std::move(processes));
       });
   mesh_node_->SetPeerEventCallback([](const Address& peer, MachinedMesh::Observation obs) {
     ATLAS_LOG_INFO("MachinedApp: mesh peer {} {}", peer.ToString(),
@@ -160,6 +162,41 @@ void MachinedApp::BroadcastLocalRegistryIfDue(TimePoint now) {
   if (now - last_registry_broadcast_ < kMeshRegistryBroadcastInterval) return;
   mesh_node_->BroadcastRegistry(LocalProcessList());
   last_registry_broadcast_ = now;
+}
+
+void MachinedApp::OnMeshRegistry(const Address& owner, std::vector<ProcessInfo> processes) {
+  const auto previous = mesh_registry_.TakeOwner(owner);
+  auto key = [](const ProcessInfo& p) {
+    return std::pair<int, std::string>{static_cast<int>(p.process_type), p.name};
+  };
+  std::set<std::pair<int, std::string>> old_keys;
+  for (const auto& p : previous) old_keys.insert(key(p));
+  std::set<std::pair<int, std::string>> new_keys;
+  for (const auto& p : processes) new_keys.insert(key(p));
+
+  // Births: remote processes that appeared since this owner's last gossip.
+  for (const auto& p : processes) {
+    if (old_keys.count(key(p)) != 0) continue;
+    BirthNotification notif;
+    notif.process_type = p.process_type;
+    notif.name = p.name;
+    notif.internal_addr = p.internal_addr;
+    notif.external_addr = p.external_addr;
+    notif.pid = p.pid;
+    listener_manager_.NotifyBirth(notif);
+  }
+  // Deaths: remote processes that vanished while their host's machined stayed up.
+  for (const auto& p : previous) {
+    if (new_keys.count(key(p)) != 0) continue;
+    DeathNotification notif;
+    notif.process_type = p.process_type;
+    notif.name = p.name;
+    notif.internal_addr = p.internal_addr;
+    notif.reason = 1;
+    listener_manager_.NotifyDeath(notif);
+  }
+
+  mesh_registry_.UpdateOwner(owner, std::move(processes));
 }
 
 void MachinedApp::OnMeshPeerDeath(const Address& dead) {
