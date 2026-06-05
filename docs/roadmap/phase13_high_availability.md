@@ -96,10 +96,13 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
     death 回调本片仅可观测（log+计数）——远端 machined 死亡影响远端进程，本机注册表尚不跟踪，
     待 M4-4b-3 跨机注册表/查询落地才有可驱逐对象。验证：build + machined 注册集成（默认 off
     无回归）；mesh 运行时由 M4-4b-1 单测覆盖。
-  - **M4-4b-3+ 待落地（跨机可见性，含 mesh-enabled 集成测试）**：`MeshProcessDeath` 死亡传播
-    （buddy 广播 → 各节点丢弃该机进程缓存）+ `MeshQuery`/`MeshQueryResponse` 跨机查询聚合
-    （"广播查询 → first-found"，HELLO 不带进程表）；death 回调接 `DeathNotification` 监听者；
-    多机 self-IP advertising（现退回 loopback）；client 连本地 machined。
+  - **M4-4b-3a**（commit `669c644`，纯逻辑无 I/O）：`MeshRegistry`——按拥有者 machined 缓存
+    远端进程（`UpdateOwner`/`DropOwner`/`FindByType` 跨拥有者合并）。远端进程无本地 channel
+    （不能本地 shutdown），故与本地 `ProcessRegistry` 分开，查询时合并。5 单测。
+  - **M4-4b-3b+ 待落地（wire + 集成，含 mesh-enabled 集成测试）**：`MeshRegistry` gossip 消息
+    （周期广播本机进程表 → peer `UpdateOwner`）+ `MeshProcessDeath`（buddy 广播 → 各节点
+    `DropOwner` + 对该机远端进程发 `DeathNotification` 给监听者）；MachinedApp `OnQuery` 合并
+    本地 + 远端；多机 self-IP advertising（现退回 loopback）；client 连本地 machined。
   - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
