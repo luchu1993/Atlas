@@ -155,6 +155,9 @@ class CellAppNativeProvider : public BaseNativeProvider {
   }
   [[nodiscard]] auto restore_ghost_fn() const -> RestoreGhostFn { return restore_ghost_fn_; }
   [[nodiscard]] auto destroy_ghost_fn() const -> EntityDestroyedFn { return destroy_ghost_fn_; }
+  // nullptr on older runtimes; teleport failures then go unreported to script.
+  [[nodiscard]] auto teleport_failed_fn() const -> TeleportFailedFn { return teleport_failed_fn_; }
+  void SetTeleportFailedFnForTest(TeleportFailedFn fn) { teleport_failed_fn_ = fn; }
 
  private:
   EntityLookupFn lookup_;
@@ -192,6 +195,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   // nullptr on older runtimes; Ghost stays C++-only (legacy behaviour).
   RestoreGhostFn restore_ghost_fn_{nullptr};
   EntityDestroyedFn destroy_ghost_fn_{nullptr};
+  TeleportFailedFn teleport_failed_fn_{nullptr};
 };
 
 }  // namespace atlas

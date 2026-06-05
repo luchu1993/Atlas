@@ -2398,6 +2398,7 @@ void CellApp::OnOffloadEntityAck(const Address& src, Channel* /*ch*/,
       RejectReasonName(msg.reject_reason),
       std::chrono::duration_cast<std::chrono::milliseconds>(age).count());
   RevertPendingOffload(msg.entity_id, RejectReasonName(msg.reject_reason));
+  if (was_teleport) NotifyTeleportFailed(msg.entity_id, TeleportFailReason::kRejected);
 }
 
 void CellApp::TickOffloadAckTimeouts() {
@@ -2405,15 +2406,16 @@ void CellApp::TickOffloadAckTimeouts() {
   ATLAS_PROFILE_ZONE_N("CellApp::TickOffloadAckTimeouts");
   const auto now = Clock::now();
   // Collect first so the revert below can mutate the map.
-  std::vector<EntityID> timed_out;
+  std::vector<std::pair<EntityID, bool>> timed_out;
   for (const auto& [eid, po] : pending_offloads_) {
-    if (now - po.sent_at >= kOffloadAckTimeout) timed_out.push_back(eid);
+    if (now - po.sent_at >= kOffloadAckTimeout) timed_out.emplace_back(eid, po.is_teleport);
   }
-  for (auto eid : timed_out) {
+  for (auto [eid, is_teleport] : timed_out) {
     ATLAS_LOG_ERROR(
         "CellApp: Offload of entity_id={} TIMED OUT after {} ms - reverting Ghost to Real locally",
         eid, std::chrono::duration_cast<std::chrono::milliseconds>(kOffloadAckTimeout).count());
     RevertPendingOffload(eid, "ack timeout");
+    if (is_teleport) NotifyTeleportFailed(eid, TeleportFailReason::kOffloadTimeout);
   }
 }
 
@@ -3196,6 +3198,7 @@ void CellApp::OnResolveSpaceHostReply(const Address& /*src*/, Channel* ch,
   if (!msg.found) {
     ATLAS_LOG_WARNING("CellApp: teleport entity_id={} to space={} aborted - target unhosted",
                       msg.entity_id, msg.space_id);
+    NotifyTeleportFailed(msg.entity_id, TeleportFailReason::kTargetUnhosted);
     return;
   }
   auto* entity = FindEntity(msg.entity_id);
@@ -3216,12 +3219,14 @@ void CellApp::BeginTeleportOffload(CellEntity& entity, const Address& target_add
         "CellApp: teleport entity_id={} to space={} lands on this cellapp - "
         "same-cellapp cross-space teleport unsupported; entity stays put",
         entity.Id(), target_space_id);
+    NotifyTeleportFailed(entity.Id(), TeleportFailReason::kSameCellApp);
     return;
   }
   Channel* peer = FindPeerChannel(target_addr);
   if (peer == nullptr) {
     ATLAS_LOG_WARNING("CellApp: teleport entity_id={} target {}:{} has no peer channel",
                       entity.Id(), target_addr.Ip(), target_addr.Port());
+    NotifyTeleportFailed(entity.Id(), TeleportFailReason::kNoPeer);
     return;
   }
   // Anchor the pose to the teleport target before BuildOffloadMessage so the
@@ -3271,6 +3276,14 @@ void CellApp::TickTeleportTimeouts() {
     ATLAS_LOG_WARNING("CellApp: teleport resolve request_id={} entity_id={} timed out - stays put",
                       rid, eid);
     pending_teleports_.erase(rid);
+    NotifyTeleportFailed(eid, TeleportFailReason::kResolveTimeout);
+  }
+}
+
+void CellApp::NotifyTeleportFailed(EntityID entity_id, TeleportFailReason reason) {
+  if (native_provider_ == nullptr) return;
+  if (auto fn = native_provider_->teleport_failed_fn(); fn != nullptr) {
+    fn(entity_id, static_cast<uint8_t>(reason));
   }
 }
 

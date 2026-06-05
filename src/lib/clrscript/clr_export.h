@@ -25,7 +25,7 @@
 #include <cstdint>
 
 namespace atlas {
-inline constexpr uint32_t kAtlasAbiVersion = 5;
+inline constexpr uint32_t kAtlasAbiVersion = 6;
 }  // namespace atlas
 
 #endif  // ATLAS_LIB_CLRSCRIPT_CLR_EXPORT_H_

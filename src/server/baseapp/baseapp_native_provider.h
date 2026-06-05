@@ -51,6 +51,10 @@ using EntityLifecycleCancelFn = void (*)(uint32_t entity_id);
 using RestoreGhostFn = void (*)(uint32_t entity_id, uint16_t type_id,
                                 const uint8_t* snapshot, int32_t len);
 
+// Cellapp-only: an async cross-space teleport failed; reason mirrors
+// atlas::TeleportFailReason / C# TeleportFailReason.
+using TeleportFailedFn = void (*)(uint32_t entity_id, uint8_t reason);
+
 // INativeApiProvider for the BaseApp process.
 class BaseAppNativeProvider : public BaseNativeProvider {
  public:

@@ -101,6 +101,7 @@ struct CellAppCallbackTable {
   EntityDestroyedFn entity_migrating_out;
   RestoreGhostFn restore_ghost;
   EntityDestroyedFn destroy_ghost;
+  TeleportFailedFn teleport_failed;
 };
 #pragma pack(pop)
 
@@ -633,6 +634,7 @@ void CellAppNativeProvider::SetNativeCallbacks(const void* native_callbacks, int
   // nullptr on older runtimes; Ghost stays a C++-only mirror (legacy).
   restore_ghost_fn_ = table.restore_ghost;
   destroy_ghost_fn_ = table.destroy_ghost;
+  teleport_failed_fn_ = table.teleport_failed;
   ATLAS_LOG_INFO("CellApp: native callback table registered (len={})", len);
 }
 

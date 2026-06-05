@@ -3,6 +3,18 @@ using Atlas.DataTypes;
 
 namespace Atlas.Entity;
 
+// Why a dispatched cross-space teleport failed. Values mirror the C++
+// atlas::TeleportFailReason enum.
+public enum TeleportFailReason : byte
+{
+    TargetUnhosted = 0,
+    SameCellApp = 1,
+    NoPeer = 2,
+    ResolveTimeout = 3,
+    Rejected = 4,
+    OffloadTimeout = 5,
+}
+
 // Cell-resident entity base; owns spatial state and cell-side lifecycle.
 public abstract class CellServerEntity : ServerEntity
 {
@@ -104,6 +116,15 @@ public abstract class CellServerEntity : ServerEntity
     {
         if (IsGhost || IsDestroyed) return false;
         return NativeApi.TeleportEntity(EntityId, targetSpaceId, position, direction);
+    }
+
+    // Override to react to an async teleport failure (target unhosted, resolve
+    // timeout, destination reject, etc.); the entity stays in its current space.
+    protected virtual void OnTeleportFailed(TeleportFailReason reason) { }
+
+    internal void DispatchTeleportFailed(TeleportFailReason reason)
+    {
+        if (!IsDestroyed) OnTeleportFailed(reason);
     }
 
     public static bool RegisterMovementCurve(ushort curveId, System.ReadOnlySpan<float> samples)

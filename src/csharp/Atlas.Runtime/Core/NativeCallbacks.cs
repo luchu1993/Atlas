@@ -40,6 +40,9 @@ internal unsafe struct NativeCallbackTable
     // with EntityMigratingOut on the destroy side.
     public nint RestoreGhost;
     public nint DestroyGhost;
+    // Cellapp-only: an async cross-space teleport failed; reason byte mirrors
+    // TeleportFailReason, routed to CellServerEntity.OnTeleportFailed.
+    public nint EntityTeleportFailed;
 }
 
 internal static unsafe class NativeCallbacks
@@ -75,6 +78,8 @@ internal static unsafe class NativeCallbacks
         table.RestoreGhost =
             (nint)(delegate* unmanaged<uint, ushort, byte*, int, void>)&RestoreGhost;
         table.DestroyGhost = (nint)(delegate* unmanaged<uint, void>)&DestroyGhost;
+        table.EntityTeleportFailed =
+            (nint)(delegate* unmanaged<uint, byte, void>)&EntityTeleportFailed;
 
         NativeApi.SetNativeCallbacks(&table, sizeof(NativeCallbackTable));
     }
@@ -342,6 +347,21 @@ internal static unsafe class NativeCallbacks
         {
             ThreadGuard.EnsureMainThread();
             EntityManager.Instance.RemoveSilently(entityId);
+        }
+        catch (Exception ex)
+        {
+            ErrorBridge.SetError(ex);
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    public static void EntityTeleportFailed(uint entityId, byte reason)
+    {
+        try
+        {
+            ThreadGuard.EnsureMainThread();
+            if (EntityManager.Instance.Get(entityId) is CellServerEntity ce)
+                ce.DispatchTeleportFailed((TeleportFailReason)reason);
         }
         catch (Exception ex)
         {

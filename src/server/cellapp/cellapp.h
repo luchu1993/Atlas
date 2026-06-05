@@ -75,6 +75,17 @@ struct BirthNotification;
 struct DeathNotification;
 }  // namespace machined
 
+// Why a dispatched cross-space teleport failed. Values mirror the C#
+// TeleportFailReason enum; the wire-equivalent is the callback's reason byte.
+enum class TeleportFailReason : uint8_t {
+  kTargetUnhosted = 0,
+  kSameCellApp = 1,
+  kNoPeer = 2,
+  kResolveTimeout = 3,
+  kRejected = 4,
+  kOffloadTimeout = 5,
+};
+
 class CellApp : public EntityApp, public CellMovementHost {
  public:
   static auto Run(int argc, char* argv[]) -> int;
@@ -556,6 +567,10 @@ class CellApp : public EntityApp, public CellMovementHost {
   // OffloadEntity (geometry_version=0) and routes it through ProcessOffload.
   void BeginTeleportOffload(CellEntity& entity, const Address& target_addr, SpaceID target_space_id,
                             math::Vector3 pos, math::Vector3 dir);
+
+  // Fires the native teleport-failed callback so script learns of an async
+  // failure; no-op if the entity is gone or the runtime predates the callback.
+  void NotifyTeleportFailed(EntityID entity_id, TeleportFailReason reason);
 
   PendingRpcRegistry rpc_registry_;
 

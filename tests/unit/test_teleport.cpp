@@ -15,6 +15,7 @@
 #include "cell.h"
 #include "cell_entity.h"
 #include "cellapp.h"
+#include "cellapp_native_provider.h"
 #include "cellappmgr/bsp_tree.h"
 #include "foundation/intrusive_ptr.h"
 #include "intercell_messages.h"
@@ -249,6 +250,38 @@ TEST(Teleport, OnOffloadTeleportToPositionOutsideLocalCellRejects) {
   EXPECT_FALSE(ack.success);
   EXPECT_EQ(ack.reject_reason, cellapp::OffloadRejectReason::kStaleGeometry);
   EXPECT_EQ(h.app.EntityPopulationForTest().count(101), 0u);  // not stranded
+}
+
+int g_teleport_failed_calls = 0;
+uint32_t g_teleport_failed_eid = 0;
+uint8_t g_teleport_failed_reason = 0xFF;
+
+TEST(Teleport, ResolveNotFoundFiresTeleportFailedCallback) {
+  Harness h;
+  auto provider = h.app.CreateNativeProviderForTest();  // sets native_provider_
+  g_teleport_failed_calls = 0;
+  g_teleport_failed_eid = 0;
+  g_teleport_failed_reason = 0xFF;
+  h.app.NativeProvider()->SetTeleportFailedFnForTest([](uint32_t eid, uint8_t reason) {
+    ++g_teleport_failed_calls;
+    g_teleport_failed_eid = eid;
+    g_teleport_failed_reason = reason;
+  });
+
+  SeedReal(h, /*id=*/100, /*sid=*/1);
+  ASSERT_TRUE(h.app.RequestTeleport(100, /*target_space=*/2, {5, 0, 6}, {1, 0, 0}));
+  const uint32_t rid = h.app.PendingTeleportsForTest().begin()->first;
+
+  cellappmgr::ResolveSpaceHostReply reply;
+  reply.request_id = rid;
+  reply.entity_id = 100;
+  reply.space_id = 2;
+  reply.found = false;
+  h.app.OnResolveSpaceHostReply(MakeAddr(40000), h.mgr_ch, reply);
+
+  EXPECT_EQ(g_teleport_failed_calls, 1);
+  EXPECT_EQ(g_teleport_failed_eid, 100u);
+  EXPECT_EQ(g_teleport_failed_reason, static_cast<uint8_t>(TeleportFailReason::kTargetUnhosted));
 }
 
 }  // namespace
