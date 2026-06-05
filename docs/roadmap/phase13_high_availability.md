@@ -89,13 +89,17 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
     折进 ring、对自身认领的死亡 buddy 触发 death 回调。收到的 HELLO 在 `Tick(now)` 内统一
     打时间戳，故双节点集成测试完全确定（发现 → 静默 → 前驱在受控时刻报死；重启同身份新
     incarnation → kRestarted）。`MeshTransport` 加 `SetBroadcastTarget`。
-  - **M4-4b-2 待落地（live MachinedApp 接线）**：MachinedApp 持一个 `MachinedMeshNode`——
-    Init 生成 boot incarnation（system clock ms）、mesh UDP 端口取 `internal_port+2`、
-    OnTickComplete `Tick`、加 watcher；death 回调接 `ProcessRegistry`/`DeathNotification`。
-    gate 在 `mesh_enabled` config（默认 off，保持现有行为直到 M4-5）。
-  - **M4-4b-3+ 待落地（跨机可见性）**：`MeshProcessDeath` 死亡传播（buddy 广播 → 各节点丢弃
-    该机进程缓存）+ `MeshQuery`/`MeshQueryResponse` 跨机查询聚合（"广播查询 → first-found"，
-    HELLO 不带进程表）；client 连本地 machined。
+  - **M4-4b-2**（commit `9520847`，增量可逆，gate 在 `mesh_enabled` config 默认 off）：
+    MachinedApp 持一个 `MachinedMeshNode`——Init 在 UDP `internal_port+2` 开 mesh、boot
+    incarnation 取 system clock ms、self 身份由 `machined_address` 派生（退回 loopback）；
+    OnTickComplete `Tick`；watcher `machined/mesh/{enabled,incarnation,peers,dead_buddies}`。
+    death 回调本片仅可观测（log+计数）——远端 machined 死亡影响远端进程，本机注册表尚不跟踪，
+    待 M4-4b-3 跨机注册表/查询落地才有可驱逐对象。验证：build + machined 注册集成（默认 off
+    无回归）；mesh 运行时由 M4-4b-1 单测覆盖。
+  - **M4-4b-3+ 待落地（跨机可见性，含 mesh-enabled 集成测试）**：`MeshProcessDeath` 死亡传播
+    （buddy 广播 → 各节点丢弃该机进程缓存）+ `MeshQuery`/`MeshQueryResponse` 跨机查询聚合
+    （"广播查询 → first-found"，HELLO 不带进程表）；death 回调接 `DeathNotification` 监听者；
+    多机 self-IP advertising（现退回 loopback）；client 连本地 machined。
   - **M4-5 待落地（不可逆切换）**：删中心 TCP machined 模型，需显式放行。
 
 ## 当前已落地能力
