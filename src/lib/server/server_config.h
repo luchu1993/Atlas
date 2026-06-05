@@ -28,6 +28,9 @@ struct ServerConfig {
   uint16_t internal_port = 0;  // 0 = OS-assigned
   uint16_t external_port = 0;
 
+  // Decentralized per-host machined UDP mesh (M4); off keeps the central TCP model.
+  bool mesh_enabled = false;
+
   int update_hertz = 10;
   // Empty frame_name derives from process_name at startup; Tracy stores the
   // final string pointer as the frame identity.

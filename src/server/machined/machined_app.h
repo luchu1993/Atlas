@@ -1,12 +1,15 @@
 #ifndef ATLAS_SERVER_MACHINED_MACHINED_APP_H_
 #define ATLAS_SERVER_MACHINED_MACHINED_APP_H_
 
+#include <cstdint>
+#include <optional>
 #include <unordered_map>
 
 #include "machined/listener_manager.h"
 #include "machined/process_registry.h"
 #include "machined/watcher_forwarder.h"
 #include "network/frequent_task.h"
+#include "server/machined_mesh_node.h"
 #include "server/manager_app.h"
 
 namespace atlas::machined {
@@ -42,6 +45,7 @@ class MachinedApp : public ManagerApp {
   void NotifyDeath(const ProcessEntry& entry, uint8_t reason);
   auto TakePendingShutdownReason(Channel* ch, uint8_t fallback) -> uint8_t;
   void CheckHeartbeatTimeouts();
+  void StartMesh();
 
   ProcessRegistry process_registry_;
   ListenerManager listener_manager_;
@@ -57,6 +61,9 @@ class MachinedApp : public ManagerApp {
   std::unordered_map<Channel*, uint8_t> pending_shutdown_reasons_;
 
   uint16_t heartbeat_udp_port_{0};
+
+  std::optional<MachinedMeshNode> mesh_node_;
+  uint64_t mesh_dead_buddies_{0};
 };
 
 }  // namespace atlas::machined

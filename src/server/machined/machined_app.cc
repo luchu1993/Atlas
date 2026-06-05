@@ -4,6 +4,7 @@
 
 #include "foundation/clock.h"
 #include "foundation/log.h"
+#include "network/broadcast.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
 #include "platform/process_launcher.h"
@@ -93,11 +94,54 @@ auto MachinedApp::Init(int argc, char* argv[]) -> bool {
       });
 
 
+  StartMesh();
+
   ATLAS_LOG_INFO("MachinedApp: TCP listening on {}", Network().TcpAddress().ToString());
   return true;
 }
 
+void MachinedApp::StartMesh() {
+  const auto& cfg = Config();
+  if (!cfg.mesh_enabled) return;
+  if (cfg.internal_port == 0) {
+    ATLAS_LOG_WARNING("MachinedApp: mesh enabled but internal_port is 0; mesh disabled");
+    return;
+  }
+
+  const uint16_t mesh_port = static_cast<uint16_t>(cfg.internal_port + 2);
+  const uint32_t self_ip = cfg.machined_address.Ip();
+  const Address self_mesh =
+      (self_ip != 0) ? Address(self_ip, mesh_port) : Address("127.0.0.1", mesh_port);
+  const uint64_t incarnation =
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch())
+                                .count());
+
+  mesh_node_.emplace(Dispatcher(), self_mesh);
+  mesh_node_->SetDeathCallback([this](const Address& dead) {
+    ++mesh_dead_buddies_;
+    ATLAS_LOG_WARNING("MachinedApp: mesh buddy {} declared dead", dead.ToString());
+  });
+  mesh_node_->SetPeerEventCallback([](const Address& peer, MachinedMesh::Observation obs) {
+    ATLAS_LOG_INFO("MachinedApp: mesh peer {} {}", peer.ToString(),
+                   obs == MachinedMesh::Observation::kRestarted ? "restarted" : "joined");
+  });
+
+  if (auto r = mesh_node_->Open(Address(0, mesh_port), LimitedBroadcastAddress(mesh_port),
+                                incarnation);
+      !r) {
+    ATLAS_LOG_WARNING("MachinedApp: failed to open mesh on UDP port {}: {}", mesh_port,
+                      r.Error().Message());
+    mesh_node_.reset();
+    return;
+  }
+  ATLAS_LOG_INFO("MachinedApp: mesh enabled on UDP port {} (incarnation {})", mesh_port,
+                 incarnation);
+}
+
 void MachinedApp::Fini() {
+  mesh_node_.reset();
+
   DeathNotification shutdown_notif;
   shutdown_notif.process_type = ProcessType::kMachined;
   shutdown_notif.name = "machined";
@@ -125,11 +169,24 @@ void MachinedApp::RegisterWatchers() {
   reg.Add<std::string>("machined/watcher_pending", std::function<std::string()>{[this]() {
                          return std::to_string(watcher_forwarder_.PendingCount());
                        }});
+  reg.Add<std::string>("machined/mesh/enabled", std::function<std::string()>{[this]() {
+                         return mesh_node_ ? "1" : "0";
+                       }});
+  reg.Add<std::string>("machined/mesh/incarnation", std::function<std::string()>{[this]() {
+                         return mesh_node_ ? std::to_string(mesh_node_->Incarnation()) : "0";
+                       }});
+  reg.Add<std::string>("machined/mesh/peers", std::function<std::string()>{[this]() {
+                         return mesh_node_ ? std::to_string(mesh_node_->PeerCount()) : "0";
+                       }});
+  reg.Add<std::string>("machined/mesh/dead_buddies", std::function<std::string()>{[this]() {
+                         return std::to_string(mesh_dead_buddies_);
+                       }});
 }
 
 void MachinedApp::OnTickComplete() {
   CheckHeartbeatTimeouts();
   watcher_forwarder_.CheckTimeouts();
+  if (mesh_node_) mesh_node_->Tick(Clock::now());
 }
 
 void MachinedApp::OnRegister(const Address& /*src*/, Channel* ch, const RegisterMessage& msg) {
