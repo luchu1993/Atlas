@@ -11,9 +11,12 @@
 #include "machined/machined_app.h"
 #include "network/event_dispatcher.h"
 #include "network/machined_types.h"
+#include "network/mesh_gossip.h"
 #include "network/network_interface.h"
+#include "serialization/binary_stream.h"
 #include "server/common_messages.h"
 #include "server/machined_client.h"
+#include "server/mesh_transport.h"
 #include "server/server_config.h"
 
 using namespace atlas;
@@ -340,4 +343,75 @@ TEST_F(MachinedRegistrationTest, MultipleProcessesCanRegister) {
     poll_until(client_disp_, [&] { return done; }, std::chrono::milliseconds(300));
   }
   EXPECT_EQ(result.size(), 2u) << "Both BaseApp processes should be registered";
+}
+
+TEST(MachinedMeshIntegration, RemoteRegistryGossipResolvesInQuery) {
+  // A mesh-enabled machined must fold a peer's gossiped process table into its
+  // own query responses. The mesh port is internal_port + 2, so the test needs
+  // a fixed internal port rather than the OS-assigned 0.
+  constexpr uint16_t kInternalPort = 28850;
+  constexpr uint16_t kMeshPort = kInternalPort + 2;
+
+  std::atomic<bool> stop{false};
+  std::promise<Address> addr_promise;
+  auto addr_future = addr_promise.get_future();
+  std::thread machined_thread([&]() {
+    EventDispatcher disp("machined_mesh");
+    NetworkInterface ni(disp);
+    TestMachinedApp app(disp, ni, addr_promise, stop);
+    std::vector<std::string> storage{"machined",
+                                     "--type",
+                                     "machined",
+                                     "--name",
+                                     "machined",
+                                     "--update-hertz",
+                                     "100",
+                                     "--internal-port",
+                                     std::to_string(kInternalPort),
+                                     "--mesh-enabled",
+                                     "true",
+                                     "--mesh-advertise-ip",
+                                     "127.0.0.1"};
+    std::vector<char*> ptrs;
+    for (auto& s : storage) ptrs.push_back(s.data());
+    app.RunApp(static_cast<int>(ptrs.size()), ptrs.data());
+  });
+  ASSERT_EQ(addr_future.wait_for(std::chrono::seconds(10)), std::future_status::ready)
+      << "mesh-enabled machined failed to start (port " << kInternalPort << " in use?)";
+  const Address machined_addr = addr_future.get();
+
+  // Gossip a fictitious remote CellApp straight to the machined's mesh port.
+  EventDispatcher mesh_disp{"mesh_sender"};
+  mesh_disp.SetMaxPollWait(Milliseconds(1));
+  MeshTransport sender(mesh_disp);
+  ASSERT_TRUE(sender.Open(Address("127.0.0.1", 0), Address("127.0.0.1", 0)).HasValue());
+
+  machined::MeshRegistryMsg gossip;
+  gossip.owner = Address("127.0.0.1", 29000);
+  ProcessInfo remote;
+  remote.process_type = ProcessType::kCellApp;
+  remote.name = "remote-cellapp";
+  remote.internal_addr = Address("10.0.0.5", 7000);
+  remote.pid = 999;
+  gossip.processes.push_back(remote);
+  BinaryWriter w;
+  gossip.Serialize(w);
+  ASSERT_TRUE(sender.SendTo(Address("127.0.0.1", kMeshPort), w.Data()).HasValue());
+  poll_until(mesh_disp, [&] { return false; }, std::chrono::milliseconds(50));
+
+  EventDispatcher client_disp{"mesh_client"};
+  client_disp.SetMaxPollWait(Milliseconds(1));
+  NetworkInterface client_ni(client_disp);
+  MachinedClient client(client_disp, client_ni);
+  ASSERT_TRUE(client.Connect(machined_addr));
+  ASSERT_TRUE(poll_until(client_disp, [&] { return client.IsConnected(); }));
+
+  auto result = wait_for_registry_entry(client_disp, client, ProcessType::kCellApp);
+
+  stop.store(true, std::memory_order_release);
+  machined_thread.join();
+
+  ASSERT_EQ(result.size(), 1u) << "gossiped remote CellApp should resolve via the mesh";
+  EXPECT_EQ(result[0].name, "remote-cellapp");
+  EXPECT_EQ(result[0].internal_addr.Port(), 7000);
 }
