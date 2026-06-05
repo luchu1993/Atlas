@@ -1,9 +1,11 @@
 #ifndef ATLAS_LIB_SERVER_MACHINED_MESH_NODE_H_
 #define ATLAS_LIB_SERVER_MACHINED_MESH_NODE_H_
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -11,6 +13,7 @@
 #include "foundation/error.h"
 #include "network/address.h"
 #include "network/mesh_gossip.h"
+#include "serialization/binary_stream.h"
 #include "server/machined_mesh.h"
 #include "server/mesh_transport.h"
 
@@ -19,11 +22,12 @@ namespace atlas {
 class EventDispatcher;
 
 // Runtime glue that drives the decentralized machined mesh: it owns the
-// broadcast transport and the membership view, re-broadcasts this host's HELLO
-// on an interval, folds received HELLOs into the ring, and reports the dead
-// buddies it owns announcing. Received HELLOs are queued and timestamped inside
-// Tick(now) so all membership time advances from a single clock the caller
-// controls. MachinedApp owns one of these and Tick()s it each tick.
+// broadcast transport and the membership view, routes received mesh datagrams by
+// type, re-broadcasts this host's HELLO on an interval, folds received HELLOs
+// into the ring, and reports the dead buddies it owns announcing. Received
+// HELLOs are queued and timestamped inside Tick(now) so all membership time
+// advances from a single clock the caller controls. MachinedApp owns one of
+// these and Tick()s it each tick.
 class MachinedMeshNode {
  public:
   using DeathCallback = std::function<void(const Address& dead_machined)>;
@@ -35,9 +39,10 @@ class MachinedMeshNode {
 
   MachinedMeshNode(EventDispatcher& dispatcher, const Address& self_mesh_addr)
       : self_(self_mesh_addr), mesh_(self_mesh_addr), transport_(dispatcher) {
-    transport_.SetHelloCallback([this](const Address&, const machined::MeshHello& hello) {
-      pending_.push_back(Pending{hello.machined_addr, hello.incarnation});
-    });
+    transport_.SetDatagramCallback(
+        [this](const Address& src, std::span<const std::byte> payload) {
+          OnDatagram(src, payload);
+        });
   }
 
   [[nodiscard]] auto Open(const Address& bind_addr, const Address& broadcast_addr,
@@ -68,7 +73,9 @@ class MachinedMeshNode {
       machined::MeshHello hello;
       hello.machined_addr = self_;
       hello.incarnation = incarnation_;
-      (void)transport_.BroadcastHello(hello);
+      BinaryWriter w;
+      hello.Serialize(w);
+      (void)transport_.Broadcast(w.Data());
       last_broadcast_ = now;
     }
 
@@ -88,6 +95,16 @@ class MachinedMeshNode {
     Address addr;
     uint64_t incarnation;
   };
+
+  void OnDatagram(const Address& /*src*/, std::span<const std::byte> payload) {
+    BinaryReader r(payload);
+    auto type = machined::PeekMeshType(r);
+    if (!type) return;
+    if (*type == machined::MeshMessageType::kHello) {
+      auto hello = machined::MeshHello::Deserialize(r);
+      if (hello) pending_.push_back(Pending{hello->machined_addr, hello->incarnation});
+    }
+  }
 
   Address self_;
   MachinedMesh mesh_;

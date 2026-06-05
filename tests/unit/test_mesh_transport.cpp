@@ -1,8 +1,11 @@
 #include "server/mesh_transport.h"
 
 #include <chrono>
+#include <cstddef>
 #include <optional>
+#include <span>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -10,6 +13,7 @@
 #include "network/address.h"
 #include "network/event_dispatcher.h"
 #include "network/mesh_gossip.h"
+#include "serialization/binary_stream.h"
 
 using namespace atlas;
 
@@ -27,7 +31,20 @@ static bool poll_until(EventDispatcher& dispatcher, Pred pred,
 
 static auto Loopback(uint16_t port) -> Address { return Address("127.0.0.1", port); }
 
-TEST(MeshTransport, DeliversDirectedHello) {
+static auto Encode(const machined::MeshHello& hello) -> std::vector<std::byte> {
+  BinaryWriter w;
+  hello.Serialize(w);
+  return w.Detach();
+}
+
+static auto DecodeHello(std::span<const std::byte> payload) -> std::optional<machined::MeshHello> {
+  BinaryReader r(payload);
+  auto h = machined::MeshHello::Deserialize(r);
+  if (!h) return std::nullopt;
+  return *h;
+}
+
+TEST(MeshTransport, DeliversDirectedDatagram) {
   EventDispatcher disp{"mesh_test"};
   disp.SetMaxPollWait(Milliseconds(1));
   MeshTransport sender(disp);
@@ -37,15 +54,15 @@ TEST(MeshTransport, DeliversDirectedHello) {
 
   std::optional<machined::MeshHello> got;
   Address got_src;
-  receiver.SetHelloCallback([&](const Address& src, const machined::MeshHello& h) {
-    got = h;
+  receiver.SetDatagramCallback([&](const Address& src, std::span<const std::byte> payload) {
+    got = DecodeHello(payload);
     got_src = src;
   });
 
   machined::MeshHello hello;
   hello.machined_addr = sender.LocalAddress();
   hello.incarnation = 0xC0FFEEULL;
-  ASSERT_TRUE(sender.SendHelloTo(receiver.LocalAddress(), hello).HasValue());
+  ASSERT_TRUE(sender.SendTo(receiver.LocalAddress(), Encode(hello)).HasValue());
 
   ASSERT_TRUE(poll_until(disp, [&] { return got.has_value(); }));
   EXPECT_EQ(got->incarnation, 0xC0FFEEULL);
@@ -53,24 +70,25 @@ TEST(MeshTransport, DeliversDirectedHello) {
   EXPECT_EQ(got_src.Port(), sender.LocalAddress().Port());
 }
 
-TEST(MeshTransport, BroadcastHelloSendsToConfiguredAddress) {
+TEST(MeshTransport, BroadcastSendsToConfiguredAddress) {
   EventDispatcher disp{"mesh_test"};
   disp.SetMaxPollWait(Milliseconds(1));
   MeshTransport receiver(disp);
   ASSERT_TRUE(receiver.Open(Loopback(0), Loopback(0)).HasValue());
 
-  // Point the sender's broadcast address at the receiver so BroadcastHello's
-  // delivery is deterministic (real 255.255.255.255 routing is exercised live).
+  // Point the sender's broadcast address at the receiver so Broadcast's delivery
+  // is deterministic (real 255.255.255.255 routing is exercised live).
   MeshTransport sender(disp);
   ASSERT_TRUE(sender.Open(Loopback(0), receiver.LocalAddress()).HasValue());
 
   std::optional<machined::MeshHello> got;
-  receiver.SetHelloCallback([&](const Address&, const machined::MeshHello& h) { got = h; });
+  receiver.SetDatagramCallback(
+      [&](const Address&, std::span<const std::byte> payload) { got = DecodeHello(payload); });
 
   machined::MeshHello hello;
   hello.machined_addr = sender.LocalAddress();
   hello.incarnation = 7;
-  ASSERT_TRUE(sender.BroadcastHello(hello).HasValue());
+  ASSERT_TRUE(sender.Broadcast(Encode(hello)).HasValue());
 
   ASSERT_TRUE(poll_until(disp, [&] { return got.has_value(); }));
   EXPECT_EQ(got->incarnation, 7u);
@@ -81,7 +99,7 @@ TEST(MeshTransport, SendBeforeOpenFails) {
   MeshTransport t(disp);
   EXPECT_FALSE(t.IsOpen());
   machined::MeshHello hello;
-  EXPECT_FALSE(t.SendHelloTo(Loopback(20018), hello).HasValue());
+  EXPECT_FALSE(t.SendTo(Loopback(20018), Encode(hello)).HasValue());
 }
 
 TEST(MeshTransport, CloseStopsDelivery) {
@@ -94,13 +112,13 @@ TEST(MeshTransport, CloseStopsDelivery) {
   const Address receiver_addr = receiver.LocalAddress();
 
   int hits = 0;
-  receiver.SetHelloCallback([&](const Address&, const machined::MeshHello&) { ++hits; });
+  receiver.SetDatagramCallback([&](const Address&, std::span<const std::byte>) { ++hits; });
   receiver.Close();
   EXPECT_FALSE(receiver.IsOpen());
 
   machined::MeshHello hello;
   hello.machined_addr = sender.LocalAddress();
-  ASSERT_TRUE(sender.SendHelloTo(receiver_addr, hello).HasValue());
+  ASSERT_TRUE(sender.SendTo(receiver_addr, Encode(hello)).HasValue());
 
   // No reader is registered after Close, so the callback must never fire.
   poll_until(disp, [&] { return hits > 0; }, std::chrono::milliseconds(50));

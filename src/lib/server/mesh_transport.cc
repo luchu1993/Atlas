@@ -5,14 +5,15 @@
 #include <span>
 
 #include "network/event_dispatcher.h"
-#include "serialization/binary_stream.h"
 
 namespace atlas {
 
 namespace {
-// HELLOs are tiny and low-rate; cap the per-callback drain anyway so a flood of
-// datagrams cannot starve dispatcher timers.
+// Mesh datagrams are low-rate; cap the per-callback drain so a flood cannot
+// starve dispatcher timers. The buffer must hold a registry gossip carrying a
+// host's full process table.
 constexpr int kMaxDatagramsPerCallback = 256;
+constexpr std::size_t kRecvBufferBytes = 16 * 1024;
 }  // namespace
 
 MeshTransport::MeshTransport(EventDispatcher& dispatcher) : dispatcher_(dispatcher) {}
@@ -48,32 +49,24 @@ void MeshTransport::Close() {
   socket_.reset();
 }
 
-auto MeshTransport::BroadcastHello(const machined::MeshHello& hello) -> Result<std::size_t> {
-  return SendHelloTo(broadcast_addr_, hello);
+auto MeshTransport::Broadcast(std::span<const std::byte> payload) -> Result<std::size_t> {
+  return SendTo(broadcast_addr_, payload);
 }
 
-auto MeshTransport::SendHelloTo(const Address& dest, const machined::MeshHello& hello)
+auto MeshTransport::SendTo(const Address& dest, std::span<const std::byte> payload)
     -> Result<std::size_t> {
   if (!socket_) return Error{ErrorCode::kInvalidArgument, "MeshTransport not open"};
-  BinaryWriter w;
-  hello.Serialize(w);
-  return socket_->SendTo(w.Data(), dest);
+  return socket_->SendTo(payload, dest);
 }
 
 void MeshTransport::OnReadable() {
   if (!socket_) return;
-  std::array<std::byte, 2048> buf{};
+  std::array<std::byte, kRecvBufferBytes> buf{};
   for (int i = 0; i < kMaxDatagramsPerCallback; ++i) {
     auto recv = socket_->RecvFrom(buf);
     if (!recv) break;  // kWouldBlock or error ends the drain
     auto [bytes, src] = *recv;
-    BinaryReader r(std::span<const std::byte>(buf.data(), bytes));
-    auto type = machined::PeekMeshType(r);
-    if (!type) continue;
-    if (*type == machined::MeshMessageType::kHello) {
-      auto hello = machined::MeshHello::Deserialize(r);
-      if (hello && hello_cb_) hello_cb_(src, *hello);
-    }
+    if (datagram_cb_) datagram_cb_(src, std::span<const std::byte>(buf.data(), bytes));
   }
 }
 
