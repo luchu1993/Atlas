@@ -1,10 +1,10 @@
 # Phase 14: 服务端权威移动与本地预测
 
-**Status:** 🟨 14.1 主链路已可用——输入帧协议、CellApp 权威 step、owner
-预测和解、MovementCommand fanout、Static physics query、collision asset v1、
-position history 都已落地。当前重心是协议边界硬化、验证矩阵和文档对齐。
-收紧的 wire contract 与最小回归命令集见
-[`phase14_status.md`](phase14_status.md)。
+**Status:** 🟨 14.1–14.3 主线已交付——输入帧协议、CellApp 权威 step、owner
+预测和解、MovementCommand fanout、Jolt 查询后端（M1a–M5b）、Unity collision /
+mesh / heightfield 导出（M7）、position history 与服务端 lag-compensation 原型
+都已落地。14.4（chunk / border query）后置。收紧的 wire contract 与最小回归
+命令集见 [`phase14_status.md`](phase14_status.md)。
 
 **前置依赖:** Phase 10 (CellApp / Witness / volatile 位置流)、Phase 11
 (Real/Ghost / Offload)、Phase 12 (atlas_net_client / Atlas.Client)、
@@ -318,11 +318,14 @@ Offload 消息需要携带：
   command 正常结束、碰撞截停和非法终止也会带 reason；MVP `Avatar.Dash` 已作为
   脚本写入 command 的首个 playable action。完整技能 timeline 仍在 14.3+ 接入
 - position history 的最近窗口，14.1 已随 `OffloadEntity` 迁移并在 reject /
-  timeout 回滚时恢复，供 lag compensation 使用
+  timeout 回滚时恢复；服务端 lag-compensation 原型（favor-the-shooter 边界
+  容差）已作为该窗口的首个消费者落地
 
 迁移期间 BaseApp 可能把输入转发到旧 CellApp。旧 Real 已转 Ghost 时直接
 drop；客户端靠下一次 ack 和 volatile 位置纠正。BaseApp 已按 cell epoch
-拒绝旧 ack，避免 owner predictor 接收迁移前状态。
+拒绝旧 ack，避免 owner predictor 接收迁移前状态。跨 Space 传送（Phase 11
+范畴）复用同一 offload 迁移路径，传送时丢弃 in-flight motion，避免旧 Space
+的预测状态泄漏到新落点。
 
 Ghost 仍是只读副本。Ghost 位置由 Real 的 volatile seq 更新，不运行
 MovementSystem。
