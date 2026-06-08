@@ -76,6 +76,14 @@ if(ATLAS_ENABLE_JOLT)
   )
 endif()
 
+# ── recastnavigation 1.6.0 ───────────────────────────────────────────────────
+if(ATLAS_ENABLE_RECAST)
+  FetchContent_Declare(
+    recastnavigation
+    URL https://github.com/recastnavigation/recastnavigation/archive/refs/tags/v1.6.0.tar.gz
+  )
+endif()
+
 # ── Tracy 0.13.1 ─────────────────────────────────────────────────────────────
 # Pinned in lockstep with the Tracy-NET 0.13.2 NuGet package referenced
 # from Atlas.Runtime.csproj — Tracy's wire protocol changes between
@@ -189,6 +197,19 @@ if(ATLAS_ENABLE_JOLT)
   # the static runtime, which would trigger LNK2038 RuntimeLibrary mismatch.
   set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)
   FetchContent_MakeAvailable(Jolt)
+endif()
+
+# recastnavigation — build only the Recast + Detour static libs; the demo needs
+# SDL2 and the tests need Catch2, neither of which Atlas ships.
+if(ATLAS_ENABLE_RECAST)
+  set(RECASTNAVIGATION_DEMO     OFF CACHE BOOL "" FORCE)
+  set(RECASTNAVIGATION_TESTS    OFF CACHE BOOL "" FORCE)
+  set(RECASTNAVIGATION_EXAMPLES OFF CACHE BOOL "" FORCE)
+  # 1.6.0 still declares cmake_minimum_required(VERSION 3.1); newer CMake removed
+  # that compat, so opt this subtree into 3.5 policies.
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+  FetchContent_MakeAvailable(recastnavigation)
+  unset(CMAKE_POLICY_VERSION_MINIMUM)
 endif()
 
 # sqlite3 — build manually from amalgamation

@@ -136,6 +136,13 @@ atlas_add_test(NAME test_nav_input
   DEPS atlas_navigation
 )
 
+if(ATLAS_ENABLE_RECAST)
+  atlas_add_test(NAME test_recast_nav
+    SOURCES test_recast_nav.cpp
+    DEPS atlas_navigation_recast
+  )
+endif()
+
 atlas_add_test(NAME test_movement_sim
   SOURCES test_movement_sim.cpp
   DEPS atlas_movement_sim

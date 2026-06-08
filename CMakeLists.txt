@@ -45,6 +45,10 @@ option(ATLAS_ENABLE_JOLT
        "Enable Jolt physics backend (src/lib/physics_jolt). When OFF, the \
 JoltPhysicsQuery skeleton is excluded from the build."
        ON)
+option(ATLAS_ENABLE_RECAST
+       "Enable Recast/Detour navmesh backend (src/lib/navigation_recast). When \
+OFF, the navigation contract layer still builds but bakes no navmesh."
+       ON)
 option(ATLAS_PROFILER_ON_DEMAND
        "Tracy ON_DEMAND mode — instrumentation goes inert until a client connects"
        ON)
