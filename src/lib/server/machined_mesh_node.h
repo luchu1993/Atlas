@@ -124,7 +124,11 @@ class MachinedMeshNode {
       }
       case machined::MeshMessageType::kRegistry: {
         auto msg = machined::MeshRegistryMsg::Deserialize(r);
-        if (msg && registry_cb_) registry_cb_(msg->owner, std::move(msg->processes));
+        // Ignore our own looped-back broadcast: local processes live in the
+        // process_registry_, not the mesh registry (else queries double-count).
+        if (msg && msg->owner != self_ && registry_cb_) {
+          registry_cb_(msg->owner, std::move(msg->processes));
+        }
         break;
       }
       case machined::MeshMessageType::kProcessDeath: {

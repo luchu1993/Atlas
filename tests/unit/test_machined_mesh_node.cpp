@@ -146,6 +146,34 @@ TEST(MachinedMeshNode, ReceivesRegistryGossip) {
   EXPECT_EQ(got_procs[0].name, "cellapp-1");
 }
 
+TEST(MachinedMeshNode, IgnoresOwnLoopedBackRegistryGossip) {
+  EventDispatcher disp{"mesh_node_test"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  MachinedMeshNode node(disp, Mesh(7001));
+  ASSERT_TRUE(node.Open(Mesh(0), Mesh(0), 100).HasValue());
+  MeshTransport sender(disp);
+  ASSERT_TRUE(sender.Open(Mesh(0), Mesh(0)).HasValue());
+
+  int callbacks = 0;
+  node.SetRegistryCallback([&](const Address&, std::vector<machined::ProcessInfo>) { ++callbacks; });
+
+  // A registry datagram whose owner is THIS node is its own broadcast looping
+  // back; folding it would double-count local processes on the next query.
+  machined::MeshRegistryMsg msg;
+  msg.owner = Mesh(7001);  // == node's self_
+  machined::ProcessInfo p;
+  p.process_type = ProcessType::kCellApp;
+  p.name = "cellapp-self";
+  p.pid = 9;
+  msg.processes.push_back(p);
+  BinaryWriter w;
+  msg.Serialize(w);
+  ASSERT_TRUE(sender.SendTo(node.BoundAddress(), w.Data()).HasValue());
+
+  Pump(disp, std::chrono::milliseconds(80));
+  EXPECT_EQ(callbacks, 0);
+}
+
 TEST(MachinedMeshNode, DeathDetectionBroadcastsToPeers) {
   EventDispatcher disp{"mesh_node_test"};
   disp.SetMaxPollWait(Milliseconds(1));
