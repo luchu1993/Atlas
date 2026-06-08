@@ -28,14 +28,17 @@ struct ServerConfig {
   uint16_t internal_port = 0;  // 0 = OS-assigned
   uint16_t external_port = 0;
 
-  // Decentralized per-host machined UDP mesh (M4); off keeps the central TCP model.
-  bool mesh_enabled = false;
+  // Decentralized per-host machined UDP mesh (M4) is the canonical model; only
+  // turned off for port-0 / contained test instances.
+  bool mesh_enabled = true;
   // Address peers reach this machined at on the mesh; empty falls back to
   // loopback (single-host only). Set to the host's reachable IP for multi-host.
   std::string mesh_advertise_ip;
-  // Destination the mesh broadcasts HELLO/registry to; defaults to the limited
-  // broadcast. Single-host dev/test set 127.0.0.1 to avoid leaking onto the LAN.
-  std::string mesh_broadcast_ip{"255.255.255.255"};
+  // Destination the mesh broadcasts HELLO/registry to. Defaults to loopback so
+  // single-host / dev / CI never leak onto the LAN -- a deliberate divergence
+  // from BigWorld's default LAN broadcast; multi-host sets 255.255.255.255 (or
+  // the subnet broadcast) to enable cross-host discovery.
+  std::string mesh_broadcast_ip{"127.0.0.1"};
 
   int update_hertz = 10;
   // Empty frame_name derives from process_name at startup; Tracy stores the
