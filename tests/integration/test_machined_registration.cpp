@@ -371,6 +371,8 @@ TEST(MachinedMeshIntegration, RemoteRegistryGossipResolvesInQuery) {
                                      "--mesh-enabled",
                                      "true",
                                      "--mesh-advertise-ip",
+                                     "127.0.0.1",
+                                     "--mesh-broadcast-ip",
                                      "127.0.0.1"};
     std::vector<char*> ptrs;
     for (auto& s : storage) ptrs.push_back(s.data());

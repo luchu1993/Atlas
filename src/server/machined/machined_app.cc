@@ -132,9 +132,10 @@ void MachinedApp::StartMesh() {
                    obs == MachinedMesh::Observation::kRestarted ? "restarted" : "joined");
   });
 
-  if (auto r = mesh_node_->Open(Address(0, mesh_port), LimitedBroadcastAddress(mesh_port),
-                                incarnation);
-      !r) {
+  const Address broadcast_addr = cfg.mesh_broadcast_ip.empty()
+                                     ? LimitedBroadcastAddress(mesh_port)
+                                     : Address(cfg.mesh_broadcast_ip, mesh_port);
+  if (auto r = mesh_node_->Open(Address(0, mesh_port), broadcast_addr, incarnation); !r) {
     ATLAS_LOG_WARNING("MachinedApp: failed to open mesh on UDP port {}: {}", mesh_port,
                       r.Error().Message());
     mesh_node_.reset();

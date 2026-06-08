@@ -33,6 +33,9 @@ struct ServerConfig {
   // Address peers reach this machined at on the mesh; empty falls back to
   // loopback (single-host only). Set to the host's reachable IP for multi-host.
   std::string mesh_advertise_ip;
+  // Destination the mesh broadcasts HELLO/registry to; defaults to the limited
+  // broadcast. Single-host dev/test set 127.0.0.1 to avoid leaking onto the LAN.
+  std::string mesh_broadcast_ip{"255.255.255.255"};
 
   int update_hertz = 10;
   // Empty frame_name derives from process_name at startup; Tracy stores the
