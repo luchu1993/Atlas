@@ -4,7 +4,10 @@
 > 后端隔离与 v1 边界。与 `docs/physics/physics_architecture.md` 同构：Atlas 拥有
 > 导航架构，Recast/Detour 是首个生产级后端。
 >
-> **状态**：草案 v0.3 — 待评审。三轮设计评审的结论已折入本文。
+> **状态**：草案 v0.3 — 待评审。
+>
+> **范围**：本文描述 v1 的目标设计；实现分切片推进，当前已落地契约层
+> （`src/lib/navigation`），Recast 后端与 `atlas_tool` 命令属后续切片。
 
 ---
 
@@ -40,14 +43,16 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 - **layer 角色表**（`NavParams.layer_roles`，默认全 `kInclude`）：把 collision layer
   映射到 `include` / `carve` / `ignore`。数据驱动，不硬编码尚未固化的 layer 枚举。
 - **图元三角化**：`box`→12 三角；`mesh`→透传（顶点已是世界空间）；`heightfield`→
-  网格三角，世界 `y = origin.y + scale.y·sample`，`FLT_MAX` 样本为 hole 跳过。
+  网格三角，世界 `y = origin.y + scale.y·sample`，触到 `FLT_MAX`（hole）样本的 cell 整体跳过。
 - **v1 跳过**：`convex`（点云需凸包三角化）、`sphere`、`capsule`、`plane`（无限面需包围盒裁剪）
   导出时计数 + warn，不致空跑。
 - **override volumes**（世界空间 AABB，空间定义、对 collision 重导出鲁棒）：
   `area_tag` 按三角质心改 area；`force_walkable` / `force_blocker` 追加 AABB 几何。
-- **包围盒**：显式给定则用之，否则取派生几何 AABB 外扩 `margin`。
+- **包围盒**：显式给定则直接用之（不加 margin），否则取派生几何 AABB 外扩 `margin`。
 - **缠绕**：v1 保留源缠绕，提供 `flip_winding` 逃生阀；“烘出空 navmesh”的硬校验
-  属于 bake 阶段（见 §6 非目标）。
+  属于 bake 阶段（见 §6）。
+- **调参风险**：Recast 按 agent 半径腐蚀可行走区，比 2×半径还窄的门洞 / 栈道会被吃掉，
+  `cell_size` 偏大会加剧；烘焙落地后由“最窄通道宽度”报告兜底（见 §6）。
 
 ## 4. 查询契约（`NavQuery`）
 
@@ -61,7 +66,7 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 - **`NullNavQuery`**：无 navmesh 时一律返回 `kEmpty` / off-mesh，**绝不伪造直线路径**，
   让移动 / AI 测试可在无 Recast 后端时运行。
 
-## 5. 后端与工具（v1 范围）
+## 5. 后端与工具
 
 - `navigation_recast`：Recast 离线烘焙 + Detour 运行时查询；`dt*`/`rc*` 不出该库；
   `ATLAS_ENABLE_RECAST` 门控，FetchContent 接入照 Jolt（关 demo/test、匹配 /MD 运行库、
@@ -72,9 +77,9 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 - **v1 直接内存 bake**：无 runtime 消费者，故不落 `.navcache`、不做 stamp/recook；
   Detour tile 的裸序列化跨平台问题随之推迟到有持久化需求时再处理。
 
-## 6. v1 边界（非目标）
+## 6. 非目标（v1 不做）
 
-以下为对齐评审结论刻意排除在 v1 之外，留接口不留实现：
+v1 不做以下，留接口不留实现：
 
 - `Space::NavQuery()` 接入、C# `LoadNavAsset`、AI `MoveTo` 集成与 LOD 预算。
 - off-mesh 连接（跳台 / 落差 / 高地路线）：`NavParams` 不带 links，bake 纯地面。
