@@ -31,8 +31,9 @@ struct ServerConfig {
   // Decentralized per-host machined UDP mesh (M4) is the canonical model; only
   // turned off for port-0 / contained test instances.
   bool mesh_enabled = true;
-  // Address peers reach this machined at on the mesh; empty falls back to
-  // loopback (single-host only). Set to the host's reachable IP for multi-host.
+  // Address peers reach this machined at on the mesh, and its unique mesh
+  // identity -- each host must advertise a distinct IP. Empty falls back to
+  // loopback (single-host only); set to the host's reachable IP for multi-host.
   std::string mesh_advertise_ip;
   // Destination the mesh broadcasts HELLO/registry to. Defaults to loopback so
   // single-host / dev / CI never leak onto the LAN -- a deliberate divergence

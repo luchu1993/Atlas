@@ -1,6 +1,5 @@
 #include "server/mesh_transport.h"
 
-#include <array>
 #include <cstddef>
 #include <span>
 
@@ -10,10 +9,8 @@ namespace atlas {
 
 namespace {
 // Mesh datagrams are low-rate; cap the per-callback drain so a flood cannot
-// starve dispatcher timers. The buffer must hold a registry gossip carrying a
-// host's full process table.
+// starve dispatcher timers.
 constexpr int kMaxDatagramsPerCallback = 256;
-constexpr std::size_t kRecvBufferBytes = 16 * 1024;
 }  // namespace
 
 MeshTransport::MeshTransport(EventDispatcher& dispatcher) : dispatcher_(dispatcher) {}
@@ -61,12 +58,11 @@ auto MeshTransport::SendTo(const Address& dest, std::span<const std::byte> paylo
 
 void MeshTransport::OnReadable() {
   if (!socket_) return;
-  std::array<std::byte, kRecvBufferBytes> buf{};
   for (int i = 0; i < kMaxDatagramsPerCallback; ++i) {
-    auto recv = socket_->RecvFrom(buf);
+    auto recv = socket_->RecvFrom(recv_buf_);
     if (!recv) break;  // kWouldBlock or error ends the drain
     auto [bytes, src] = *recv;
-    if (datagram_cb_) datagram_cb_(src, std::span<const std::byte>(buf.data(), bytes));
+    if (datagram_cb_) datagram_cb_(src, std::span<const std::byte>(recv_buf_.data(), bytes));
   }
 }
 

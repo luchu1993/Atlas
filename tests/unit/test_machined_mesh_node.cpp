@@ -174,6 +174,28 @@ TEST(MachinedMeshNode, IgnoresOwnLoopedBackRegistryGossip) {
   EXPECT_EQ(callbacks, 0);
 }
 
+TEST(MachinedMeshNode, IgnoresOwnLoopedBackHello) {
+  EventDispatcher disp{"mesh_node_test"};
+  disp.SetMaxPollWait(Milliseconds(1));
+  MachinedMeshNode node(disp, Mesh(7001));
+  ASSERT_TRUE(node.Open(Mesh(0), Mesh(0), 100).HasValue());
+  MeshTransport sender(disp);
+  ASSERT_TRUE(sender.Open(Mesh(0), Mesh(0)).HasValue());
+
+  // A HELLO whose identity is THIS node is its own broadcast looping back; it
+  // must not register self as a peer.
+  machined::MeshHello hello;
+  hello.machined_addr = Mesh(7001);  // == node's self_
+  hello.incarnation = 100;
+  BinaryWriter w;
+  hello.Serialize(w);
+  ASSERT_TRUE(sender.SendTo(node.BoundAddress(), w.Data()).HasValue());
+
+  Pump(disp, std::chrono::milliseconds(80));
+  node.Tick(TimePoint{} + std::chrono::seconds(1));
+  EXPECT_EQ(node.PeerCount(), 0u);
+}
+
 TEST(MachinedMeshNode, DeathDetectionBroadcastsToPeers) {
   EventDispatcher disp{"mesh_node_test"};
   disp.SetMaxPollWait(Milliseconds(1));

@@ -116,8 +116,10 @@ void MachinedApp::StartMesh() {
   const Address self_mesh = !cfg.mesh_advertise_ip.empty()
                                 ? Address(cfg.mesh_advertise_ip, mesh_port)
                                 : Address("127.0.0.1", mesh_port);
+  // Nanoseconds (not ms) so even a sub-millisecond restart gets a strictly
+  // larger incarnation -- the signal peers use to detect the restart.
   const uint64_t incarnation =
-      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+      static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
                                 std::chrono::system_clock::now().time_since_epoch())
                                 .count());
 
@@ -207,6 +209,8 @@ void MachinedApp::OnMeshPeerDeath(const Address& dead) {
   // The same death reaches us more than once -- our own announcement loops back
   // from the broadcast, and a peer's announcement can race our local timeout.
   // The first eviction takes the entries; later re-fires find nothing, so stop.
+  // (dead_buddies thus counts deaths that evicted remote processes, not every
+  // announcement -- a peer that gossiped nothing won't bump it.)
   if (gone.empty()) return;
   ++mesh_dead_buddies_;
   for (const auto& p : gone) {
@@ -398,6 +402,7 @@ void MachinedApp::OnQuery(const Address& /*src*/, Channel* ch, const QueryMessag
 
   QueryResponse resp;
   resp.processes.reserve(entries.size());
+  std::set<std::pair<int, std::string>> seen;
   for (const auto& e : entries) {
     ProcessInfo info;
     info.process_type = e.process_type;
@@ -406,11 +411,13 @@ void MachinedApp::OnQuery(const Address& /*src*/, Channel* ch, const QueryMessag
     info.external_addr = e.external_addr;
     info.pid = e.pid;
     info.load = e.load;
+    seen.emplace(static_cast<int>(info.process_type), info.name);
     resp.processes.push_back(std::move(info));
   }
   // Merge processes other hosts gossiped onto the mesh so a query resolves the
-  // whole cluster, not just this machined's local registrations.
+  // whole cluster; dedup by (type, name) so a process can't be double-counted.
   for (auto& remote : mesh_registry_.FindByType(msg.process_type)) {
+    if (!seen.emplace(static_cast<int>(remote.process_type), remote.name).second) continue;
     resp.processes.push_back(std::move(remote));
   }
   (void)ch->SendMessage(resp);

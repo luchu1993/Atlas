@@ -1,6 +1,7 @@
 #ifndef ATLAS_LIB_SERVER_MESH_TRANSPORT_H_
 #define ATLAS_LIB_SERVER_MESH_TRANSPORT_H_
 
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <optional>
@@ -52,11 +53,17 @@ class MeshTransport {
  private:
   void OnReadable();
 
+  // Sized to the UDP datagram max so a registry gossip carrying a host's full
+  // process table fits in one datagram; reused across reads (zeroed once) so a
+  // read callback never re-zeroes 64 KiB.
+  static constexpr std::size_t kRecvBufferBytes = 64 * 1024;
+
   EventDispatcher& dispatcher_;
   std::optional<Socket> socket_;
   Address local_addr_;
   Address broadcast_addr_;
   DatagramCallback datagram_cb_;
+  std::array<std::byte, kRecvBufferBytes> recv_buf_{};
 };
 
 }  // namespace atlas

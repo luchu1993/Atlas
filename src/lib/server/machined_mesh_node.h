@@ -119,7 +119,11 @@ class MachinedMeshNode {
     switch (*type) {
       case machined::MeshMessageType::kHello: {
         auto hello = machined::MeshHello::Deserialize(r);
-        if (hello) pending_.push_back(Pending{hello->machined_addr, hello->incarnation});
+        // Drop our own HELLO looping back (broadcast reaches the sender too);
+        // mesh_ ignores self anyway, but this skips re-queuing it every tick.
+        if (hello && hello->machined_addr != self_) {
+          pending_.push_back(Pending{hello->machined_addr, hello->incarnation});
+        }
         break;
       }
       case machined::MeshMessageType::kRegistry: {
@@ -133,6 +137,11 @@ class MachinedMeshNode {
       }
       case machined::MeshMessageType::kProcessDeath: {
         auto msg = machined::MeshProcessDeath::Deserialize(r);
+        // No self-filter: MeshProcessDeath names only the dead peer, not the
+        // sender, so our own looped-back announcement isn't distinguishable here.
+        // The death handler is made idempotent instead (it also absorbs a peer's
+        // announcement racing our local timeout), unlike the non-idempotent
+        // registry fold which must drop self by owner above.
         if (msg && death_cb_) death_cb_(msg->dead_machined);
         break;
       }
