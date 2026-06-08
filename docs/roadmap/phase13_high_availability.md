@@ -1,15 +1,14 @@
 # Phase 13: 高可用 — Reviver + Manager Recovery
 
-**Status:** 🚧 CellAppMgr / BaseAppMgr 已切换到 BigWorld 式 worker-重建恢复
-（M1 + M2 落地）：manager 是软状态，崩溃后由 Reviver 重启，新进程在 recovery
+**Status:** ✅ M1–M5 全落地。CellAppMgr / BaseAppMgr 已切换到 BigWorld 式 worker-重建恢复：
+manager 是软状态，崩溃后由 Reviver 重启，新进程在 recovery
 窗口内等存活 worker 重报状态并重建注册表 / partition——**不再有 manager
 self-snapshot、`mgr_generation` epoch、snapshot 文件或 reattach 对账机制**。
 Reviver 监督全局唯一 CellAppMgr 和 BaseAppMgr（multi-target），cold-start、direct
 heartbeat、manager health、registry audit；leader 选举已是 BigWorld 式
 priority+timeout 仲裁（被监控 Manager 端裁决，M3 落地），**不再有 leader lock /
-machined-lease**。**进行中：** M4（machined → per-host UDP 广播网格，不可逆点）——
-M4-1~4b 已落地（per-host mesh 功能完整、opt-in `--mesh-enabled`、可逆）；仅剩 M4-5
-不可逆切换（删中心 TCP 单例模型），待显式放行。
+machined-lease**。M4（machined → per-host UDP 广播网格）**已落地**：mesh 默认开、成为唯一
+规范模型（M4-5 不可逆切换已跨过）；中心 TCP 单例不再是默认部署。Phase 13 HA 迁移完成。
 **前置依赖:** Phase 11（分布式空间完整可用）
 **BigWorld 参考:** `server/reviver/`, `server/dbappmgr/`
 
@@ -113,8 +112,13 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
     即本地，mesh 部署不指向远端中心即可，无代码改动。
   - **M4-4b 小结**：per-host mesh 已功能完整且可逆（opt-in `--mesh-enabled`）——发现、ring/buddy
     监控、跨机注册表 gossip、查询聚合、birth/death 传播全通，单测 + 节点级 + 集成测试覆盖。
-  - **M4-5 待落地（不可逆切换，需显式放行）**：删中心 TCP machined 单例模型，使 per-host mesh
-    成为唯一形态（断容器/云部署，与 BigWorld 同）。
+  - **M4-5 已落地（不可逆切换）**：`b00f6a0` `--mesh-broadcast-ip`（默认 loopback，防 dev/CI
+    泄漏 LAN——为测试安全有意偏离 BigWorld 默认 LAN 广播）；`bbffb5c` `mesh_enabled` 默认 true，
+    per-host mesh 成为**唯一规范模型**，中心 TCP 单例不再是默认。**调研结论**：中心与 mesh 共用
+    同一 machined 二进制（mesh 纯附加），无"中心专属代码"可删；launcher 无需改（mesh 默认 on +
+    单机 loopback-contained，run_world_stress 一个 machined 自动 mesh、进程连本地）。**部署**：
+    多机每机一个 machined，设 `--mesh-advertise-ip <本机IP>` + `--mesh-broadcast-ip 255.255.255.255`
+    （或子网广播）。**代价（已认可）**：UDP 广播在 k8s/云 overlay 不可路由 → 弃容器/云部署。
 
 ## 当前已落地能力
 
