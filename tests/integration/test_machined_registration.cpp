@@ -409,11 +409,33 @@ TEST(MachinedMeshIntegration, RemoteRegistryGossipResolvesInQuery) {
   ASSERT_TRUE(poll_until(client_disp, [&] { return client.IsConnected(); }));
 
   auto result = wait_for_registry_entry(client_disp, client, ProcessType::kCellApp);
+  ASSERT_EQ(result.size(), 1u) << "gossiped remote CellApp should resolve via the mesh";
+  EXPECT_EQ(result[0].name, "remote-cellapp");
+  EXPECT_EQ(result[0].internal_addr.Port(), 7000);
+
+  // The owning machined dies: a MeshProcessDeath must evict its processes, so the
+  // remote CellApp stops resolving.
+  machined::MeshProcessDeath death;
+  death.dead_machined = Address("127.0.0.1", 29000);
+  BinaryWriter dw;
+  death.Serialize(dw);
+  ASSERT_TRUE(sender.SendTo(Address("127.0.0.1", kMeshPort), dw.Data()).HasValue());
+
+  bool evicted = false;
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(3000);
+  while (!evicted && std::chrono::steady_clock::now() < deadline) {
+    std::vector<ProcessInfo> after;
+    bool done = false;
+    client.QueryAsync(ProcessType::kCellApp, [&](std::vector<ProcessInfo> infos) {
+      after = std::move(infos);
+      done = true;
+    });
+    poll_until(client_disp, [&] { return done; }, std::chrono::milliseconds(200));
+    evicted = after.empty();
+  }
 
   stop.store(true, std::memory_order_release);
   machined_thread.join();
 
-  ASSERT_EQ(result.size(), 1u) << "gossiped remote CellApp should resolve via the mesh";
-  EXPECT_EQ(result[0].name, "remote-cellapp");
-  EXPECT_EQ(result[0].internal_addr.Port(), 7000);
+  EXPECT_TRUE(evicted) << "remote CellApp should be evicted after its machined's death";
 }

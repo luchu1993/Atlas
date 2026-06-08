@@ -203,8 +203,12 @@ void MachinedApp::OnMeshRegistry(const Address& owner, std::vector<ProcessInfo> 
 }
 
 void MachinedApp::OnMeshPeerDeath(const Address& dead) {
-  ++mesh_dead_buddies_;
   auto gone = mesh_registry_.TakeOwner(dead);
+  // The same death reaches us more than once -- our own announcement loops back
+  // from the broadcast, and a peer's announcement can race our local timeout.
+  // The first eviction takes the entries; later re-fires find nothing, so stop.
+  if (gone.empty()) return;
+  ++mesh_dead_buddies_;
   for (const auto& p : gone) {
     DeathNotification notif;
     notif.process_type = p.process_type;
