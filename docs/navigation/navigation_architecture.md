@@ -52,7 +52,7 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 - **缠绕**：v1 保留源缠绕，提供 `flip_winding` 逃生阀；“烘出空 navmesh”的硬校验
   属于 bake 阶段（见 §6）。
 - **调参风险**：Recast 按 agent 半径腐蚀可行走区，比 2×半径还窄的门洞 / 栈道会被吃掉，
-  `cell_size` 偏大会加剧；烘焙落地后由“最窄通道宽度”报告兜底（见 §6）。
+  `cell_size` 偏大会加剧；由 `path_nav` 验通道连通性 + `cook_nav` 的可走面积兜底（见 §5）。
 
 ## 4. 查询契约（`NavQuery`）
 
@@ -71,9 +71,10 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 - `navigation_recast`：Recast 离线烘焙 + Detour 运行时查询；`dt*`/`rc*` 不出该库；
   `ATLAS_ENABLE_RECAST` 门控，FetchContent 接入照 Jolt（关 demo/test、匹配 /MD 运行库、
   版本 pin）；`tools/check_recast_isolation.py` 守 CI。
-- `atlas_tool`：`validate_nav`（纯资产层，无 recast 也可用）、`cook_nav`、`dump_nav`、
-  `path_nav <from> <to> --obj`（不依赖 Unity/CellApp 的独立路径可视化），后三者
-  `ATLAS_ATLAS_TOOL_HAS_RECAST` 门控。
+- `atlas_tool`：`validate_nav`（纯资产层，无 recast 也可用）；`cook_nav` 内存 bake 并打印
+  统计（poly / 顶点 / 可走面积 / skip 数，v1 不落 `.navcache`）；`dump_nav --obj` 导可走面
+  OBJ；`path_nav --from --to [--obj]` 烘焙 + 单次 FindPath，打印状态 / 长度并可导路径折线
+  （不依赖 Unity/CellApp 的独立可视化）。后三者 `ATLAS_ATLAS_TOOL_HAS_RECAST` 门控。
 - **v1 直接内存 bake**：无 runtime 消费者，故不落 `.navcache`、不做 stamp/recook；
   Detour tile 的裸序列化跨平台问题随之推迟到有持久化需求时再处理。
 
@@ -85,7 +86,8 @@ v1 不做以下，留接口不留实现：
 - off-mesh 连接（跳台 / 落差 / 高地路线）：`NavParams` 不带 links，bake 纯地面。
 - tiled / chunk navmesh、`.navcache` 持久化、Watcher/Tracy 指标。
 - 动态障碍（`dtTileCache`）、多 agent 半径剖面。
-- “烘出空 navmesh”硬校验、最窄通道宽度报告：随 Recast bake（navigation_recast）落地。
+- 精确“最窄通道宽度”报告（medial-axis 分析）：后续；v1 用 `path_nav` 连通性 + `cook_nav`
+  可走面积兜底（“烘出空 navmesh”硬校验已随 bake 落地）。
 
 ## 7. 与 BigWorld 的偏离
 

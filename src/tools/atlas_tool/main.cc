@@ -1,3 +1,4 @@
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -14,6 +15,8 @@
 #include "network/event_dispatcher.h"
 #include "network/machined_types.h"
 #include "network/network_interface.h"
+#include "navigation/nav_input.h"
+#include "navigation/nav_params.h"
 #include "physics/collision_asset.h"
 #include "platform/filesystem.h"
 #include "server/machined_client.h"
@@ -22,6 +25,11 @@
 #ifdef ATLAS_ATLAS_TOOL_HAS_JOLT
 #include "physics_jolt/jolt_init.h"
 #include "physics_jolt/jolt_physics_query.h"
+#endif
+
+#ifdef ATLAS_ATLAS_TOOL_HAS_RECAST
+#include "navigation_recast/recast_bake.h"
+#include "navigation_recast/recast_nav_backend.h"
 #endif
 
 using namespace atlas;
@@ -48,6 +56,14 @@ static void PrintUsage() {
             << "  recook --invalid <dir>\n"
             << "                         Re-cook .collisioncache files in <dir> whose\n"
             << "                         jolt_version_stamp or cooked blob is stale\n"
+            << "  validate_nav <map.nav.json>\n"
+            << "                         Validate an Atlas nav params asset\n"
+            << "  cook_nav <map.collision.json> --params <map.nav.json>\n"
+            << "                         Bake a navmesh in memory and print stats\n"
+            << "  dump_nav <map.collision.json> --params <map.nav.json> --obj <out.obj>\n"
+            << "                         Write an OBJ of the baked navmesh surface\n"
+            << "  path_nav <map.collision.json> --params <map.nav.json> --from x,y,z --to x,y,z [--obj <out.obj>]\n"
+            << "                         Bake, run one FindPath, print the result\n"
             << "\n"
             << "Examples:\n"
             << "  atlas_tool list\n"
@@ -61,7 +77,12 @@ static void PrintUsage() {
             << "  atlas_tool dump_collision maps/test.collision.json --obj map.obj\n"
             << "  atlas_tool cook_collision maps/test.collision.json\n"
             << "  atlas_tool cook_collision maps/test.collision.json -o maps/test.collisioncache\n"
-            << "  atlas_tool recook --invalid maps/\n";
+            << "  atlas_tool recook --invalid maps/\n"
+            << "  atlas_tool validate_nav maps/test.nav.json\n"
+            << "  atlas_tool cook_nav maps/test.collision.json --params maps/test.nav.json\n"
+            << "  atlas_tool dump_nav maps/test.collision.json --params maps/test.nav.json --obj nav.obj\n"
+            << "  atlas_tool path_nav maps/test.collision.json --params maps/test.nav.json"
+               " --from -8,0,-8 --to 8,0,8 --obj path.obj\n";
 }
 
 static auto ParseProcessType(std::string_view name) -> std::optional<ProcessType> {
@@ -408,6 +429,151 @@ static auto CmdRecookInvalid(std::string_view dir_path) -> int {
   return failed == 0 ? 0 : 1;
 }
 
+static auto FindFlag(int argc, char** argv, int from, std::string_view flag) -> std::string_view {
+  for (int i = from; i + 1 < argc; ++i) {
+    if (std::string_view(argv[i]) == flag) return argv[i + 1];
+  }
+  return {};
+}
+
+static auto CmdValidateNav(std::string_view path) -> int {
+  auto params = nav::LoadNavParamsFromFile(std::filesystem::path(path));
+  if (!params) {
+    std::cerr << std::format("validate_nav: {}\n", params.Error().Message());
+    return 1;
+  }
+  std::cout << std::format(
+      "nav params ok: agent(r={:.2f} h={:.2f} climb={:.2f} slope={:.0f}) cell({:.2f},{:.2f}) "
+      "overrides={} source_hash={}\n",
+      params->bake.agent_radius_m, params->bake.agent_height_m, params->bake.agent_max_climb_m,
+      params->bake.agent_max_slope_deg, params->bake.cell_size_m, params->bake.cell_height_m,
+      params->overrides.size(), params->source_hash);
+  return 0;
+}
+
+#ifdef ATLAS_ATLAS_TOOL_HAS_RECAST
+[[nodiscard]] static auto ParseVec3(std::string_view s, math::Vector3& out) -> bool {
+  float v[3] = {0.0f, 0.0f, 0.0f};
+  std::size_t start = 0;
+  for (int i = 0; i < 3; ++i) {
+    const std::size_t comma = s.find(',', start);
+    if (i < 2 && comma == std::string_view::npos) return false;
+    const std::string_view tok = (i < 2) ? s.substr(start, comma - start) : s.substr(start);
+    if (std::from_chars(tok.data(), tok.data() + tok.size(), v[i]).ec != std::errc{}) return false;
+    start = (comma == std::string_view::npos) ? s.size() : comma + 1;
+  }
+  out = math::Vector3{v[0], v[1], v[2]};
+  return true;
+}
+
+// Loads the collision asset + nav params and derives nav input (pure
+// atlas_navigation); the bake that follows is the recast-gated step.
+static auto LoadNavDerived(std::string_view collision_path, std::string_view params_path,
+                           nav::NavParams& params_out, nav::NavDeriveResult& derived_out) -> int {
+  auto asset = physics::LoadCollisionAssetFromFile(std::filesystem::path(collision_path));
+  if (!asset) {
+    std::cerr << std::format("nav: {}\n", asset.Error().Message());
+    return 1;
+  }
+  auto params = nav::LoadNavParamsFromFile(std::filesystem::path(params_path));
+  if (!params) {
+    std::cerr << std::format("nav: {}\n", params.Error().Message());
+    return 1;
+  }
+  params_out = std::move(*params);
+  derived_out = nav::DeriveNavInput(*asset, params_out);
+  for (const auto& warning : derived_out.stats.warnings) {
+    std::cerr << std::format("nav: warn: {}\n", warning);
+  }
+  return 0;
+}
+
+static auto CmdCookNav(std::string_view collision_path, std::string_view params_path) -> int {
+  nav::NavParams params;
+  nav::NavDeriveResult derived;
+  if (int rc = LoadNavDerived(collision_path, params_path, params, derived); rc != 0) return rc;
+  auto baked = nav::BuildNavMeshData(derived.geometry, params.bake);
+  if (!baked) {
+    std::cerr << std::format("cook_nav: {}\n", baked.Error().Message());
+    return 1;
+  }
+  const auto& r = baked->report;
+  std::cout << std::format(
+      "navmesh baked: input_tris={} polys={} verts={} walkable_area={:.1f} m^2 "
+      "(skipped convex={} sphere={} capsule={} plane={})\n",
+      r.input_triangles, r.poly_count, r.poly_vertex_count, r.walkable_area_m2,
+      derived.stats.skipped_convexes, derived.stats.skipped_spheres,
+      derived.stats.skipped_capsules, derived.stats.skipped_planes);
+  nav::FreeNavMeshData(*baked);
+  return 0;
+}
+
+static auto CmdDumpNav(std::string_view collision_path, std::string_view params_path,
+                       std::string_view obj_path) -> int {
+  nav::NavParams params;
+  nav::NavDeriveResult derived;
+  if (int rc = LoadNavDerived(collision_path, params_path, params, derived); rc != 0) return rc;
+  auto mesh = nav::BuildNavDebugMesh(derived.geometry, params.bake);
+  if (!mesh) {
+    std::cerr << std::format("dump_nav: {}\n", mesh.Error().Message());
+    return 1;
+  }
+  std::string out = "# Atlas navmesh debug dump\n";
+  out += std::format("# polys {} verts {} walkable_area {:.1f}\n", mesh->report.poly_count,
+                     mesh->report.poly_vertex_count, mesh->report.walkable_area_m2);
+  for (const auto& v : mesh->vertices) {
+    out += std::format("v {:.6g} {:.6g} {:.6g}\n", v.x, v.y, v.z);
+  }
+  for (std::size_t i = 0; i + 2 < mesh->indices.size(); i += 3) {
+    out += std::format("f {} {} {}\n", mesh->indices[i] + 1, mesh->indices[i + 1] + 1,
+                       mesh->indices[i + 2] + 1);
+  }
+  if (auto wr = fs::WriteTextFile(std::filesystem::path(obj_path), out); !wr) {
+    std::cerr << std::format("dump_nav: {}\n", wr.Error().Message());
+    return 1;
+  }
+  std::cout << std::format("nav OBJ written: {} polys={} walkable_area={:.1f}\n", obj_path,
+                           mesh->report.poly_count, mesh->report.walkable_area_m2);
+  return 0;
+}
+
+static auto CmdPathNav(std::string_view collision_path, std::string_view params_path,
+                       const math::Vector3& from, const math::Vector3& to,
+                       std::string_view obj_path) -> int {
+  nav::NavParams params;
+  nav::NavDeriveResult derived;
+  if (int rc = LoadNavDerived(collision_path, params_path, params, derived); rc != 0) return rc;
+  const nav::RecastNavBackendFactory backend;
+  auto query = backend.Bake(derived.geometry, params.bake);
+  if (!query) {
+    std::cerr << std::format("path_nav: {}\n", query.Error().Message());
+    return 1;
+  }
+  const nav::NavQueryFilter filter;
+  const auto path = (*query)->FindPath(from, to, filter);
+  const char* status = path.status == nav::NavPathStatus::kReached    ? "reached"
+                       : path.status == nav::NavPathStatus::kPartial ? "partial"
+                                                                     : "empty";
+  std::cout << std::format("path: status={} waypoints={} length={:.2f} m\n", status,
+                           path.waypoints.size(), path.length_m);
+  if (!obj_path.empty() && !path.waypoints.empty()) {
+    std::string out = "# Atlas nav path\n";
+    for (const auto& w : path.waypoints) {
+      out += std::format("v {:.6g} {:.6g} {:.6g}\n", w.x, w.y, w.z);
+    }
+    out += "l";
+    for (std::size_t i = 0; i < path.waypoints.size(); ++i) out += std::format(" {}", i + 1);
+    out += "\n";
+    if (auto wr = fs::WriteTextFile(std::filesystem::path(obj_path), out); !wr) {
+      std::cerr << std::format("path_nav: {}\n", wr.Error().Message());
+      return 1;
+    }
+    std::cout << std::format("path OBJ written: {}\n", obj_path);
+  }
+  return 0;
+}
+#endif  // ATLAS_ATLAS_TOOL_HAS_RECAST
+
 int main(int argc, char* argv[]) {
   Address machined_addr("127.0.0.1", 20018);
 
@@ -488,6 +654,52 @@ int main(int argc, char* argv[]) {
       return 1;
     }
     return CmdRecookInvalid(argv[arg_idx + 1]);
+  }
+
+  if (command == "validate_nav") {
+    if (arg_idx >= argc) {
+      std::cerr << "validate_nav requires <map.nav.json>\n";
+      PrintUsage();
+      return 1;
+    }
+    return CmdValidateNav(argv[arg_idx]);
+  }
+
+  if (command == "cook_nav" || command == "dump_nav" || command == "path_nav") {
+    if (arg_idx >= argc) {
+      std::cerr << command << " requires <map.collision.json> --params <map.nav.json>\n";
+      PrintUsage();
+      return 1;
+    }
+    std::string_view params = FindFlag(argc, argv, arg_idx, "--params");
+    if (params.empty()) {
+      std::cerr << command << " requires --params <map.nav.json>\n";
+      return 1;
+    }
+#ifdef ATLAS_ATLAS_TOOL_HAS_RECAST
+    std::string_view collision = argv[arg_idx];
+    if (command == "cook_nav") return CmdCookNav(collision, params);
+    if (command == "dump_nav") {
+      std::string_view obj = FindFlag(argc, argv, arg_idx, "--obj");
+      if (obj.empty()) {
+        std::cerr << "dump_nav requires --obj <out.obj>\n";
+        return 1;
+      }
+      return CmdDumpNav(collision, params, obj);
+    }
+    std::string_view from_s = FindFlag(argc, argv, arg_idx, "--from");
+    std::string_view to_s = FindFlag(argc, argv, arg_idx, "--to");
+    math::Vector3 from;
+    math::Vector3 to;
+    if (from_s.empty() || to_s.empty() || !ParseVec3(from_s, from) || !ParseVec3(to_s, to)) {
+      std::cerr << "path_nav requires --from x,y,z --to x,y,z\n";
+      return 1;
+    }
+    return CmdPathNav(collision, params, from, to, FindFlag(argc, argv, arg_idx, "--obj"));
+#else
+    std::cerr << command << " requires atlas_tool built with ATLAS_ENABLE_RECAST\n";
+    return 1;
+#endif
   }
 
   EventDispatcher dispatcher;

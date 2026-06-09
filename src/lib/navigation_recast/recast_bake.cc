@@ -42,10 +42,49 @@ struct RcScratch {
   }
 };
 
-}  // namespace
+[[nodiscard]] auto Vec(const float* p) -> math::Vector3 { return {p[0], p[1], p[2]}; }
 
-auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params)
-    -> Result<BakedNavMeshData> {
+[[nodiscard]] auto ComputeWalkableArea(const rcPolyMeshDetail& dm) -> float {
+  float area = 0.0f;
+  for (int m = 0; m < dm.nmeshes; ++m) {
+    const unsigned int bverts = dm.meshes[static_cast<std::size_t>(m) * 4 + 0];
+    const unsigned int btris = dm.meshes[static_cast<std::size_t>(m) * 4 + 2];
+    const unsigned int ntris = dm.meshes[static_cast<std::size_t>(m) * 4 + 3];
+    for (unsigned int t = 0; t < ntris; ++t) {
+      const unsigned char* tri = &dm.tris[static_cast<std::size_t>(btris + t) * 4];
+      const math::Vector3 a = Vec(&dm.verts[static_cast<std::size_t>(bverts + tri[0]) * 3]);
+      const math::Vector3 b = Vec(&dm.verts[static_cast<std::size_t>(bverts + tri[1]) * 3]);
+      const math::Vector3 c = Vec(&dm.verts[static_cast<std::size_t>(bverts + tri[2]) * 3]);
+      area += 0.5f * (b - a).Cross(c - a).Length();
+    }
+  }
+  return area;
+}
+
+void ExtractDetailMesh(const rcPolyMeshDetail& dm, std::vector<math::Vector3>& verts,
+                       std::vector<int32_t>& indices) {
+  for (int m = 0; m < dm.nmeshes; ++m) {
+    const unsigned int bverts = dm.meshes[static_cast<std::size_t>(m) * 4 + 0];
+    const unsigned int nverts = dm.meshes[static_cast<std::size_t>(m) * 4 + 1];
+    const unsigned int btris = dm.meshes[static_cast<std::size_t>(m) * 4 + 2];
+    const unsigned int ntris = dm.meshes[static_cast<std::size_t>(m) * 4 + 3];
+    const auto base = static_cast<int32_t>(verts.size());
+    for (unsigned int v = 0; v < nverts; ++v) {
+      verts.push_back(Vec(&dm.verts[static_cast<std::size_t>(bverts + v) * 3]));
+    }
+    for (unsigned int t = 0; t < ntris; ++t) {
+      const unsigned char* tri = &dm.tris[static_cast<std::size_t>(btris + t) * 4];
+      indices.push_back(base + tri[0]);
+      indices.push_back(base + tri[1]);
+      indices.push_back(base + tri[2]);
+    }
+  }
+}
+
+// Runs Recast through poly + detail mesh, leaving scratch.pmesh / scratch.dmesh
+// populated. Hard-fails on an empty navmesh.
+[[nodiscard]] auto RunRecastPipeline(const NavInputGeometry& input, const NavBakeParams& params,
+                                     rcContext& ctx, RcScratch& scratch) -> Result<RecastBakeReport> {
   const int nverts = static_cast<int>(input.vertices.size());
   const int ntris = static_cast<int>(input.TriangleCount());
   if (ntris == 0) return Invalid("nav bake: no input geometry (0 triangles)");
@@ -79,9 +118,6 @@ auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params
   rcVcopy(cfg.bmax, bmax);
   rcCalcGridSize(cfg.bmin, cfg.bmax, cfg.cs, &cfg.width, &cfg.height);
   if (cfg.width <= 0 || cfg.height <= 0) return Invalid("nav bake: degenerate bake bounds");
-
-  rcContext ctx(false);
-  RcScratch scratch;
 
   scratch.solid = rcAllocHeightfield();
   if (scratch.solid == nullptr ||
@@ -157,6 +193,23 @@ auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params
     return Invalid("nav bake: rcBuildPolyMeshDetail failed");
   }
 
+  RecastBakeReport report;
+  report.input_triangles = ntris;
+  report.poly_count = scratch.pmesh->npolys;
+  report.poly_vertex_count = scratch.pmesh->nverts;
+  report.walkable_area_m2 = ComputeWalkableArea(*scratch.dmesh);
+  return report;
+}
+
+}  // namespace
+
+auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params)
+    -> Result<BakedNavMeshData> {
+  rcContext ctx(false);
+  RcScratch scratch;
+  auto report = RunRecastPipeline(input, params, ctx, scratch);
+  if (!report) return report.Error();
+
   // Poly flags drive Detour include/exclude; bit 0 = walkable. The per-area
   // value stays in polyAreas for dtQueryFilter cost lookup.
   rcPolyMesh& pmesh = *scratch.pmesh;
@@ -183,8 +236,8 @@ auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params
   dp.walkableClimb = params.agent_max_climb_m;
   rcVcopy(dp.bmin, pmesh.bmin);
   rcVcopy(dp.bmax, pmesh.bmax);
-  dp.cs = cfg.cs;
-  dp.ch = cfg.ch;
+  dp.cs = params.cell_size_m;
+  dp.ch = params.cell_height_m;
   dp.buildBvTree = true;
 
   unsigned char* nav_data = nullptr;
@@ -196,9 +249,20 @@ auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params
   BakedNavMeshData out;
   out.nav_data = nav_data;
   out.nav_data_size = nav_data_size;
-  out.report.input_triangles = ntris;
-  out.report.poly_count = pmesh.npolys;
-  out.report.poly_vertex_count = pmesh.nverts;
+  out.report = *report;
+  return out;
+}
+
+auto BuildNavDebugMesh(const NavInputGeometry& input, const NavBakeParams& params)
+    -> Result<NavDebugMesh> {
+  rcContext ctx(false);
+  RcScratch scratch;
+  auto report = RunRecastPipeline(input, params, ctx, scratch);
+  if (!report) return report.Error();
+
+  NavDebugMesh out;
+  out.report = *report;
+  ExtractDetailMesh(*scratch.dmesh, out.vertices, out.indices);
   return out;
 }
 

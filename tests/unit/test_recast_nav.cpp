@@ -2,6 +2,7 @@
 
 #include "navigation/nav_input.h"
 #include "navigation/nav_params.h"
+#include "navigation_recast/recast_bake.h"
 #include "navigation_recast/recast_nav_backend.h"
 #include "physics/collision_asset.h"
 
@@ -49,6 +50,16 @@ TEST(RecastNav, NearestPointSnapsToFloor) {
   const auto point = (*query)->NearestPoint({0, 0.5f, 0}, {2, 2, 2}, filter);
   EXPECT_TRUE(point.on_mesh);
   EXPECT_NEAR(point.position.y, 0.0f, 0.5f);
+}
+
+TEST(RecastNav, DebugMeshReportsWalkableArea) {
+  const auto params = FloorParams();
+  const auto input = DeriveNavInput(FloorAsset(), params);
+  auto mesh = BuildNavDebugMesh(input.geometry, params.bake);
+  ASSERT_TRUE(mesh.HasValue()) << mesh.Error().Message();
+  EXPECT_GT(mesh->vertices.size(), 0u);
+  EXPECT_GT(mesh->indices.size(), 0u);
+  EXPECT_GT(mesh->report.walkable_area_m2, 100.0f);  // 20x20 floor minus radius erosion
 }
 
 TEST(RecastNav, EmptyInputFailsToBake) {
