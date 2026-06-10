@@ -16,6 +16,7 @@
 #include "cellappmgr/cellappmgr_messages.h"  // CellID
 #include "foundation/clock.h"
 #include "foundation/error.h"
+#include "navigation/nav_query.h"
 #include "physics/physics_query.h"
 #include "server/entity_types.h"
 #include "space/range_list.h"
@@ -28,6 +29,9 @@ class CellEntity;
 namespace physics {
 struct CollisionAsset;
 class CollisionBackendFactory;
+}
+namespace nav {
+class NavBackendFactory;
 }
 
 // Self-contained spatial partition; owns CellEntities, RangeList, and physics.
@@ -102,6 +106,19 @@ class Space {
     return collision_asset_object_count_;
   }
 
+  [[nodiscard]] auto NavQuery() -> nav::NavQuery& { return *nav_query_; }
+  [[nodiscard]] auto NavQuery() const -> const nav::NavQuery& { return *nav_query_; }
+  void SetNavQuery(std::unique_ptr<nav::NavQuery> query);
+  // Optional backend factory (Recast). When null, LoadNavMeshFromFiles is
+  // rejected rather than silently leaving the Null query in place.
+  void SetNavBackendFactory(std::shared_ptr<const nav::NavBackendFactory> factory);
+  // Derives nav input from the collision asset + params sidecar and bakes
+  // in memory (v1 has no .navcache).
+  [[nodiscard]] auto LoadNavMeshFromFiles(const std::filesystem::path& collision_path,
+                                          const std::filesystem::path& params_path)
+      -> Result<void>;
+  [[nodiscard]] auto NavSourceHash() const -> std::string_view { return nav_source_hash_; }
+
   // True once SpaceData has been seeded - by becoming owner on SetBspTree,
   // or by receiving a SpaceDataSnapshot from the owner.
   [[nodiscard]] auto IsDataInitialized() const -> bool { return data_initialized_; }
@@ -145,6 +162,9 @@ class Space {
   std::shared_ptr<const physics::CollisionBackendFactory> collision_backend_factory_;
   std::string collision_asset_source_hash_;
   std::size_t collision_asset_object_count_{0};
+  std::unique_ptr<nav::NavQuery> nav_query_{std::make_unique<nav::NullNavQuery>()};
+  std::shared_ptr<const nav::NavBackendFactory> nav_backend_factory_;
+  std::string nav_source_hash_;
   bool data_initialized_{false};
   Address pending_space_data_source_addr_;
 

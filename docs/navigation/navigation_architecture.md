@@ -6,8 +6,8 @@
 >
 > **状态**：草案 v0.3 — 待评审。
 >
-> **范围**：本文描述 v1 的目标设计；实现分切片推进，当前已落地契约层
-> （`src/lib/navigation`），Recast 后端与 `atlas_tool` 命令属后续切片。
+> **范围**：本文描述 v1 的目标设计；契约层、Recast 后端、`atlas_tool` 命令与
+> Space 集成已落地，§6 列出仍在 v1 之外的部分。
 
 ---
 
@@ -75,14 +75,18 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
   统计（poly / 顶点 / 可走面积 / skip 数，v1 不落 `.navcache`）；`dump_nav --obj` 导可走面
   OBJ；`path_nav --from --to [--obj]` 烘焙 + 单次 FindPath，打印状态 / 长度并可导路径折线
   （不依赖 Unity/CellApp 的独立可视化）。后三者 `ATLAS_ATLAS_TOOL_HAS_RECAST` 门控。
-- **v1 直接内存 bake**：无 runtime 消费者，故不落 `.navcache`、不做 stamp/recook；
-  Detour tile 的裸序列化跨平台问题随之推迟到有持久化需求时再处理。
+- **v1 直接内存 bake**：不落 `.navcache`、不做 stamp/recook；Detour tile 的裸序列化
+  跨平台问题随之推迟到有持久化需求时再处理。
+- **Space 集成**：`Space` 默认持 `NullNavQuery`；CellApp Init 注入
+  `RecastNavBackendFactory`（`ATLAS_CELLAPP_HAS_RECAST`）并由 `MakeSpace` 继承；
+  `Space::LoadNavMeshFromFiles(collision, params)` 在线内存 bake 后替换
+  `Space::NavQuery()`，无 backend 时拒绝而非静默留 Null。
 
 ## 6. 非目标（v1 不做）
 
 v1 不做以下，留接口不留实现：
 
-- `Space::NavQuery()` 接入、C# `LoadNavAsset`、AI `MoveTo` 集成与 LOD 预算。
+- C# 脚本入口（native `LoadNavMesh`）、AI `MoveTo` 集成与 LOD 预算。
 - off-mesh 连接（跳台 / 落差 / 高地路线）：`NavParams` 不带 links，bake 纯地面。
 - tiled / chunk navmesh、`.navcache` 持久化、Watcher/Tracy 指标。
 - 动态障碍（`dtTileCache`）、多 agent 半径剖面。

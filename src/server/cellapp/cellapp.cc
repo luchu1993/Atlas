@@ -51,6 +51,10 @@
 #include "physics_jolt/jolt_init.h"
 #endif
 
+#ifdef ATLAS_CELLAPP_HAS_RECAST
+#include "navigation_recast/recast_nav_backend.h"
+#endif
+
 namespace atlas {
 
 namespace {
@@ -205,6 +209,9 @@ auto CellApp::Init(int argc, char* argv[]) -> bool {
 #ifdef ATLAS_CELLAPP_HAS_JOLT
   physics::jolt::Initialize();
   collision_backend_factory_ = std::make_shared<physics::JoltCollisionBackendFactory>();
+#endif
+#ifdef ATLAS_CELLAPP_HAS_RECAST
+  nav_backend_factory_ = std::make_shared<nav::RecastNavBackendFactory>();
 #endif
 
   auto& table = Network().InterfaceTable();
@@ -495,6 +502,7 @@ void CellApp::Fini() {
 auto CellApp::MakeSpace(SpaceID id) -> std::unique_ptr<Space> {
   auto space = std::make_unique<Space>(id);
   space->SetCollisionBackendFactory(collision_backend_factory_);
+  space->SetNavBackendFactory(nav_backend_factory_);
   return space;
 }
 
@@ -1877,6 +1885,29 @@ auto CellApp::LoadCollisionAsset(SpaceID space_id, std::string_view path) -> boo
   }
   ATLAS_LOG_INFO("CellApp: loaded collision {} for space {} path {}",
                  is_cache ? "cache" : "asset", space_id, asset_path.string());
+  return true;
+}
+
+auto CellApp::LoadNavMesh(SpaceID space_id, std::string_view collision_path,
+                          std::string_view params_path) -> bool {
+  auto* space = FindSpace(space_id);
+  if (space == nullptr) {
+    ATLAS_LOG_WARNING("CellApp: LoadNavMesh for unknown space {} - dropping", space_id);
+    return false;
+  }
+  if (collision_path.empty() || params_path.empty()) {
+    ATLAS_LOG_WARNING("CellApp: LoadNavMesh for space {} has empty path", space_id);
+    return false;
+  }
+  auto result = space->LoadNavMeshFromFiles(std::filesystem::path(std::string(collision_path)),
+                                            std::filesystem::path(std::string(params_path)));
+  if (!result) {
+    ATLAS_LOG_ERROR("CellApp: LoadNavMesh failed for space {} ({} + {}): {}", space_id,
+                    collision_path, params_path, result.Error().Message());
+    return false;
+  }
+  ATLAS_LOG_INFO("CellApp: baked navmesh for space {} ({} + {})", space_id, collision_path,
+                 params_path);
   return true;
 }
 

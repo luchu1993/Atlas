@@ -141,6 +141,10 @@ if(ATLAS_ENABLE_RECAST)
     SOURCES test_recast_nav.cpp
     DEPS atlas_navigation_recast
   )
+  atlas_add_test(NAME test_nav_pipeline
+    SOURCES test_nav_pipeline.cpp
+    DEPS atlas_cellapp_lib
+  )
 endif()
 
 atlas_add_test(NAME test_movement_sim

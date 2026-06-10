@@ -35,6 +35,10 @@ namespace physics {
 class CollisionBackendFactory;
 }
 
+namespace nav {
+class NavBackendFactory;
+}
+
 namespace cellapp {
 struct CreateCellEntity;
 struct DestroyCellEntity;
@@ -149,6 +153,9 @@ class CellApp : public EntityApp, public CellMovementHost {
   void SetSpaceData(SpaceID space_id, uint16_t key_id, std::span<const uint8_t> value);
   void RemoveSpaceData(SpaceID space_id, uint16_t key_id);
   auto LoadCollisionAsset(SpaceID space_id, std::string_view path) -> bool;
+  // Bakes a navmesh for the space from a collision asset + nav params sidecar.
+  auto LoadNavMesh(SpaceID space_id, std::string_view collision_path,
+                   std::string_view params_path) -> bool;
 
   void OnGetEntityIdsAck(Channel& ch, const dbapp::GetEntityIdsAck& msg);
 
@@ -414,10 +421,11 @@ class CellApp : public EntityApp, public CellMovementHost {
   void PushSpaceDataDeleteToWitnesses(Space& space, uint16_t key_id);
   void PushSpaceDataInitToWitnesses(Space& space);
 
-  // Constructs a Space with the process collision backend already injected.
+  // Constructs a Space with the process collision + nav backends already injected.
   [[nodiscard]] auto MakeSpace(SpaceID id) -> std::unique_ptr<Space>;
 
   std::shared_ptr<const physics::CollisionBackendFactory> collision_backend_factory_;
+  std::shared_ptr<const nav::NavBackendFactory> nav_backend_factory_;
   std::unordered_map<SpaceID, std::unique_ptr<Space>> spaces_;
   struct PendingAddCellAck {
     SpaceID space_id{kInvalidSpaceID};

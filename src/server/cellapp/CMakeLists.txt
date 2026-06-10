@@ -33,6 +33,7 @@ target_link_libraries(atlas_cellapp_lib PUBLIC
   atlas_serialization
   atlas_math
   atlas_movement_sim
+  atlas_navigation
   atlas_server
   atlas_space
   atlas_clrscript
@@ -43,6 +44,10 @@ target_link_libraries(atlas_cellapp_lib PUBLIC
 if(ATLAS_ENABLE_JOLT)
   target_link_libraries(atlas_cellapp_lib PUBLIC atlas_physics_jolt)
   target_compile_definitions(atlas_cellapp_lib PUBLIC ATLAS_CELLAPP_HAS_JOLT)
+endif()
+if(ATLAS_ENABLE_RECAST)
+  target_link_libraries(atlas_cellapp_lib PUBLIC atlas_navigation_recast)
+  target_compile_definitions(atlas_cellapp_lib PUBLIC ATLAS_CELLAPP_HAS_RECAST)
 endif()
 
 # The CellApp executable.

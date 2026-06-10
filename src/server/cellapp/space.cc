@@ -5,6 +5,9 @@
 #include "cell.h"
 #include "cell_entity.h"
 #include "foundation/profiler.h"
+#include "navigation/nav_backend.h"
+#include "navigation/nav_input.h"
+#include "navigation/nav_params.h"
 #include "physics/collision_asset.h"
 #include "physics/collision_backend.h"
 
@@ -141,6 +144,34 @@ auto Space::LoadCollisionCacheFromFile(const std::filesystem::path& path) -> Res
                  "configured (Static builds box/plane only)"};
   }
   SetCollisionAsset(cache->asset);
+  return {};
+}
+
+void Space::SetNavQuery(std::unique_ptr<nav::NavQuery> query) {
+  if (!query) return;
+  nav_query_ = std::move(query);
+  nav_source_hash_.clear();
+}
+
+void Space::SetNavBackendFactory(std::shared_ptr<const nav::NavBackendFactory> factory) {
+  nav_backend_factory_ = std::move(factory);
+}
+
+auto Space::LoadNavMeshFromFiles(const std::filesystem::path& collision_path,
+                                 const std::filesystem::path& params_path) -> Result<void> {
+  if (nav_backend_factory_ == nullptr) {
+    return Error{ErrorCode::kNotSupported,
+                 "no nav backend is configured (build with ATLAS_ENABLE_RECAST)"};
+  }
+  auto asset = physics::LoadCollisionAssetFromFile(collision_path);
+  if (!asset) return asset.Error();
+  auto params = nav::LoadNavParamsFromFile(params_path);
+  if (!params) return params.Error();
+  auto derived = nav::DeriveNavInput(*asset, *params);
+  auto query = nav_backend_factory_->Bake(derived.geometry, params->bake);
+  if (!query) return query.Error();
+  nav_query_ = std::move(*query);
+  nav_source_hash_ = params->source_hash;
   return {};
 }
 
