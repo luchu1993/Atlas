@@ -13,6 +13,9 @@ public sealed class NpcAiComponent : ServerLocalComponent
     private const float kSpeed = 3.0f;
     private const float kReach = 0.5f;
     private const float kRetargetInterval = 4.0f;
+    // Nav walks run to completion; the timeout only reaps paths the controller
+    // could not finish (blocked goal). Longest detour ~40 m at 3 m/s ≈ 13 s.
+    private const float kNavRetargetTimeout = 15.0f;
     private const float kWanderRadius = 20.0f;
     private const float kWorldHalf = 100.0f;
     private const float kFireIntervalMin = 3.0f;
@@ -23,7 +26,10 @@ public sealed class NpcAiComponent : ServerLocalComponent
     // Target / retarget timer / fire interval live on Npc as cell_private
     // properties so cross-cellapp offload preserves them via persistent_blob.
     // _fireAccum stays local — drift on offload is at most one fire cycle.
+    // _navWalking is local too: the controller itself migrates with the entity,
+    // and arrival/timeout (position vs AiTarget) re-derives the next walk.
     private float _fireAccum;
+    private bool _navWalking;
     private Random _rng = null!;
 
     public override void OnAttached()
@@ -70,7 +76,19 @@ public sealed class NpcAiComponent : ServerLocalComponent
         var dx = target.X - pos.X;
         var dz = target.Z - pos.Z;
         var distSq = dx * dx + dz * dz;
-        if (Owner.AiRetargetAccum >= kRetargetInterval || distSq <= kReach * kReach)
+        var arrived = distSq <= kReach * kReach;
+
+        if (_navWalking && !arrived && Owner.AiRetargetAccum < kNavRetargetTimeout)
+        {
+            TickFire(dx, dz, distSq);
+            return;  // the migrating MoveAlongPath controller owns the walk
+        }
+
+        var retargetDue = _navWalking
+            ? arrived || Owner.AiRetargetAccum >= kNavRetargetTimeout
+            : Owner.AiRetargetAccum >= kRetargetInterval || arrived;
+        _navWalking = false;
+        if (retargetDue)
         {
             Owner.AiRetargetAccum = 0f;
             PickTarget(pos);
@@ -85,17 +103,30 @@ public sealed class NpcAiComponent : ServerLocalComponent
             }
         }
 
+        if (Owner.NavMoveTo(target, kSpeed) != 0)
+        {
+            _navWalking = true;
+            Owner.SetMovementIntent(Vector3.Zero, 0f);  // hand the walk to the controller
+            TickFire(dx, dz, distSq);
+            return;
+        }
+
+        // No navmesh (or off-mesh target): straight-line wander as before.
         var dist = MathF.Sqrt(distSq);
         var inv = 1f / dist;
         var dir = new Vector3(dx * inv, 0f, dz * inv);
         Owner.SetMovementIntent(dir, kSpeed);
+        TickFire(dx, dz, distSq);
+    }
 
-        if (_fireAccum >= Owner.AiFireInterval)
-        {
-            _fireAccum = 0f;
-            RollFireInterval();
-            FireProjectile(dir);
-        }
+    private void TickFire(float dx, float dz, float distSq)
+    {
+        if (_fireAccum < Owner.AiFireInterval) return;
+        _fireAccum = 0f;
+        RollFireInterval();
+        if (distSq < 1e-4f) return;
+        var inv = 1f / MathF.Sqrt(distSq);
+        FireProjectile(new Vector3(dx * inv, 0f, dz * inv));
     }
 
     private void RollFireInterval() =>

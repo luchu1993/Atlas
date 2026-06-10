@@ -69,6 +69,47 @@ namespace Atlas.Mvp.Editor
             // A small Terrain exercises the heightfield export path.
             AddTerrain(root, "Terrain", new Vector3(40f, 0f, -40f),
                        new Vector3(50f, 5f, 50f), resolution: 33, layer: 0);
+            SeedWhitebox(root);
+        }
+
+        // OW-style PVP whitebox: perimeter wall with four doorways, a central
+        // high ground with stair ramps, symmetric covers, and offset flank
+        // corridors. Mirrors the box list in samples/mvp/maps/main.collision.json.
+        static void SeedWhitebox(GameObject root)
+        {
+            var boxes = new (string Name, Vector3 Center, Vector3 Size)[]
+            {
+                ("WallNW", new Vector3(-21.5f, 1.5f, 40f), new Vector3(37f, 3f, 0.8f)),
+                ("WallNE", new Vector3(21.5f, 1.5f, 40f), new Vector3(37f, 3f, 0.8f)),
+                ("WallSW", new Vector3(-21.5f, 1.5f, -40f), new Vector3(37f, 3f, 0.8f)),
+                ("WallSE", new Vector3(21.5f, 1.5f, -40f), new Vector3(37f, 3f, 0.8f)),
+                ("WallES", new Vector3(40f, 1.5f, -21.5f), new Vector3(0.8f, 3f, 37f)),
+                ("WallEN", new Vector3(40f, 1.5f, 21.5f), new Vector3(0.8f, 3f, 37f)),
+                ("WallWS", new Vector3(-40f, 1.5f, -21.5f), new Vector3(0.8f, 3f, 37f)),
+                ("WallWN", new Vector3(-40f, 1.5f, 21.5f), new Vector3(0.8f, 3f, 37f)),
+                ("HighGround", new Vector3(0f, 1f, 16f), new Vector3(16f, 2f, 16f)),
+                ("CoverWS", new Vector3(-12.5f, 0.75f, -1.7f), new Vector3(3f, 1.5f, 0.6f)),
+                ("CoverES", new Vector3(12.5f, 0.75f, -1.7f), new Vector3(3f, 1.5f, 0.6f)),
+                ("CoverWN", new Vector3(-12.5f, 0.75f, 4.3f), new Vector3(3f, 1.5f, 0.6f)),
+                ("CoverEN", new Vector3(12.5f, 0.75f, 4.3f), new Vector3(3f, 1.5f, 0.6f)),
+                ("CoverMid", new Vector3(0f, 1f, -11.25f), new Vector3(3f, 2f, 1.5f)),
+                ("FlankWOuter", new Vector3(-25.6f, 1.25f, -4f), new Vector3(0.8f, 2.5f, 32f)),
+                ("FlankWInner", new Vector3(-21.6f, 1.25f, 2f), new Vector3(0.8f, 2.5f, 32f)),
+                ("FlankEOuter", new Vector3(25.6f, 1.25f, -4f), new Vector3(0.8f, 2.5f, 32f)),
+                ("FlankEInner", new Vector3(21.6f, 1.25f, 2f), new Vector3(0.8f, 2.5f, 32f)),
+            };
+            foreach (var (name, center, size) in boxes)
+                AddBox(root, name, center, size, layer: 0, visible: true);
+            // Stair ramps onto the high ground; 0.4 m risers stay under the
+            // movement step-up and the nav agent_max_climb (0.45 m).
+            for (int i = 1; i <= 5; ++i)
+            {
+                var size = new Vector3(4f, 0.4f * i, 1f);
+                var y = 0.2f * i;
+                var z = 2.5f + i;  // riser height grows toward the high ground at z=8
+                AddBox(root, $"StairW{i}", new Vector3(-4f, y, z), size, layer: 0, visible: true);
+                AddBox(root, $"StairE{i}", new Vector3(4f, y, z), size, layer: 0, visible: true);
+            }
         }
 
         const string kTerrainDataPath = "Assets/Scenes/MvpTestTerrain.asset";

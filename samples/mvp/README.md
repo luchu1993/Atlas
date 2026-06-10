@@ -96,10 +96,13 @@ resizable window.
 
 ## Server collision pipeline
 
-`Main.unity` carries a `AtlasServerColliders` root (ground slab + a wall and
-platform) tagged with `ServerColliderAuthoring(exportToServer = true)`. The
-menu **Atlas → MVP → Seed Server Test Colliders** rebuilds it; `MvpSpace`
-loads the cooked result so the demo has real server-authoritative obstacles.
+`Main.unity` carries a `AtlasServerColliders` root tagged with
+`ServerColliderAuthoring(exportToServer = true)`: a ground slab, one obstacle
+per exportable shape, and an OW-style PVP whitebox (perimeter wall with four
+doorways, a central high ground with 0.4 m stair risers, symmetric covers, and
+offset flank corridors). The menu **Atlas → MVP → Seed Server Test Colliders**
+rebuilds it; `MvpSpace` loads the cooked result so the demo has real
+server-authoritative obstacles.
 
 Export the scene's server colliders to an Atlas collision asset v2 JSON:
 
@@ -141,6 +144,23 @@ bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json
 
 `atlas_tool recook --invalid <dir>` re-cooks caches whose
 `jolt_version_stamp` falls behind the current Jolt build.
+
+## Server navmesh + NPC pathfinding
+
+`MvpSpace.OnSpaceInit` also bakes a navmesh in memory from the raw
+`main.collision.json` plus the `main.nav.json` params sidecar
+(`CellServerEntity.LoadNavMesh`). When the bake succeeds, NPC wander issues
+`NavMoveTo` walks — paths route through doorways, up the stairs, and around
+covers instead of sliding along walls. Without a navmesh (e.g.
+`ATLAS_ENABLE_RECAST=OFF`) NPCs fall back to the old straight-line wander.
+
+Inspect the baked navmesh or a specific route from the command line:
+
+```bash
+bin\debug\atlas_tool.exe cook_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json
+bin\debug\atlas_tool.exe dump_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json --obj nav.obj
+bin\debug\atlas_tool.exe path_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json --from -30,0,-30 --to 0,2,16 --obj path.obj
+```
 
 ## UE client (M2 — bidirectional codegen + BP exposure)
 

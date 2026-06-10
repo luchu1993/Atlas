@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "coordinate_system": "x_right_y_up_z_forward_meters",
+  "source_hash": "mvp-main",
+  "bake": {
+    "agent_radius": 0.4,
+    "agent_height": 1.8,
+    "agent_max_climb": 0.45,
+    "agent_max_slope_deg": 50
+  }
+}

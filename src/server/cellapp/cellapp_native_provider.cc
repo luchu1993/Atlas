@@ -578,7 +578,8 @@ auto CellAppNativeProvider::AddNavMoveController(uint32_t entity_id, float dest_
   auto path = entity->GetSpace().NavQuery().FindPath(
       entity->Position(), math::Vector3{dest_x, dest_y, dest_z}, filter);
   if (path.status == nav::NavPathStatus::kEmpty) {
-    ATLAS_LOG_WARNING(
+    // Routine for AI (off-mesh or unreachable goal); the 0 return is the signal.
+    ATLAS_LOG_DEBUG(
         "atlas_add_nav_move_controller: no path for entity {} to ({:.2f},{:.2f},{:.2f})",
         entity_id, dest_x, dest_y, dest_z);
     return 0;

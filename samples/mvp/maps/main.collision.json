@@ -10,6 +10,38 @@
     {"shape": "capsule", "center": [-6, 1, 6], "radius": 0.5, "half_height": 1, "layer": 0},
     {"shape": "mesh", "layer": 0, "vertex_byte_offset": 8, "vertex_count": 4, "index_byte_offset": 56, "index_count": 6},
     {"shape": "convex", "layer": 0, "vertex_byte_offset": 80, "vertex_count": 24},
-    {"shape": "heightfield", "layer": 0, "origin": [40, 0, -40], "scale": [1.5625, 5, 1.5625], "sample_count": 32, "sample_byte_offset": 368}
+    {"shape": "heightfield", "layer": 0, "origin": [40, 0, -40], "scale": [1.5625, 5, 1.5625], "sample_count": 32, "sample_byte_offset": 368},
+
+    {"shape": "box", "min": [-40, 0, 39.6], "max": [-3, 3, 40.4], "layer": 0},
+    {"shape": "box", "min": [3, 0, 39.6], "max": [40, 3, 40.4], "layer": 0},
+    {"shape": "box", "min": [-40, 0, -40.4], "max": [-3, 3, -39.6], "layer": 0},
+    {"shape": "box", "min": [3, 0, -40.4], "max": [40, 3, -39.6], "layer": 0},
+    {"shape": "box", "min": [39.6, 0, -40], "max": [40.4, 3, -3], "layer": 0},
+    {"shape": "box", "min": [39.6, 0, 3], "max": [40.4, 3, 40], "layer": 0},
+    {"shape": "box", "min": [-40.4, 0, -40], "max": [-39.6, 3, -3], "layer": 0},
+    {"shape": "box", "min": [-40.4, 0, 3], "max": [-39.6, 3, 40], "layer": 0},
+
+    {"shape": "box", "min": [-8, 0, 8], "max": [8, 2, 24], "layer": 0},
+    {"shape": "box", "min": [-6, 0, 3], "max": [-2, 0.4, 4], "layer": 0},
+    {"shape": "box", "min": [-6, 0, 4], "max": [-2, 0.8, 5], "layer": 0},
+    {"shape": "box", "min": [-6, 0, 5], "max": [-2, 1.2, 6], "layer": 0},
+    {"shape": "box", "min": [-6, 0, 6], "max": [-2, 1.6, 7], "layer": 0},
+    {"shape": "box", "min": [-6, 0, 7], "max": [-2, 2, 8], "layer": 0},
+    {"shape": "box", "min": [2, 0, 3], "max": [6, 0.4, 4], "layer": 0},
+    {"shape": "box", "min": [2, 0, 4], "max": [6, 0.8, 5], "layer": 0},
+    {"shape": "box", "min": [2, 0, 5], "max": [6, 1.2, 6], "layer": 0},
+    {"shape": "box", "min": [2, 0, 6], "max": [6, 1.6, 7], "layer": 0},
+    {"shape": "box", "min": [2, 0, 7], "max": [6, 2, 8], "layer": 0},
+
+    {"shape": "box", "min": [-14, 0, -2], "max": [-11, 1.5, -1.4], "layer": 0},
+    {"shape": "box", "min": [11, 0, -2], "max": [14, 1.5, -1.4], "layer": 0},
+    {"shape": "box", "min": [-14, 0, 4], "max": [-11, 1.5, 4.6], "layer": 0},
+    {"shape": "box", "min": [11, 0, 4], "max": [14, 1.5, 4.6], "layer": 0},
+    {"shape": "box", "min": [-1.5, 0, -12], "max": [1.5, 2, -10.5], "layer": 0},
+
+    {"shape": "box", "min": [-26, 0, -20], "max": [-25.2, 2.5, 12], "layer": 0},
+    {"shape": "box", "min": [-22, 0, -14], "max": [-21.2, 2.5, 18], "layer": 0},
+    {"shape": "box", "min": [25.2, 0, -20], "max": [26, 2.5, 12], "layer": 0},
+    {"shape": "box", "min": [21.2, 0, -14], "max": [22, 2.5, 18], "layer": 0}
   ]
 }

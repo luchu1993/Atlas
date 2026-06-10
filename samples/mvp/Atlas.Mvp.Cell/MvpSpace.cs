@@ -16,6 +16,8 @@ public partial class MvpSpace : CellSpaceEntity
     // Cooked by run_mvp_cluster from samples/mvp/maps/main.collision.json; path is
     // relative to the cluster working directory (repo root).
     private const string kCollisionCache = "samples/mvp/maps/main.collisioncache";
+    private const string kCollisionSource = "samples/mvp/maps/main.collision.json";
+    private const string kNavParams = "samples/mvp/maps/main.nav.json";
 
     private int _scatterIndex;
     private int _liveCount;
@@ -30,6 +32,13 @@ public partial class MvpSpace : CellSpaceEntity
         else
             Log.Warning($"[Mvp.Cell] MvpSpace: no collision map at {kCollisionCache}; " +
                         "staying on flat ground (run atlas_tool cook_collision)");
+
+        // Bakes in memory from the raw collision asset + nav params sidecar.
+        if (CellServerEntity.LoadNavMesh(SpaceId, kCollisionSource, kNavParams))
+            Log.Info($"[Mvp.Cell] MvpSpace: baked navmesh for space {SpaceId}");
+        else
+            Log.Warning($"[Mvp.Cell] MvpSpace: no navmesh ({kNavParams}); " +
+                        "NPCs fall back to straight-line wander");
 
         if (isReload) return;
 

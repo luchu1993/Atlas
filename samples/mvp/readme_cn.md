@@ -72,10 +72,11 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 ## 服务端碰撞管线
 
-`Main.unity` 带一个 `AtlasServerColliders` 根（地面 slab + 一堵墙 + 一个台子），
-标记 `ServerColliderAuthoring(exportToServer = true)`。菜单
-**Atlas → MVP → Seed Server Test Colliders** 可重建它；`MvpSpace` 加载 cook
-产物，让 demo 拥有真实的服务端权威障碍。
+`Main.unity` 带一个 `AtlasServerColliders` 根，标记
+`ServerColliderAuthoring(exportToServer = true)`：地面 slab、每种可导出形状各一个
+障碍，以及一块 OW 式 PVP 白盒（带四个门洞的外圈围墙、带 0.4 m 台阶的中央高地、
+对称掩体和错位 flank 走廊）。菜单 **Atlas → MVP → Seed Server Test Colliders**
+可重建它；`MvpSpace` 加载 cook 产物，让 demo 拥有真实的服务端权威障碍。
 
 把场景的服务端 collider 导出成 Atlas collision asset v2 JSON：
 
@@ -113,6 +114,22 @@ bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json
 
 `atlas_tool recook --invalid <dir>` 会重 cook
 `jolt_version_stamp` 已落后于当前 Jolt build 的 cache。
+
+## 服务端导航网格 + NPC 寻路
+
+`MvpSpace.OnSpaceInit` 还会用原始 `main.collision.json` 加 `main.nav.json`
+参数 sidecar 在内存里 bake 一张 navmesh（`CellServerEntity.LoadNavMesh`）。
+bake 成功后 NPC 漫游改用 `NavMoveTo`——路径会穿门洞、上台阶、绕掩体，
+而不是贴墙滑行。无 navmesh（如 `ATLAS_ENABLE_RECAST=OFF`）时 NPC 退回
+原来的直线漫游。
+
+命令行检查 navmesh 或某条具体路线：
+
+```bash
+bin\debug\atlas_tool.exe cook_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json
+bin\debug\atlas_tool.exe dump_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json --obj nav.obj
+bin\debug\atlas_tool.exe path_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json --from -30,0,-30 --to 0,2,16 --obj path.obj
+```
 
 ## UE 客户端（M2 — 双向 codegen + BP 暴露）
 
