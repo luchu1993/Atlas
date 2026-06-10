@@ -135,6 +135,9 @@ class INativeApiProvider {
                             int32_t len) = 0;
   virtual void RemoveSpaceData(uint32_t space_id, uint16_t key_id) = 0;
   virtual auto LoadCollisionAsset(uint32_t space_id, const char* path, int32_t len) -> bool = 0;
+  // Bakes the space navmesh from a collision asset + nav params sidecar.
+  virtual auto LoadNavMesh(uint32_t space_id, const char* collision_path, int32_t collision_len,
+                           const char* params_path, int32_t params_len) -> bool = 0;
 
   // Returns the entity's owning space id, or 0 if unknown. Cellapp-only;
   // base/login processes inherit the 0 default.

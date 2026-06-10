@@ -290,6 +290,24 @@ auto CellAppNativeProvider::LoadCollisionAsset(uint32_t space_id, const char* pa
   return load_collision_asset_fn_(space_id, std::string_view(path, static_cast<size_t>(len)));
 }
 
+auto CellAppNativeProvider::LoadNavMesh(uint32_t space_id, const char* collision_path,
+                                        int32_t collision_len, const char* params_path,
+                                        int32_t params_len) -> bool {
+  if (!IsValidNativeString(collision_path, collision_len) || collision_len == 0 ||
+      !IsValidNativeString(params_path, params_len) || params_len == 0) {
+    ATLAS_LOG_WARNING("CellApp: LoadNavMesh rejected invalid paths len={}/{}", collision_len,
+                      params_len);
+    return false;
+  }
+  if (!load_nav_mesh_fn_) {
+    ATLAS_LOG_ERROR("CellApp: LoadNavMesh: not wired to CellApp (space_id={})", space_id);
+    return false;
+  }
+  return load_nav_mesh_fn_(
+      space_id, std::string_view(collision_path, static_cast<size_t>(collision_len)),
+      std::string_view(params_path, static_cast<size_t>(params_len)));
+}
+
 auto CellAppNativeProvider::GetEntitySpaceId(uint32_t entity_id) -> uint32_t {
   auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
   if (!entity) return 0;

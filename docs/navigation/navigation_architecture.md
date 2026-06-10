@@ -80,13 +80,14 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 - **Space 集成**：`Space` 默认持 `NullNavQuery`；CellApp Init 注入
   `RecastNavBackendFactory`（`ATLAS_CELLAPP_HAS_RECAST`）并由 `MakeSpace` 继承；
   `Space::LoadNavMeshFromFiles(collision, params)` 在线内存 bake 后替换
-  `Space::NavQuery()`，无 backend 时拒绝而非静默留 Null。
+  `Space::NavQuery()`，无 backend 时拒绝而非静默留 Null。C# 脚本经
+  `CellServerEntity.LoadNavMesh(spaceId, collisionPath, paramsPath)` 走同一入口。
 
 ## 6. 非目标（v1 不做）
 
 v1 不做以下，留接口不留实现：
 
-- C# 脚本入口（native `LoadNavMesh`）、AI `MoveTo` 集成与 LOD 预算。
+- AI `MoveTo` 集成与 LOD 预算。
 - off-mesh 连接（跳台 / 落差 / 高地路线）：`NavParams` 不带 links，bake 纯地面。
 - tiled / chunk navmesh、`.navcache` 持久化、Watcher/Tracy 指标。
 - 动态障碍（`dtTileCache`）、多 agent 半径剖面。

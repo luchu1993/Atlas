@@ -70,6 +70,9 @@ struct MockProvider final : public INativeApiProvider {
   void SetSpaceData(uint32_t, uint16_t, const std::byte*, int32_t) override {}
   void RemoveSpaceData(uint32_t, uint16_t) override {}
   auto LoadCollisionAsset(uint32_t, const char*, int32_t) -> bool override { return false; }
+  auto LoadNavMesh(uint32_t, const char*, int32_t, const char*, int32_t) -> bool override {
+    return false;
+  }
   auto GetEntitySpaceId(uint32_t) -> uint32_t override { return 0; }
   void SetNativeCallbacks(const void*, int32_t) override {}
 

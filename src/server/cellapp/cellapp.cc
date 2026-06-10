@@ -176,6 +176,10 @@ auto CellApp::CreateNativeProvider() -> std::unique_ptr<INativeApiProvider> {
       [this](uint32_t sid, uint16_t kid) { RemoveSpaceData(sid, kid); });
   provider->SetLoadCollisionAssetFn(
       [this](uint32_t sid, std::string_view path) { return LoadCollisionAsset(sid, path); });
+  provider->SetLoadNavMeshFn(
+      [this](uint32_t sid, std::string_view collision, std::string_view params) {
+        return LoadNavMesh(sid, collision, params);
+      });
   provider->SetScriptTickFn([this](uint32_t eid, uint64_t elapsed_us) {
     RecordScriptTick(eid, elapsed_us);
   });

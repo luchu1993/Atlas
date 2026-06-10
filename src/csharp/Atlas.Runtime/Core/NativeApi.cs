@@ -234,6 +234,11 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasLoadCollisionAsset")]
     private static partial byte LoadCollisionAssetNative(uint spaceId, byte* path, int len);
 
+    [LibraryImport(LibName, EntryPoint = "AtlasLoadNavMesh")]
+    private static partial byte LoadNavMeshNative(uint spaceId, byte* collisionPath,
+                                                  int collisionLen, byte* paramsPath,
+                                                  int paramsLen);
+
     [LibraryImport(LibName, EntryPoint = "AtlasGetEntitySpaceId")]
     private static partial uint GetEntitySpaceIdNative(uint entityId);
 
@@ -290,6 +295,20 @@ internal static unsafe partial class NativeApi
         fixed (byte* p = bytes)
         {
             return LoadCollisionAssetNative(spaceId, p, bytes.Length) != 0;
+        }
+    }
+
+    public static bool LoadNavMesh(uint spaceId, string collisionPath, string paramsPath)
+    {
+        ThreadGuard.EnsureMainThread();
+        if (string.IsNullOrEmpty(collisionPath) || string.IsNullOrEmpty(paramsPath)) return false;
+        var collisionBytes = System.Text.Encoding.UTF8.GetBytes(collisionPath);
+        var paramsBytes = System.Text.Encoding.UTF8.GetBytes(paramsPath);
+        fixed (byte* cp = collisionBytes)
+        fixed (byte* pp = paramsBytes)
+        {
+            return LoadNavMeshNative(spaceId, cp, collisionBytes.Length, pp,
+                                     paramsBytes.Length) != 0;
         }
     }
 

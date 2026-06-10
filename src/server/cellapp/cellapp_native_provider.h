@@ -33,6 +33,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
                                             const std::byte* value, int32_t len)>;
   using RemoveSpaceDataFn = std::function<void(uint32_t space_id, uint16_t key_id)>;
   using LoadCollisionAssetFn = std::function<bool(uint32_t space_id, std::string_view path)>;
+  using LoadNavMeshFn = std::function<bool(uint32_t space_id, std::string_view collision_path,
+                                           std::string_view params_path)>;
   using ScriptTickFn = std::function<void(uint32_t entity_id, uint64_t elapsed_us)>;
   using MovementIntentFn = std::function<void(uint32_t entity_id, float dir_x, float dir_z,
                                               float speed_mps, uint16_t buttons)>;
@@ -60,6 +62,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   void SetLoadCollisionAssetFn(LoadCollisionAssetFn fn) {
     load_collision_asset_fn_ = std::move(fn);
   }
+  void SetLoadNavMeshFn(LoadNavMeshFn fn) { load_nav_mesh_fn_ = std::move(fn); }
   void SetScriptTickFn(ScriptTickFn fn) { script_tick_fn_ = std::move(fn); }
   void SetMovementIntentFn(MovementIntentFn fn) { movement_intent_fn_ = std::move(fn); }
   void SetMovementCommandFn(MovementCommandFn fn) {
@@ -97,6 +100,8 @@ class CellAppNativeProvider : public BaseNativeProvider {
                     int32_t len) override;
   void RemoveSpaceData(uint32_t space_id, uint16_t key_id) override;
   auto LoadCollisionAsset(uint32_t space_id, const char* path, int32_t len) -> bool override;
+  auto LoadNavMesh(uint32_t space_id, const char* collision_path, int32_t collision_len,
+                   const char* params_path, int32_t params_len) -> bool override;
 
   auto GetEntitySpaceId(uint32_t entity_id) -> uint32_t override;
 
@@ -167,6 +172,7 @@ class CellAppNativeProvider : public BaseNativeProvider {
   SetSpaceDataFn set_space_data_fn_;
   RemoveSpaceDataFn remove_space_data_fn_;
   LoadCollisionAssetFn load_collision_asset_fn_;
+  LoadNavMeshFn load_nav_mesh_fn_;
   ScriptTickFn script_tick_fn_;
   MovementIntentFn movement_intent_fn_;
   MovementCommandFn movement_command_fn_;

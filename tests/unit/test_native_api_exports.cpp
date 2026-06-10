@@ -125,6 +125,12 @@ TEST_F(AtlasEngineExports, LoadCollisionAssetExported) {
   EXPECT_NE(*sym, nullptr);
 }
 
+TEST_F(AtlasEngineExports, LoadNavMeshExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasLoadNavMesh");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
 TEST_F(AtlasEngineExports, RegisterEntityTypeExported) {
   auto sym = lib_->GetSymbol<void*>("AtlasRegisterEntityType");
   EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();

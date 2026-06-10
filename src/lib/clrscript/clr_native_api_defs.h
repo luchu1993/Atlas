@@ -128,6 +128,13 @@
         return atlas::GetNativeApiProvider().LoadCollisionAsset(space_id, path, len) \
             ? 1 \
             : 0) \
+    X(uint8_t, LoadNavMesh, \
+        (uint32_t space_id, const char* collision_path, int32_t collision_len, \
+         const char* params_path, int32_t params_len), \
+        return atlas::GetNativeApiProvider().LoadNavMesh(space_id, collision_path, \
+                                                         collision_len, params_path, params_len) \
+            ? 1 \
+            : 0) \
     X(uint32_t, GetEntitySpaceId, \
         (uint32_t entity_id), \
         return atlas::GetNativeApiProvider().GetEntitySpaceId(entity_id)) \

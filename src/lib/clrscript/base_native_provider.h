@@ -60,6 +60,8 @@ class BaseNativeProvider : public INativeApiProvider {
                     int32_t len) override;
   void RemoveSpaceData(uint32_t space_id, uint16_t key_id) override;
   auto LoadCollisionAsset(uint32_t space_id, const char* path, int32_t len) -> bool override;
+  auto LoadNavMesh(uint32_t space_id, const char* collision_path, int32_t collision_len,
+                   const char* params_path, int32_t params_len) -> bool override;
 
   auto GetEntitySpaceId(uint32_t entity_id) -> uint32_t override;
 

@@ -175,6 +175,39 @@ TEST_F(CellAppNativeProviderTest, LoadCollisionAssetRejectsInvalidPath) {
   EXPECT_FALSE(provider_.LoadCollisionAsset(7, "x", -1));
 }
 
+TEST_F(CellAppNativeProviderTest, LoadNavMeshRoutesValidPaths) {
+  uint32_t routed_space_id = 0;
+  std::string routed_collision;
+  std::string routed_params;
+  provider_.SetLoadNavMeshFn(
+      [&](uint32_t space_id, std::string_view collision, std::string_view params) {
+        routed_space_id = space_id;
+        routed_collision.assign(collision);
+        routed_params.assign(params);
+        return true;
+      });
+
+  const std::string collision = "maps/test.collision.json";
+  const std::string params = "maps/test.nav.json";
+
+  EXPECT_TRUE(provider_.LoadNavMesh(9, collision.data(), static_cast<int32_t>(collision.size()),
+                                    params.data(), static_cast<int32_t>(params.size())));
+
+  EXPECT_EQ(routed_space_id, 9u);
+  EXPECT_EQ(routed_collision, collision);
+  EXPECT_EQ(routed_params, params);
+}
+
+TEST_F(CellAppNativeProviderTest, LoadNavMeshRejectsInvalidPaths) {
+  provider_.SetLoadNavMeshFn([](uint32_t, std::string_view, std::string_view) { return true; });
+
+  EXPECT_FALSE(provider_.LoadNavMesh(9, nullptr, 1, "x", 1));
+  EXPECT_FALSE(provider_.LoadNavMesh(9, "x", 1, nullptr, 1));
+  EXPECT_FALSE(provider_.LoadNavMesh(9, "", 0, "x", 1));
+  EXPECT_FALSE(provider_.LoadNavMesh(9, "x", 1, "", 0));
+  EXPECT_FALSE(provider_.LoadNavMesh(9, "x", -1, "x", 1));
+}
+
 TEST_F(CellAppNativeProviderTest, SetMovementCurveRoutesValidCurve) {
   bool called = false;
   movement::MovementCurve routed;

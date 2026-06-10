@@ -137,6 +137,11 @@ public abstract class CellServerEntity : ServerEntity
         return NativeApi.LoadCollisionAsset(spaceId, path);
     }
 
+    public static bool LoadNavMesh(uint spaceId, string collisionPath, string paramsPath)
+    {
+        return NativeApi.LoadNavMesh(spaceId, collisionPath, paramsPath);
+    }
+
     public bool TryGetMovementHistorySample(uint serverTick, out MovementHistorySample sample)
     {
         if (NativeApi.TryGetMovementHistorySample(

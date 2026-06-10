@@ -159,6 +159,13 @@ auto BaseNativeProvider::LoadCollisionAsset(uint32_t space_id, const char* /*pat
   return false;
 }
 
+auto BaseNativeProvider::LoadNavMesh(uint32_t space_id, const char* /*collision_path*/,
+                                     int32_t /*collision_len*/, const char* /*params_path*/,
+                                     int32_t /*params_len*/) -> bool {
+  ATLAS_LOG_ERROR("load_nav_mesh() not supported on this process type (space_id={})", space_id);
+  return false;
+}
+
 auto BaseNativeProvider::GetEntitySpaceId(uint32_t /*entity_id*/) -> uint32_t { return 0; }
 
 void BaseNativeProvider::SetNativeCallbacks(const void* /*native_callbacks*/, int32_t /*len*/) {}
