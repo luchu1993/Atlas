@@ -12,6 +12,7 @@
 #include "foundation/log.h"
 #include "math/vector3.h"
 #include "movement_sim/movement_codec.h"
+#include "navigation/nav_query.h"
 #include "network/channel.h"
 #include "network/network_interface.h"
 #include "network/reliable_udp.h"
@@ -20,6 +21,7 @@
 #include "server/server_config.h"
 #include "space.h"
 #include "space/entity_range_list_node.h"
+#include "space/move_along_path_controller.h"
 #include "space/move_controller.h"
 #include "space/proximity_controller.h"
 #include "space/timer_controller.h"
@@ -557,6 +559,35 @@ auto CellAppNativeProvider::AddMoveController(uint32_t entity_id, float dest_x, 
   return static_cast<int32_t>(entity->GetControllers().Add(
       std::make_unique<MoveToPointController>(math::Vector3{dest_x, dest_y, dest_z}, speed,
                                               /*face_movement=*/false),
+      /*motion=*/entity, user_arg));
+}
+
+auto CellAppNativeProvider::AddNavMoveController(uint32_t entity_id, float dest_x, float dest_y,
+                                                 float dest_z, float speed, int32_t user_arg)
+    -> int32_t {
+  auto* entity = lookup_ ? lookup_(entity_id) : nullptr;
+  if (!entity) {
+    ATLAS_LOG_WARNING("atlas_add_nav_move_controller: unknown entity_id={}", entity_id);
+    return 0;
+  }
+  if (!entity->IsReal()) {
+    ATLAS_LOG_WARNING("atlas_add_nav_move_controller on Ghost entity_id={} - rejected", entity_id);
+    return 0;
+  }
+  const nav::NavQueryFilter filter;
+  auto path = entity->GetSpace().NavQuery().FindPath(
+      entity->Position(), math::Vector3{dest_x, dest_y, dest_z}, filter);
+  if (path.status == nav::NavPathStatus::kEmpty) {
+    ATLAS_LOG_WARNING(
+        "atlas_add_nav_move_controller: no path for entity {} to ({:.2f},{:.2f},{:.2f})",
+        entity_id, dest_x, dest_y, dest_z);
+    return 0;
+  }
+  // A partial path still moves the entity to the closest reachable point;
+  // scripts observe arrival via position, not via the returned status.
+  return static_cast<int32_t>(entity->GetControllers().Add(
+      std::make_unique<MoveAlongPathController>(std::move(path.waypoints), speed,
+                                                /*face_movement=*/true),
       /*motion=*/entity, user_arg));
 }
 

@@ -8,6 +8,9 @@
 #include "navigation_recast/recast_nav_backend.h"
 #include "platform/filesystem.h"
 #include "space.h"
+#include "space/controllers.h"
+#include "space/entity_motion.h"
+#include "space/move_along_path_controller.h"
 
 // End-to-end proof for the in-memory nav bake path: collision asset + nav
 // params sidecar on disk → Space::LoadNavMeshFromFiles through the Recast
@@ -80,6 +83,42 @@ TEST(NavPipeline, BakedSpaceAnswersFindPath) {
   EXPECT_TRUE(space.NavSourceHash().empty());
   EXPECT_EQ(space.NavQuery().FindPath({-8, 0, -8}, {8, 0, 8}, filter).status,
             nav::NavPathStatus::kEmpty);
+}
+
+// The MoveTo consumption pattern: plan on the space's navmesh, then walk the
+// returned waypoints with MoveAlongPathController.
+TEST(NavPipeline, NavPathDrivesMoveAlongPathController) {
+  const NavFixtureFiles files;
+  Space space(1);
+  space.SetNavBackendFactory(std::make_shared<nav::RecastNavBackendFactory>());
+  ASSERT_TRUE(space.LoadNavMeshFromFiles(files.collision, files.params).HasValue());
+
+  const nav::NavQueryFilter filter;
+  auto path = space.NavQuery().FindPath({-8, 0, -8}, {8, 0, 8}, filter);
+  ASSERT_EQ(path.status, nav::NavPathStatus::kReached);
+
+  class MotionStub final : public IEntityMotion {
+   public:
+    [[nodiscard]] auto Position() const -> const math::Vector3& override { return pos_; }
+    void SetPosition(const math::Vector3& p) override { pos_ = p; }
+    [[nodiscard]] auto Direction() const -> const math::Vector3& override { return dir_; }
+    void SetDirection(const math::Vector3& d) override { dir_ = d; }
+
+   private:
+    math::Vector3 pos_{-8, 0, -8};
+    math::Vector3 dir_{0, 0, 1};
+  } motion;
+
+  Controllers ctrls;
+  const auto id = ctrls.Add(
+      std::make_unique<MoveAlongPathController>(std::move(path.waypoints), /*speed=*/5.f,
+                                                /*face_movement=*/true),
+      &motion, 0);
+  for (int tick = 0; tick < 200 && ctrls.Contains(id); ++tick) ctrls.Update(0.033f);
+
+  EXPECT_FALSE(ctrls.Contains(id)) << "controller never finished";
+  EXPECT_NEAR(motion.Position().x, 8.f, 0.5f);
+  EXPECT_NEAR(motion.Position().z, 8.f, 0.5f);
 }
 
 TEST(NavPipeline, MissingParamsFileFails) {

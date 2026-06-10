@@ -15,6 +15,7 @@
 #include "math/vector3.h"
 #include "serialization/binary_stream.h"
 #include "space.h"
+#include "space/move_along_path_controller.h"
 #include "space/move_controller.h"
 #include "space/proximity_controller.h"
 #include "space/timer_controller.h"
@@ -73,6 +74,37 @@ TEST(ControllerCodec, MoveToPoint_RoundTripPreservesFields) {
   // 10 m/s for 1s → 10m toward (50, 0, 50). Direction vector normalised.
   EXPECT_GT(dst->Position().x, 0.f);
   EXPECT_GT(dst->Position().z, 0.f);
+}
+
+// ============================================================================
+// MoveAlongPathController preserves remaining waypoints mid-walk.
+// ============================================================================
+
+TEST(ControllerCodec, MoveAlongPath_RoundTripResumesMidPath) {
+  Space src_space(1);
+  Space dst_space(1);
+  auto* src = MakeReal(src_space, 1, {0, 0, 0});
+  auto* dst = MakeReal(dst_space, 1, {0, 0, 0});
+
+  std::vector<math::Vector3> path = {{0, 0, 0}, {10, 0, 0}, {10, 0, 10}};
+  const auto id = src->GetControllers().Add(
+      std::make_unique<MoveAlongPathController>(path, /*speed=*/10.f, /*face_movement=*/true),
+      /*motion=*/src, /*user_arg=*/7);
+  src->GetControllers().Update(1.2f);  // past waypoint 1, 2m into the +z leg
+
+  BinaryWriter w;
+  SerializeControllersForMigration(*src, w);
+  auto blob = w.Detach();
+  BinaryReader r{std::span<const std::byte>(blob)};
+  ASSERT_TRUE(DeserializeControllersForMigration(*dst, r, [](uint32_t) { return nullptr; }));
+
+  ASSERT_EQ(dst->GetControllers().Count(), 1u);
+  EXPECT_TRUE(dst->GetControllers().Contains(id));
+  // Restored controller resumes toward (10,0,10) — not back toward waypoint 1.
+  dst->SetPosition(src->Position());
+  dst->GetControllers().Update(0.5f);
+  EXPECT_NEAR(dst->Position().x, 10.f, 1e-3f);
+  EXPECT_NEAR(dst->Position().z, 7.f, 1e-3f);
 }
 
 // ============================================================================

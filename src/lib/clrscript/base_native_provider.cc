@@ -265,6 +265,15 @@ auto BaseNativeProvider::AddMoveController(uint32_t entity_id, float /*dx*/, flo
   return 0;
 }
 
+auto BaseNativeProvider::AddNavMoveController(uint32_t entity_id, float /*dx*/, float /*dy*/,
+                                              float /*dz*/, float /*speed*/, int32_t /*user_arg*/)
+    -> int32_t {
+  ATLAS_LOG_ERROR(
+      "atlas_add_nav_move_controller() not supported on this process type (entity_id={})",
+      entity_id);
+  return 0;
+}
+
 auto BaseNativeProvider::AddTimerController(uint32_t entity_id, float /*interval*/, bool /*repeat*/,
                                             int32_t /*user_arg*/) -> int32_t {
   ATLAS_LOG_ERROR("atlas_add_timer_controller() not supported on this process type (entity_id={})",

@@ -15,6 +15,7 @@ enum class ControllerKind : uint8_t {
   kMoveToPoint = 1,
   kTimer = 2,
   kProximity = 3,
+  kMoveAlongPath = 4,
 };
 
 class Controller {

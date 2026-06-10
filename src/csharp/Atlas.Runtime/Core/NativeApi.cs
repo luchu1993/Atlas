@@ -242,6 +242,10 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasGetEntitySpaceId")]
     private static partial uint GetEntitySpaceIdNative(uint entityId);
 
+    [LibraryImport(LibName, EntryPoint = "AtlasAddNavMoveController")]
+    private static partial int AddNavMoveControllerNative(uint entityId, float destX, float destY,
+                                                          float destZ, float speed, int userArg);
+
     [LibraryImport(LibName, EntryPoint = "AtlasAddTimerController")]
     private static partial int AddTimerControllerNative(uint entityId, float interval,
                                                         [MarshalAs(UnmanagedType.U1)] bool repeat,
@@ -249,6 +253,17 @@ internal static unsafe partial class NativeApi
 
     [LibraryImport(LibName, EntryPoint = "AtlasCancelController")]
     private static partial void CancelControllerNative(uint entityId, int controllerId);
+
+    // Plans a navmesh path on the entity's space and walks it; the controller
+    // state (remaining waypoints) migrates with the entity on offload.
+    // Returns 0 when the entity is unknown or no path exists.
+    public static int AddNavMoveController(uint entityId, Vector3 destination, float speed,
+                                           int userArg)
+    {
+        ThreadGuard.EnsureMainThread();
+        return AddNavMoveControllerNative(entityId, destination.X, destination.Y, destination.Z,
+                                          speed, userArg);
+    }
 
     // Per-entity timer; state migrates with the entity on offload.
     // Returns 0 on failure.

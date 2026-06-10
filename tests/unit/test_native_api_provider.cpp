@@ -101,6 +101,9 @@ struct MockProvider final : public INativeApiProvider {
   auto AddMoveController(uint32_t, float, float, float, float, int32_t) -> int32_t override {
     return 0;
   }
+  auto AddNavMoveController(uint32_t, float, float, float, float, int32_t) -> int32_t override {
+    return 0;
+  }
   auto AddTimerController(uint32_t, float, bool, int32_t) -> int32_t override { return 0; }
   auto AddProximityController(uint32_t, float, int32_t) -> int32_t override { return 0; }
   void CancelController(uint32_t, int32_t) override {}

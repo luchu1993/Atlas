@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <memory>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "cell_entity.h"
 #include "foundation/log.h"
@@ -11,6 +13,7 @@
 #include "space/controller.h"
 #include "space/controllers.h"
 #include "space/entity_range_list_node.h"
+#include "space/move_along_path_controller.h"
 #include "space/move_controller.h"
 #include "space/proximity_controller.h"
 #include "space/range_list.h"
@@ -54,6 +57,19 @@ void EncodeMoveToPoint(const MoveToPointController& c, BinaryWriter& w) {
   WriteU8(w, c.FaceMovement() ? 1 : 0);
 }
 
+void EncodeMoveAlongPath(const MoveAlongPathController& c, BinaryWriter& w) {
+  const auto& waypoints = c.Waypoints();
+  w.WritePackedInt(static_cast<uint32_t>(waypoints.size()));
+  for (const auto& p : waypoints) {
+    WriteF32(w, p.x);
+    WriteF32(w, p.y);
+    WriteF32(w, p.z);
+  }
+  WriteF32(w, c.Speed());
+  WriteU8(w, c.FaceMovement() ? 1 : 0);
+  WriteU32(w, static_cast<uint32_t>(c.NextIndex()));
+}
+
 void EncodeTimer(const TimerController& c, BinaryWriter& w) {
   WriteF32(w, c.Interval());
   WriteU8(w, c.Repeat() ? 1 : 0);
@@ -88,6 +104,25 @@ auto DecodeMoveToPoint(BinaryReader& r) -> std::unique_ptr<Controller> {
   auto fm = ReadU8(r);
   if (!dx || !dy || !dz || !spd || !fm) return nullptr;
   return std::make_unique<MoveToPointController>(math::Vector3{*dx, *dy, *dz}, *spd, *fm != 0);
+}
+
+auto DecodeMoveAlongPath(BinaryReader& r) -> std::unique_ptr<Controller> {
+  auto count = r.ReadPackedInt();
+  if (!count) return nullptr;
+  std::vector<math::Vector3> waypoints;
+  waypoints.reserve(*count);
+  for (uint32_t i = 0; i < *count; ++i) {
+    auto x = ReadF32(r);
+    auto y = ReadF32(r);
+    auto z = ReadF32(r);
+    if (!x || !y || !z) return nullptr;
+    waypoints.push_back({*x, *y, *z});
+  }
+  auto spd = ReadF32(r);
+  auto fm = ReadU8(r);
+  auto next = ReadU32(r);
+  if (!spd || !fm || !next) return nullptr;
+  return std::make_unique<MoveAlongPathController>(std::move(waypoints), *spd, *fm != 0, *next);
 }
 
 auto DecodeTimer(BinaryReader& r) -> std::unique_ptr<Controller> {
@@ -131,6 +166,9 @@ void SerializeControllersForMigration(const CellEntity& entity, BinaryWriter& w)
       case ControllerKind::kMoveToPoint:
         EncodeMoveToPoint(static_cast<const MoveToPointController&>(c), w);
         break;
+      case ControllerKind::kMoveAlongPath:
+        EncodeMoveAlongPath(static_cast<const MoveAlongPathController&>(c), w);
+        break;
       case ControllerKind::kTimer:
         EncodeTimer(static_cast<const TimerController&>(c), w);
         break;
@@ -161,6 +199,9 @@ auto DeserializeControllersForMigration(CellEntity& entity, BinaryReader& r,
     switch (kind) {
       case ControllerKind::kMoveToPoint:
         ctrl = DecodeMoveToPoint(r);
+        break;
+      case ControllerKind::kMoveAlongPath:
+        ctrl = DecodeMoveAlongPath(r);
         break;
       case ControllerKind::kTimer:
         ctrl = DecodeTimer(r);
@@ -199,8 +240,11 @@ auto DeserializeControllersForMigration(CellEntity& entity, BinaryReader& r,
       return false;
     }
 
-    // Only MoveToPoint needs the motion surface (matches CellAppNativeProvider).
-    IEntityMotion* motion = (kind == ControllerKind::kMoveToPoint) ? &entity : nullptr;
+    // Only the movement kinds need the motion surface (matches CellAppNativeProvider).
+    IEntityMotion* motion = (kind == ControllerKind::kMoveToPoint ||
+                             kind == ControllerKind::kMoveAlongPath)
+                                ? &entity
+                                : nullptr;
     const auto assigned = controllers.AddWithPreservedId(std::move(ctrl), motion, *user_arg, *id);
     if (assigned == 0) {
       ATLAS_LOG_WARNING("ControllerCodec: preserved id {} already in use — skipping", *id);

@@ -90,6 +90,8 @@ class BaseNativeProvider : public INativeApiProvider {
                                const std::byte* other_delta, int32_t other_delta_len) override;
   auto AddMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z, float speed,
                          int32_t user_arg) -> int32_t override;
+  auto AddNavMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z,
+                            float speed, int32_t user_arg) -> int32_t override;
   auto AddTimerController(uint32_t entity_id, float interval, bool repeat, int32_t user_arg)
       -> int32_t override;
   auto AddProximityController(uint32_t entity_id, float range, int32_t user_arg)

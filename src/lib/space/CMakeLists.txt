@@ -4,6 +4,7 @@ add_library(atlas_space STATIC
   range_list.cc
   range_trigger.cc
   controllers.cc
+  move_along_path_controller.cc
   move_controller.cc
   timer_controller.cc
   proximity_controller.cc

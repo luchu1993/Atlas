@@ -179,6 +179,9 @@ class INativeApiProvider {
   // Returned controller_id is opaque; pass back to CancelController.
   virtual auto AddMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z,
                                  float speed, int32_t user_arg) -> int32_t = 0;
+  // Plans a navmesh path on the entity's space and walks it; 0 when no path.
+  virtual auto AddNavMoveController(uint32_t entity_id, float dest_x, float dest_y, float dest_z,
+                                    float speed, int32_t user_arg) -> int32_t = 0;
   virtual auto AddTimerController(uint32_t entity_id, float interval, bool repeat, int32_t user_arg)
       -> int32_t = 0;
   virtual auto AddProximityController(uint32_t entity_id, float range, int32_t user_arg)

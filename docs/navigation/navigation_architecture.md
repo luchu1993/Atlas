@@ -82,12 +82,17 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
   `Space::LoadNavMeshFromFiles(collision, params)` 在线内存 bake 后替换
   `Space::NavQuery()`，无 backend 时拒绝而非静默留 Null。C# 脚本经
   `CellServerEntity.LoadNavMesh(spaceId, collisionPath, paramsPath)` 走同一入口。
+- **MoveTo**：`AddNavMoveController` 在入口处用 `Space::NavQuery()` 规划一次，
+  把路点交给 `MoveAlongPathController` 沿线走——controller 不持 NavQuery 指针
+  （navmesh 重载不悬挂），路点随 offload 迁移序列化；部分路径走到最近可达点，
+  到达由脚本按位置判断。C# 入口 `CellServerEntity.NavMoveTo(destination, speed)`。
 
 ## 6. 非目标（v1 不做）
 
 v1 不做以下，留接口不留实现：
 
-- AI `MoveTo` 集成与 LOD 预算。
+- 寻路 LOD / tick 预算、路径缓存与切片 A*（v1 的 MoveTo 在入口同步规划一次）。
+- 动态重规划（目标移动 / 撞墙后自动重路由）：v1 由脚本重新发起 MoveTo。
 - off-mesh 连接（跳台 / 落差 / 高地路线）：`NavParams` 不带 links，bake 纯地面。
 - tiled / chunk navmesh、`.navcache` 持久化、Watcher/Tracy 指标。
 - 动态障碍（`dtTileCache`）、多 agent 半径剖面。

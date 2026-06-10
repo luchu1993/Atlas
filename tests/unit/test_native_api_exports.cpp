@@ -131,6 +131,12 @@ TEST_F(AtlasEngineExports, LoadNavMeshExported) {
   EXPECT_NE(*sym, nullptr);
 }
 
+TEST_F(AtlasEngineExports, AddNavMoveControllerExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasAddNavMoveController");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
 TEST_F(AtlasEngineExports, RegisterEntityTypeExported) {
   auto sym = lib_->GetSymbol<void*>("AtlasRegisterEntityType");
   EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();

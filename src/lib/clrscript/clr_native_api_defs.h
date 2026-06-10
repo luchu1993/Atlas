@@ -229,6 +229,11 @@
          float speed, int32_t user_arg), \
         return atlas::GetNativeApiProvider().AddMoveController( \
             entity_id, dest_x, dest_y, dest_z, speed, user_arg)) \
+    X(int32_t, AddNavMoveController, \
+        (uint32_t entity_id, float dest_x, float dest_y, float dest_z, \
+         float speed, int32_t user_arg), \
+        return atlas::GetNativeApiProvider().AddNavMoveController( \
+            entity_id, dest_x, dest_y, dest_z, speed, user_arg)) \
     X(int32_t, AddTimerController, \
         (uint32_t entity_id, float interval, uint8_t repeat, int32_t user_arg), \
         return atlas::GetNativeApiProvider().AddTimerController( \

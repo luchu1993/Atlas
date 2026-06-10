@@ -6,12 +6,14 @@
 
 #include <cmath>
 #include <memory>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "math/vector3.h"
 #include "space/controllers.h"
 #include "space/entity_motion.h"
+#include "space/move_along_path_controller.h"
 #include "space/move_controller.h"
 #include "space/timer_controller.h"
 
@@ -43,6 +45,58 @@ class MotionStub : public IEntityMotion {
   math::Vector3 pos_;
   math::Vector3 dir_;
 };
+
+// ============================================================================
+// MoveAlongPathController
+// ============================================================================
+
+TEST(MoveAlongPath, WalksThroughWaypointsAndFinishes) {
+  MotionStub motion({0, 0, 0});
+  Controllers ctrls;
+  std::vector<math::Vector3> path = {{0, 0, 0}, {10, 0, 0}, {10, 0, 10}};
+  auto id = ctrls.Add(
+      std::make_unique<MoveAlongPathController>(path, /*speed=*/10.f, /*face_movement=*/true),
+      &motion, 0);
+
+  ctrls.Update(0.5f);  // 5m along +x
+  EXPECT_NEAR(motion.Position().x, 5.f, 1e-3f);
+  EXPECT_NEAR(motion.Position().z, 0.f, 1e-3f);
+  EXPECT_NEAR(motion.Direction().x, 1.f, 1e-3f);
+
+  ctrls.Update(1.0f);  // reaches (10,0,0), continues 5m along +z
+  EXPECT_NEAR(motion.Position().x, 10.f, 1e-3f);
+  EXPECT_NEAR(motion.Position().z, 5.f, 1e-3f);
+  EXPECT_NEAR(motion.Direction().z, 1.f, 1e-3f);
+
+  ctrls.Update(1.0f);  // arrives + finishes (compacted out)
+  EXPECT_NEAR(motion.Position().z, 10.f, 1e-3f);
+  EXPECT_FALSE(ctrls.Contains(id));
+}
+
+TEST(MoveAlongPath, LongTickConsumesSeveralSegments) {
+  MotionStub motion({0, 0, 0});
+  Controllers ctrls;
+  std::vector<math::Vector3> path = {{0, 0, 0}, {1, 0, 0}, {2, 0, 0}, {3, 0, 0}, {3, 0, 7}};
+  ctrls.Add(
+      std::make_unique<MoveAlongPathController>(path, /*speed=*/10.f, /*face_movement=*/false),
+      &motion, 0);
+
+  ctrls.Update(0.5f);  // 5m budget: 3 segments of 1m + 2m into the last leg
+  EXPECT_NEAR(motion.Position().x, 3.f, 1e-3f);
+  EXPECT_NEAR(motion.Position().z, 2.f, 1e-3f);
+}
+
+TEST(MoveAlongPath, EmptyPathFinishesImmediately) {
+  MotionStub motion({4, 0, 4});
+  Controllers ctrls;
+  auto id = ctrls.Add(
+      std::make_unique<MoveAlongPathController>(std::vector<math::Vector3>{}, /*speed=*/10.f,
+                                                /*face_movement=*/false),
+      &motion, 0);
+  ctrls.Update(0.1f);
+  EXPECT_FALSE(ctrls.Contains(id));
+  EXPECT_NEAR(motion.Position().x, 4.f, 1e-3f);
+}
 
 // ============================================================================
 // MoveToPointController

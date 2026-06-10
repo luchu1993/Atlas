@@ -142,6 +142,14 @@ public abstract class CellServerEntity : ServerEntity
         return NativeApi.LoadNavMesh(spaceId, collisionPath, paramsPath);
     }
 
+    /// <summary>Walks this entity along a navmesh path to destination.
+    /// Returns a controller id for CancelController; 0 when no path.</summary>
+    public int NavMoveTo(Vector3 destination, float speed, int userArg = 0)
+    {
+        if (IsDestroyed || IsGhost) return 0;
+        return NativeApi.AddNavMoveController(EntityId, destination, speed, userArg);
+    }
+
     public bool TryGetMovementHistorySample(uint serverTick, out MovementHistorySample sample)
     {
         if (NativeApi.TryGetMovementHistorySample(
