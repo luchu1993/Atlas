@@ -72,9 +72,8 @@ namespace Atlas.Mvp.Editor
             SeedWhitebox(root);
         }
 
-        // OW-style PVP whitebox: perimeter wall with four doorways, a central
-        // high ground with stair ramps, symmetric covers, and offset flank
-        // corridors. Mirrors the box list in samples/mvp/maps/main.collision.json.
+        // OW-style PVP whitebox (perimeter wall + doorways, high ground + stairs,
+        // covers, flank corridors); mirrors samples/mvp/maps/main.collision.json.
         static void SeedWhitebox(GameObject root)
         {
             var boxes = new (string Name, Vector3 Center, Vector3 Size)[]

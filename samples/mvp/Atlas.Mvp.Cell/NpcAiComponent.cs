@@ -13,8 +13,8 @@ public sealed class NpcAiComponent : ServerLocalComponent
     private const float kSpeed = 3.0f;
     private const float kReach = 0.5f;
     private const float kRetargetInterval = 4.0f;
-    // Nav walks run to completion; the timeout only reaps paths the controller
-    // could not finish (blocked goal). Longest detour ~40 m at 3 m/s ≈ 13 s.
+    // Reaps nav walks the controller could not finish (blocked goal);
+    // the longest legitimate detour is ~40 m at 3 m/s ≈ 13 s.
     private const float kNavRetargetTimeout = 15.0f;
     private const float kWanderRadius = 20.0f;
     private const float kWorldHalf = 100.0f;
@@ -23,27 +23,22 @@ public sealed class NpcAiComponent : ServerLocalComponent
     private const float kProjectileHorizSpeed = 12f;
     private const float kProjectileUpSpeed = 4f;
 
-    // Target / retarget timer / fire interval live on Npc as cell_private
-    // properties so cross-cellapp offload preserves them via persistent_blob.
-    // _fireAccum stays local — drift on offload is at most one fire cycle.
-    // _navWalking is local too: the controller itself migrates with the entity,
-    // and arrival/timeout (position vs AiTarget) re-derives the next walk.
+    // Wander state lives on Npc as cell_private properties so offload preserves
+    // it; these locals re-derive (the walk controller itself migrates natively).
     private float _fireAccum;
     private bool _navWalking;
+    private bool _navFailedThisLeg;
     private Random _rng = null!;
 
     public override void OnAttached()
     {
-        // RNG state is intentionally not carried across offload; reseed
-        // each attach. Initial AiTarget / AiFireInterval are seeded by
-        // Npc.OnInit on fresh spawn; offload-arrived NPCs already have
-        // both values restored from persistent_blob.
+        // RNG reseeds on every attach; AiTarget / AiFireInterval come from
+        // Npc.OnInit on fresh spawn or from persistent_blob after offload.
         _rng = new Random();
     }
 
-    // Invoked by Npc.OnInit on fresh spawn only. Direction-biased target
-    // keeps boundary-spawned NPCs walking forward instead of bouncing
-    // back across the BSP split.
+    // Fresh-spawn only: a direction-biased first target keeps boundary-spawned
+    // NPCs walking forward instead of bouncing back across the BSP split.
     internal void InitFreshState()
     {
         var dir = Owner.Direction;
@@ -84,13 +79,14 @@ public sealed class NpcAiComponent : ServerLocalComponent
             return;  // the migrating MoveAlongPath controller owns the walk
         }
 
-        var retargetDue = _navWalking
-            ? arrived || Owner.AiRetargetAccum >= kNavRetargetTimeout
-            : Owner.AiRetargetAccum >= kRetargetInterval || arrived;
+        // A nav leg only reaches here ended (arrived or timed out), so it always
+        // retargets; intent mode keeps the original cadence.
+        var retargetDue = _navWalking || arrived || Owner.AiRetargetAccum >= kRetargetInterval;
         _navWalking = false;
         if (retargetDue)
         {
             Owner.AiRetargetAccum = 0f;
+            _navFailedThisLeg = false;
             PickTarget(pos);
             target = Owner.AiTarget;
             dx = target.X - pos.X;
@@ -103,12 +99,16 @@ public sealed class NpcAiComponent : ServerLocalComponent
             }
         }
 
-        if (Owner.NavMoveTo(target, kSpeed) != 0)
+        if (!_navFailedThisLeg)
         {
-            _navWalking = true;
-            Owner.SetMovementIntent(Vector3.Zero, 0f);  // hand the walk to the controller
-            TickFire(dx, dz, distSq);
-            return;
+            if (Owner.NavMoveTo(target, kSpeed) != 0)
+            {
+                _navWalking = true;
+                Owner.SetMovementIntent(Vector3.Zero, 0f);  // hand the walk to the controller
+                TickFire(dx, dz, distSq);
+                return;
+            }
+            _navFailedThisLeg = true;  // one failed plan per leg, not one per tick
         }
 
         // No navmesh (or off-mesh target): straight-line wander as before.

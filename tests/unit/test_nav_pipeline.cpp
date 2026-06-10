@@ -12,9 +12,8 @@
 #include "space/entity_motion.h"
 #include "space/move_along_path_controller.h"
 
-// End-to-end proof for the in-memory nav bake path: collision asset + nav
-// params sidecar on disk → Space::LoadNavMeshFromFiles through the Recast
-// backend factory → Space::NavQuery() answers FindPath.
+// End-to-end: collision asset + nav params on disk → Space::LoadNavMeshFromFiles
+// through the Recast backend factory → Space::NavQuery() answers FindPath.
 namespace atlas {
 namespace {
 

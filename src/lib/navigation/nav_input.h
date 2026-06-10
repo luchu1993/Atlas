@@ -42,9 +42,8 @@ struct NavDeriveResult {
   NavDeriveStats stats;
 };
 
-// Tessellate + filter a collision asset into Recast input under the params'
-// layer roles, bounds, and override volumes. v1 supports box / mesh /
-// heightfield; convex / sphere / capsule / plane are skipped with a warning.
+// Tessellates a collision asset into Recast input under the params' layer
+// roles and overrides; v1 skips convex / sphere / capsule / plane with a warning.
 [[nodiscard]] auto DeriveNavInput(const physics::CollisionAsset& asset, const NavParams& params)
     -> NavDeriveResult;
 

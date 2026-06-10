@@ -10,9 +10,8 @@
 
 namespace atlas {
 
-// Walks a pre-planned polyline (e.g. a navmesh path). Planning happens at the
-// call site, so this stays valid across a Space navmesh reload and its state
-// serializes for offload migration.
+// Walks a pre-planned polyline (e.g. a navmesh path). Planning stays at the
+// call site, so navmesh reloads can't dangle and the state migrates on offload.
 class MoveAlongPathController final : public Controller {
  public:
   MoveAlongPathController(std::vector<math::Vector3> waypoints, float speed, bool face_movement,

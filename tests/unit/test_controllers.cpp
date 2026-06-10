@@ -70,6 +70,7 @@ TEST(MoveAlongPath, WalksThroughWaypointsAndFinishes) {
 
   ctrls.Update(1.0f);  // arrives + finishes (compacted out)
   EXPECT_NEAR(motion.Position().z, 10.f, 1e-3f);
+  EXPECT_NEAR(motion.Direction().z, 1.f, 1e-3f);  // faces the final leg
   EXPECT_FALSE(ctrls.Contains(id));
 }
 

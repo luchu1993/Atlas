@@ -10,9 +10,8 @@
 
 namespace atlas::nav {
 
-// Bakes derived input into a runtime NavQuery. The concrete implementation
-// lives in the backend library (navigation_recast); the server injects it so
-// gameplay layers never include Recast/Detour headers.
+// Bakes derived input into a runtime NavQuery. Implemented in the backend
+// library (navigation_recast) and injected, so gameplay never sees Recast.
 class NavBackendFactory {
  public:
   virtual ~NavBackendFactory() = default;

@@ -29,9 +29,8 @@ struct NavDebugMesh {
   RecastBakeReport report;
 };
 
-// Runs the Recast solo-mesh pipeline and serializes a single Detour tile.
-// Fails with a clear error when the bake yields zero polygons (the usual sign
-// of inverted winding, bad bounds, or too-steep geometry).
+// Recast solo-mesh pipeline → one serialized Detour tile. Zero polygons is a
+// hard error (the usual sign of inverted winding, bad bounds, or steep geometry).
 [[nodiscard]] auto BuildNavMeshData(const NavInputGeometry& input, const NavBakeParams& params)
     -> Result<BakedNavMeshData>;
 

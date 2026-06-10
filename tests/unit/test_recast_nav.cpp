@@ -62,6 +62,43 @@ TEST(RecastNav, DebugMeshReportsWalkableArea) {
   EXPECT_GT(mesh->report.walkable_area_m2, 100.0f);  // 20x20 floor minus radius erosion
 }
 
+TEST(RecastNav, RaycastClearsOpenGroundAndBlocksAtEdge) {
+  const auto params = FloorParams();
+  const auto input = DeriveNavInput(FloorAsset(), params);
+  const RecastNavBackendFactory backend;
+  auto query = backend.Bake(input.geometry, params.bake);
+  ASSERT_TRUE(query.HasValue()) << query.Error().Message();
+
+  const NavQueryFilter filter;
+  const auto open = (*query)->Raycast({0, 0, 0}, {3, 0, 3}, filter);
+  EXPECT_FALSE(open.blocked);
+
+  // Toward x=50: the walkable surface ends near x=10 (minus radius erosion).
+  const auto edge = (*query)->Raycast({0, 0, 0}, {50, 0, 0}, filter);
+  EXPECT_TRUE(edge.blocked);
+  EXPECT_LT(edge.t, 1.0f);
+  EXPECT_GT(edge.position.x, 7.0f);
+  EXPECT_LT(edge.position.x, 10.5f);
+}
+
+TEST(RecastNav, DisconnectedGoalYieldsPartialPath) {
+  const auto params = FloorParams();
+  physics::CollisionAsset asset;
+  asset.boxes.push_back(physics::StaticBox{{-10, -1, -10}, {0, 0, 10}, 0});
+  asset.boxes.push_back(physics::StaticBox{{6, -1, -10}, {16, 0, 10}, 0});  // 6 m gap
+  const auto input = DeriveNavInput(asset, params);
+  const RecastNavBackendFactory backend;
+  auto query = backend.Bake(input.geometry, params.bake);
+  ASSERT_TRUE(query.HasValue()) << query.Error().Message();
+
+  const NavQueryFilter filter;
+  const auto path = (*query)->FindPath({-5, 0, 0}, {12, 0, 0}, filter);
+  EXPECT_EQ(path.status, NavPathStatus::kPartial);
+  ASSERT_FALSE(path.waypoints.empty());
+  // Walks to the closest reachable point on the start island, never across the gap.
+  EXPECT_LT(path.waypoints.back().x, 0.5f);
+}
+
 TEST(RecastNav, EmptyInputFailsToBake) {
   const auto params = FloorParams();
   physics::CollisionAsset asset;

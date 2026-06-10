@@ -11,9 +11,8 @@
 
 namespace atlas::nav {
 
-// Recast/Detour implementation of the nav backend: bakes a single-tile navmesh
-// and returns a DetourNavQuery. The only type the server links against here is
-// this factory; Recast/Detour stay inside this library.
+// Recast/Detour nav backend: bakes a single-tile navmesh into a DetourNavQuery.
+// The server links only this factory; Recast/Detour types stay inside this library.
 class RecastNavBackendFactory final : public NavBackendFactory {
  public:
   [[nodiscard]] auto Bake(const NavInputGeometry& input, const NavBakeParams& params) const

@@ -254,9 +254,8 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasCancelController")]
     private static partial void CancelControllerNative(uint entityId, int controllerId);
 
-    // Plans a navmesh path on the entity's space and walks it; the controller
-    // state (remaining waypoints) migrates with the entity on offload.
-    // Returns 0 when the entity is unknown or no path exists.
+    // Plans a navmesh path on the entity's space and walks it (state migrates
+    // on offload). Returns 0 when the entity is unknown or no path exists.
     public static int AddNavMoveController(uint entityId, Vector3 destination, float speed,
                                            int userArg)
     {
