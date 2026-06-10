@@ -287,6 +287,21 @@ TEST(Controllers, FinishedControllerReapedAtTickEnd) {
   EXPECT_EQ(ctrls.Count(), 0u);
 }
 
+TEST(Controllers, CancelByKindRemovesOnlyMatchingControllers) {
+  Controllers ctrls;
+  MotionStub a;
+  MotionStub b;
+  const std::vector<math::Vector3> path = {{0, 0, 0}, {5, 0, 0}};
+  const auto nav1 = ctrls.Add(std::make_unique<MoveAlongPathController>(path, 5.f, false), &a, 0);
+  const auto nav2 = ctrls.Add(std::make_unique<MoveAlongPathController>(path, 5.f, false), &b, 0);
+  const auto timer = ctrls.Add(std::make_unique<TimerController>(10.f, true), nullptr, 0);
+
+  EXPECT_EQ(ctrls.CancelByKind(ControllerKind::kMoveAlongPath), 2u);
+  EXPECT_FALSE(ctrls.Contains(nav1));
+  EXPECT_FALSE(ctrls.Contains(nav2));
+  EXPECT_TRUE(ctrls.Contains(timer));  // a different kind survives
+}
+
 TEST(Controllers, StopAllDrainsEverything) {
   Controllers ctrls;
   ctrls.Add(std::make_unique<TimerController>(10.f, true), nullptr, 0);

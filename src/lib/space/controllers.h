@@ -25,6 +25,10 @@ class Controllers {
   // Cancel during Update() defers destruction until Compact().
   auto Cancel(ControllerID id) -> bool;
 
+  // Cancels every controller of the given kind; lets a MoveTo supersede an
+  // in-flight nav walk instead of stacking a second one. Returns the count.
+  auto CancelByKind(ControllerKind kind) -> std::size_t;
+
   void Update(float dt);
 
   void StopAll();

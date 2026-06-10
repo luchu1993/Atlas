@@ -574,6 +574,11 @@ auto CellAppNativeProvider::AddNavMoveController(uint32_t entity_id, float dest_
     ATLAS_LOG_WARNING("atlas_add_nav_move_controller on Ghost entity_id={} - rejected", entity_id);
     return 0;
   }
+  if (speed <= 0.0f) {
+    ATLAS_LOG_WARNING("atlas_add_nav_move_controller: non-positive speed {} for entity {}", speed,
+                      entity_id);
+    return 0;
+  }
   const nav::NavQueryFilter filter;
   auto path = entity->GetSpace().NavQuery().FindPath(
       entity->Position(), math::Vector3{dest_x, dest_y, dest_z}, filter);
@@ -584,8 +589,9 @@ auto CellAppNativeProvider::AddNavMoveController(uint32_t entity_id, float dest_
         entity_id, dest_x, dest_y, dest_z);
     return 0;
   }
-  // A partial path still moves the entity to the closest reachable point;
-  // scripts observe arrival via position, not via the returned status.
+  // MoveTo supersedes any in-flight nav walk, so a retarget or offload-restored
+  // walk never stacks a second controller (partial paths walk to the closest point).
+  entity->GetControllers().CancelByKind(ControllerKind::kMoveAlongPath);
   return static_cast<int32_t>(entity->GetControllers().Add(
       std::make_unique<MoveAlongPathController>(std::move(path.waypoints), speed,
                                                 /*face_movement=*/true),

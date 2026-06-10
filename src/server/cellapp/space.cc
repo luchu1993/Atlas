@@ -4,6 +4,7 @@
 
 #include "cell.h"
 #include "cell_entity.h"
+#include "foundation/log.h"
 #include "foundation/profiler.h"
 #include "navigation/nav_backend.h"
 #include "navigation/nav_input.h"
@@ -168,6 +169,9 @@ auto Space::LoadNavMeshFromFiles(const std::filesystem::path& collision_path,
   auto params = nav::LoadNavParamsFromFile(params_path);
   if (!params) return params.Error();
   auto derived = nav::DeriveNavInput(*asset, *params);
+  for (const auto& warning : derived.stats.warnings) {
+    ATLAS_LOG_WARNING("Space {}: nav derive: {}", id_, warning);
+  }
   auto query = nav_backend_factory_->Bake(derived.geometry, params->bake);
   if (!query) return query.Error();
   nav_query_ = std::move(*query);

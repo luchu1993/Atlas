@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <utility>
+#include <vector>
 
 namespace atlas {
 
@@ -44,6 +45,15 @@ auto Controllers::Cancel(ControllerID id) -> bool {
   it->second->Stop();
   controllers_.erase(it);
   return true;
+}
+
+auto Controllers::CancelByKind(ControllerKind kind) -> std::size_t {
+  std::vector<ControllerID> ids;
+  for (const auto& [id, ctrl] : controllers_) {
+    if (ctrl->TypeTag() == kind) ids.push_back(id);
+  }
+  for (auto id : ids) Cancel(id);
+  return ids.size();
 }
 
 void Controllers::Update(float dt) {
