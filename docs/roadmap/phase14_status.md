@@ -41,8 +41,8 @@
   --skip-defs --skip-codegen --skip-stage`
 - `UnrealEditor-Cmd.exe` 跑 `Automation RunTests Atlas.NetClient`。
 
-这套命令只代表 Phase 14 最小回归，不等同于完整验收。完整闭环还需要记录
-Linux 服务端 parity 的 PASS 日期和命令输出。
+这套命令只代表 Phase 14 最小回归，不等同于完整验收。完整闭环的 Linux
+服务端 parity 记录见下方验收记录。
 
 ---
 
@@ -64,5 +64,6 @@ Linux 服务端 parity 的 PASS 日期和命令输出。
 - `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_asset|collision_pipeline|test_space|lag_compensation|backend_parity" --output-on-failure`：PASS，19 / 19；包含 `chunk_boundary_cross` parity 场景。
 - `tools\bin\build_mvp_unity.bat --unity C:\Unity\Hub\Editor\6000.0.43f1-lilith-1\Editor\Unity.exe --skip-setup --clean-output --development`：PASS；生成 `out\mvp-unity\windows\AtlasMvp.exe`。
 - `out\mvp-unity\windows\AtlasMvp.exe -batchmode -nographics -atlas-predictor-self-test -logFile out\mvp-unity\predictor-self-test-wait.log`：PASS，exit code 0；日志包含 `[NativePredictorSelfTest] PASS ticks=10000`。
+- GitHub Actions `Linux Tests #121`（Ubuntu 24.04 / GCC 13，commit `9d3e48c`）：PASS，6m38s；workflow 配置 `ATLAS_BUILD_NET_CLIENT=ON`，运行 CTest `unit` / `integration` labels 与 `Atlas.Client.IntegrationTests`，覆盖 Linux 服务端单元、集成、backend parity 与 C# integration。
 
-仍未由本地命令证明：Linux 服务端 parity。
+Linux 服务端 parity 已由 CI 证明；本机未留存本地 Linux runner 复现记录。

@@ -1,11 +1,12 @@
 # Phase 14: 服务端权威移动与本地预测
 
-**Status:** 🟨 14.1–14.4 静态查询主线已交付——输入帧协议、CellApp 权威 step、owner
+**Status:** ✅ 14.1–14.4 主线闭环——输入帧协议、CellApp 权威 step、owner
 预测和解、MovementCommand fanout、Jolt 查询后端（M1a–M5b）、Unity collision /
 mesh / heightfield 导出（M7）、position history 与服务端 lag-compensation 原型
-以及 Static collision asset 的 chunk / border query 起步都已落地。Jolt cache
-chunking、大地图 streaming 和跨 Cell 物理仍后置。收紧的 wire contract 与
-最小回归命令集见 [`phase14_status.md`](phase14_status.md)。
+以及 Static collision asset 的 chunk / border query 起步都已落地，stress /
+parity / live-style 验收记录已留存在 [`phase14_status.md`](phase14_status.md)。
+Jolt cache chunking、大地图 streaming 和跨 Cell 物理仍后置。收紧的 wire
+contract 与最小回归命令集见 [`phase14_status.md`](phase14_status.md)。
 
 **前置依赖:** Phase 10 (CellApp / Witness / volatile 位置流)、Phase 11
 (Real/Ghost / Offload)、Phase 12 (atlas_net_client / Atlas.Client)、
@@ -374,9 +375,8 @@ movement/step_time_us_p95
 
 ## 验收
 
-以下是 Phase 14 验收目标。当前 14.1-14.3 主体实现和单元 / 客户端覆盖已落地；
-stress、parity 和 live-style 场景需要在 `phase14_status.md` 留存带日期的 PASS
-记录后，才能把 Phase 14 标为完全闭环。
+以下是 Phase 14 验收目标。14.1-14.4 主线已按 `phase14_status.md` 的
+2026-06-23 PASS 记录闭环；后续 backend 改动仍必须按 parity gate 验证。
 
 Phase 14.1 完成条件：
 
