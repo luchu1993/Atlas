@@ -1,4 +1,6 @@
 #include <array>
+#include <format>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -104,6 +106,22 @@ class LoginRollbackTest : public ::testing::Test {
   auto watcher(std::string_view path) -> std::optional<std::string> {
     return app_.GetWatcherRegistry().Get(path);
   }
+  void set_legacy_dbapp_channel(Channel* ch) { app_.dbapp_channel_ = ch; }
+  void cache_dbapp_channel(const Address& addr, Channel* ch) { app_.dbapp_channels_[addr] = ch; }
+  auto cached_dbapp_channel_count() const -> std::size_t { return app_.dbapp_channels_.size(); }
+  void apply_dbapp_shards(uint32_t version, std::vector<dbappmgr::ShardEntry> entries) {
+    app_.ApplyDbAppShardTable(version, std::move(entries));
+  }
+  auto resolve_auth_dbapp(std::string_view username) -> Channel* {
+    return app_.ResolveAuthDbAppChannel(username);
+  }
+  void handle_dbapp_death(const Address& addr) {
+    machined::DeathNotification death;
+    death.process_type = ProcessType::kDbApp;
+    death.internal_addr = addr;
+    death.reason = 1;
+    app_.OnDbAppDeath(death);
+  }
 
   EventDispatcher dispatcher_;
   NetworkInterface internal_network_;
@@ -138,6 +156,54 @@ TEST_F(LoginRollbackTest, DedupTrackingAndMetrics) {
   remove_pending_username("bob");
   EXPECT_TRUE(pending_by_username_empty());
   EXPECT_EQ(watcher("loginapp/pending_logins").value_or(""), "0");
+}
+
+TEST_F(LoginRollbackTest, AuthLoginUsesLegacyDbappWhenShardTableMissing) {
+  auto* legacy = test_support::FakeChannel(0x1501);
+  set_legacy_dbapp_channel(legacy);
+
+  EXPECT_EQ(resolve_auth_dbapp("alice"), legacy);
+}
+
+TEST_F(LoginRollbackTest, AuthLoginRoutesUsernameThroughShardTable) {
+  register_watchers();
+  const Address shard_a_addr("127.0.0.1", 31001);
+  const Address shard_b_addr("127.0.0.1", 31002);
+  auto* shard_a = test_support::FakeChannel(0x1502);
+  auto* shard_b = test_support::FakeChannel(0x1503);
+  cache_dbapp_channel(shard_a_addr, shard_a);
+  cache_dbapp_channel(shard_b_addr, shard_b);
+
+  const DatabaseID kSplit = std::numeric_limits<DatabaseID>::max() / 2;
+  apply_dbapp_shards(
+      3, {dbappmgr::ShardEntry{1, kSplit, 1, shard_a_addr},
+          dbappmgr::ShardEntry{kSplit, std::numeric_limits<DatabaseID>::max(), 2, shard_b_addr}});
+
+  std::string routed_to_a;
+  std::string routed_to_b;
+  for (int i = 0; i < 10000 && (routed_to_a.empty() || routed_to_b.empty()); ++i) {
+    std::string username = std::format("user{}", i);
+    Channel* target = resolve_auth_dbapp(username);
+    if (target == shard_a && routed_to_a.empty()) routed_to_a = username;
+    if (target == shard_b && routed_to_b.empty()) routed_to_b = username;
+  }
+
+  ASSERT_FALSE(routed_to_a.empty());
+  ASSERT_FALSE(routed_to_b.empty());
+  EXPECT_EQ(resolve_auth_dbapp(routed_to_a), shard_a);
+  EXPECT_EQ(resolve_auth_dbapp(routed_to_b), shard_b);
+  EXPECT_EQ(watcher("loginapp/dbapp_shard_table_version").value_or(""), "3");
+  EXPECT_EQ(watcher("loginapp/dbapp_shard_count").value_or(""), "2");
+}
+
+TEST_F(LoginRollbackTest, DbappDeathClearsCachedShardChannel) {
+  const Address shard_addr("127.0.0.1", 31003);
+  cache_dbapp_channel(shard_addr, test_support::FakeChannel(0x1504));
+  EXPECT_EQ(cached_dbapp_channel_count(), 1u);
+
+  handle_dbapp_death(shard_addr);
+
+  EXPECT_EQ(cached_dbapp_channel_count(), 0u);
 }
 
 class BaseAppRollbackTest : public ::testing::Test {

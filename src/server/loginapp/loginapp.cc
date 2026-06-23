@@ -1,6 +1,8 @@
 #include "loginapp.h"
 
+#include <algorithm>
 #include <format>
+#include <limits>
 
 #include "coro/rpc_call.h"
 #include "coro/scope_guard.h"
@@ -11,6 +13,20 @@
 #include "server/watcher.h"
 
 namespace atlas {
+
+namespace {
+
+auto UsernameRouteDbid(std::string_view username) -> DatabaseID {
+  uint64_t hash = 14695981039346656037ull;
+  for (unsigned char c : username) {
+    hash ^= c;
+    hash *= 1099511628211ull;
+  }
+  const uint64_t kMax = static_cast<uint64_t>(std::numeric_limits<DatabaseID>::max());
+  return static_cast<DatabaseID>(1 + (hash % (kMax - 1)));
+}
+
+}  // namespace
 
 auto LoginApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
@@ -62,6 +78,14 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
       [](const Address&, Channel*, const login::AllocateBaseAppResult&) {});
   (void)table.RegisterTypedHandler<login::PrepareLoginResult>(
       [](const Address&, Channel*, const login::PrepareLoginResult&) {});
+  (void)table.RegisterTypedHandler<dbappmgr::ShardTableResponse>(
+      [this](const Address&, Channel*, const dbappmgr::ShardTableResponse& msg) {
+        OnShardTableResponse(msg);
+      });
+  (void)table.RegisterTypedHandler<dbappmgr::ShardTableUpdate>(
+      [this](const Address&, Channel*, const dbappmgr::ShardTableUpdate& msg) {
+        OnShardTableUpdate(msg);
+      });
 
   table.SetPreDispatchHook([this](MessageID id, std::span<const std::byte> payload) -> bool {
     return rpc_registry_.TryDispatch(id, payload);
@@ -75,30 +99,32 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
       ATLAS_LOG_WARNING("LoginApp: dbapp channel down (RUDP dead link), clearing");
       dbapp_channel_ = nullptr;
     }
+    for (auto it = dbapp_channels_.begin(); it != dbapp_channels_.end();) {
+      if (it->second == &ch) {
+        it = dbapp_channels_.erase(it);
+      } else {
+        ++it;
+      }
+    }
     if (&ch == baseappmgr_channel_) {
       ATLAS_LOG_WARNING("LoginApp: baseappmgr channel down (RUDP dead link), clearing");
       baseappmgr_channel_ = nullptr;
+    }
+    if (&ch == dbappmgr_channel_) {
+      ATLAS_LOG_WARNING("LoginApp: dbappmgr channel down (RUDP dead link), clearing");
+      dbappmgr_channel_ = nullptr;
     }
   });
 
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
-      [this](const machined::BirthNotification& n) {
-        if (dbapp_channel_ == nullptr) {
-          ATLAS_LOG_INFO("LoginApp: DBApp born at {}:{}, connecting via RUDP...",
-                         n.internal_addr.Ip(), n.internal_addr.Port());
-          auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
-          if (ch) dbapp_channel_ = static_cast<Channel*>(*ch);
-        }
-      },
-      [this](const machined::DeathNotification& n) {
-        if (n.reason == 0) {
-          ATLAS_LOG_INFO("LoginApp: DBApp deregistered");
-        } else {
-          ATLAS_LOG_WARNING("LoginApp: DBApp died");
-        }
-        dbapp_channel_ = nullptr;
-      });
+      [this](const machined::BirthNotification& n) { OnDbAppBirth(n); },
+      [this](const machined::DeathNotification& n) { OnDbAppDeath(n); });
+
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kDbAppMgr,
+      [this](const machined::BirthNotification& n) { OnDbAppMgrBirth(n); },
+      [this](const machined::DeathNotification& n) { OnDbAppMgrDeath(n); });
 
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kBaseAppMgr,
@@ -185,7 +211,134 @@ void LoginApp::RegisterWatchers() {
                std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
   wr.Add<bool>("loginapp/baseappmgr_connected",
                std::function<bool()>([this] { return baseappmgr_channel_ != nullptr; }));
+  wr.Add<bool>("loginapp/dbappmgr_connected",
+               std::function<bool()>([this] { return dbappmgr_channel_ != nullptr; }));
+  wr.Add<uint32_t>("loginapp/dbapp_shard_table_version",
+                   std::function<uint32_t()>([this] { return dbapp_shard_table_version_; }));
+  wr.Add<std::size_t>("loginapp/dbapp_shard_count",
+                      std::function<std::size_t()>([this] { return dbapp_shard_table_.size(); }));
   RegisterLatencyWatchers(wr, "loginapp/login_latency", login_latency_);
+}
+
+void LoginApp::OnDbAppBirth(const machined::BirthNotification& msg) {
+  if (dbapp_channel_ != nullptr) return;
+  ATLAS_LOG_INFO("LoginApp: DBApp born at {}:{}, connecting via RUDP...", msg.internal_addr.Ip(),
+                 msg.internal_addr.Port());
+  dbapp_channel_ = ConnectDbAppChannel(msg.internal_addr);
+}
+
+void LoginApp::OnDbAppDeath(const machined::DeathNotification& msg) {
+  Channel* dead_ch = nullptr;
+  if (auto it = dbapp_channels_.find(msg.internal_addr); it != dbapp_channels_.end()) {
+    dead_ch = it->second;
+    dbapp_channels_.erase(it);
+  }
+  if (dbapp_channel_ != nullptr && dbapp_channel_->RemoteAddress() == msg.internal_addr) {
+    if (dead_ch == nullptr) dead_ch = dbapp_channel_;
+    dbapp_channel_ = nullptr;
+  }
+  if (dead_ch != nullptr) rpc_registry_.CancelByChannel(dead_ch);
+
+  if (msg.reason == 0) {
+    ATLAS_LOG_INFO("LoginApp: DBApp deregistered");
+  } else {
+    ATLAS_LOG_WARNING("LoginApp: DBApp died");
+  }
+}
+
+void LoginApp::OnDbAppMgrBirth(const machined::BirthNotification& msg) {
+  if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() == msg.internal_addr &&
+      !dbappmgr_channel_->IsCondemned()) {
+    RequestDbAppShardTable();
+    return;
+  }
+
+  auto ch = Network().ConnectRudpNocwnd(msg.internal_addr);
+  if (!ch) {
+    ATLAS_LOG_WARNING("LoginApp: failed to connect to DBAppMgr at {}",
+                      msg.internal_addr.ToString());
+    return;
+  }
+  dbappmgr_channel_ = static_cast<Channel*>(*ch);
+  ATLAS_LOG_INFO("LoginApp: DBAppMgr connected at {}", msg.internal_addr.ToString());
+  RequestDbAppShardTable();
+}
+
+void LoginApp::OnDbAppMgrDeath(const machined::DeathNotification& msg) {
+  if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() != msg.internal_addr) {
+    return;
+  }
+  if (msg.reason == 0) {
+    ATLAS_LOG_INFO("LoginApp: DBAppMgr deregistered");
+  } else {
+    ATLAS_LOG_WARNING("LoginApp: DBAppMgr died");
+  }
+  dbappmgr_channel_ = nullptr;
+}
+
+void LoginApp::OnShardTableResponse(const dbappmgr::ShardTableResponse& msg) {
+  if (msg.version == dbapp_shard_table_version_ && msg.entries.empty()) return;
+  ApplyDbAppShardTable(msg.version, msg.entries);
+}
+
+void LoginApp::OnShardTableUpdate(const dbappmgr::ShardTableUpdate& msg) {
+  ApplyDbAppShardTable(msg.version, msg.entries);
+}
+
+void LoginApp::RequestDbAppShardTable() {
+  if (dbappmgr_channel_ == nullptr) return;
+  dbappmgr::GetShardTable msg;
+  msg.request_id = next_dbapp_shard_table_request_id_++;
+  msg.known_version = dbapp_shard_table_version_;
+  if (auto r = dbappmgr_channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("LoginApp: GetShardTable send failed: {}", r.Error().Message());
+  }
+}
+
+void LoginApp::ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries) {
+  if (version == 0 || version <= dbapp_shard_table_version_) return;
+  dbapp_shard_table_version_ = version;
+  dbapp_shard_table_ = std::move(entries);
+  for (const auto& entry : dbapp_shard_table_) (void)ConnectDbAppChannel(entry.dbapp_addr);
+  ATLAS_LOG_INFO("LoginApp: DBApp shard table version={} shards={}", dbapp_shard_table_version_,
+                 dbapp_shard_table_.size());
+}
+
+auto LoginApp::ResolveAuthDbAppChannel(std::string_view username) -> Channel* {
+  if (!dbapp_shard_table_.empty()) {
+    if (const auto* shard = FindDbAppShard(UsernameRouteDbid(username))) {
+      return ConnectDbAppChannel(shard->dbapp_addr);
+    }
+    return nullptr;
+  }
+  return dbapp_channel_;
+}
+
+auto LoginApp::ConnectDbAppChannel(const Address& addr) -> Channel* {
+  if (addr.Port() == 0) return nullptr;
+  if (auto it = dbapp_channels_.find(addr);
+      it != dbapp_channels_.end() && it->second != nullptr && !it->second->IsCondemned()) {
+    return it->second;
+  }
+  if (auto* existing = Network().FindChannel(addr); existing != nullptr) {
+    dbapp_channels_[addr] = existing;
+    return existing;
+  }
+  auto result = Network().ConnectRudpNocwnd(addr);
+  if (!result) {
+    ATLAS_LOG_WARNING("LoginApp: failed to connect DBApp shard at {}", addr.ToString());
+    return nullptr;
+  }
+  auto* ch = static_cast<Channel*>(*result);
+  dbapp_channels_[addr] = ch;
+  return ch;
+}
+
+auto LoginApp::FindDbAppShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry* {
+  for (const auto& entry : dbapp_shard_table_) {
+    if (entry.low_dbid <= dbid && dbid < entry.high_dbid) return &entry;
+  }
+  return nullptr;
 }
 
 void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::LoginRequest& msg) {
@@ -228,7 +381,8 @@ void LoginApp::OnLoginRequest(const Address& src, Channel* ch, const login::Logi
     return;
   }
 
-  if (!dbapp_channel_) {
+  if (dbapp_channel_ == nullptr && dbapp_shard_table_.empty()) {
+    RequestDbAppShardTable();
     ATLAS_LOG_ERROR("LoginApp: no DBApp connection for login request");
     SendLoginError(ch->ChannelId(), login::LoginStatus::kServerNotReady, "no_dbapp");
     return;
@@ -258,7 +412,9 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   ScopeGuard cancel_guard(
       [this, client_channel_id] { channel_cancel_sources_.erase(client_channel_id); });
 
-  if (!dbapp_channel_) {
+  Channel* auth_dbapp_ch = ResolveAuthDbAppChannel(username);
+  if (auth_dbapp_ch == nullptr) {
+    RequestDbAppShardTable();
     SendLoginError(client_channel_id, login::LoginStatus::kServerNotReady, "no_dbapp");
     co_return;
   }
@@ -269,7 +425,7 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   auth.password_hash = request.password_hash;
   auth.auto_create = Config().auto_create_accounts;
 
-  auto auth_result = co_await RpcCall<login::AuthLoginResult>(rpc_registry_, *dbapp_channel_, auth,
+  auto auth_result = co_await RpcCall<login::AuthLoginResult>(rpc_registry_, *auth_dbapp_ch, auth,
                                                               kRpcTimeout, token);
   if (!auth_result) {
     if (auth_result.Error().Code() == ErrorCode::kCancelled) {

@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -10,9 +11,11 @@
 #include "coro/cancellation.h"
 #include "coro/fire_and_forget.h"
 #include "coro/pending_rpc_registry.h"
+#include "dbappmgr/dbappmgr_messages.h"
 #include "foundation/clock.h"
 #include "foundation/latency_histogram.h"
 #include "login_messages.h"
+#include "network/machined_types.h"
 #include "server/entity_types.h"
 #include "server/ipv4_networks.h"
 #include "server/manager_app.h"
@@ -43,6 +46,18 @@ class LoginApp : public ManagerApp {
 
   auto HandleLoginCoro(uint64_t client_channel_id, Address client_addr, login::LoginRequest request)
       -> FireAndForget;
+
+  void OnDbAppBirth(const machined::BirthNotification& msg);
+  void OnDbAppDeath(const machined::DeathNotification& msg);
+  void OnDbAppMgrBirth(const machined::BirthNotification& msg);
+  void OnDbAppMgrDeath(const machined::DeathNotification& msg);
+  void OnShardTableResponse(const dbappmgr::ShardTableResponse& msg);
+  void OnShardTableUpdate(const dbappmgr::ShardTableUpdate& msg);
+  void RequestDbAppShardTable();
+  void ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries);
+  [[nodiscard]] auto ResolveAuthDbAppChannel(std::string_view username) -> Channel*;
+  [[nodiscard]] auto ConnectDbAppChannel(const Address& addr) -> Channel*;
+  [[nodiscard]] auto FindDbAppShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry*;
 
   void OnClientDisconnect(Channel& ch);
   void SendLoginError(uint64_t client_channel_id, login::LoginStatus status,
@@ -80,6 +95,11 @@ class LoginApp : public ManagerApp {
   NetworkInterface& external_network_;
   Channel* dbapp_channel_{nullptr};
   Channel* baseappmgr_channel_{nullptr};
+  Channel* dbappmgr_channel_{nullptr};
+  std::unordered_map<Address, Channel*> dbapp_channels_;
+  std::vector<dbappmgr::ShardEntry> dbapp_shard_table_;
+  uint32_t dbapp_shard_table_version_{0};
+  uint32_t next_dbapp_shard_table_request_id_{1};
 
   uint64_t login_requests_total_{0};
   uint64_t login_success_total_{0};
