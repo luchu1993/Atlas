@@ -76,7 +76,7 @@ jobs:
       - name: Build
         env:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
-        run: cmake --build build/debug --config Debug
+        run: cmake --build build/debug --config Debug --parallel 2
 
       - name: sccache stats
         env:

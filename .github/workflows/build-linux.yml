@@ -97,17 +97,31 @@ jobs:
         shell: bash
         run: |
           set +e
-          cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }} 2>&1 \
+          cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }} \
+            --parallel 2 2>&1 \
             | tee build-${{ matrix.preset }}.log
           status=${PIPESTATUS[0]}
           if [[ "$status" -ne 0 ]]; then
+            error_regex='(^FAILED:| error:|fatal error:|undefined reference|collect2:|ld:|ninja:|CMake Error|No such file|Killed)'
+            report=build-${{ matrix.preset }}-failure.txt
+            if grep -nEi "$error_regex" build-${{ matrix.preset }}.log > "$report.matches"; then
+              : > "$report"
+              while IFS=: read -r line _; do
+                start=$((line > 8 ? line - 8 : 1))
+                end=$((line + 20))
+                sed -n "${start},${end}p" build-${{ matrix.preset }}.log >> "$report"
+                echo "..." >> "$report"
+              done < <(head -n 8 "$report.matches")
+            else
+              tail -n 80 build-${{ matrix.preset }}.log > "$report"
+            fi
             {
               echo "### Linux ${{ matrix.preset }} build failure"
               echo '```text'
-              tail -n 200 build-${{ matrix.preset }}.log
+              cat "$report"
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
-            tail_output="$(tail -n 120 build-${{ matrix.preset }}.log)"
+            tail_output="$(head -n 120 "$report")"
             tail_output="${tail_output//'%'/'%25'}"
             tail_output="${tail_output//$'\r'/'%0D'}"
             tail_output="${tail_output//$'\n'/'%0A'}"
