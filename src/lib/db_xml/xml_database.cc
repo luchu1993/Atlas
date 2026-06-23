@@ -129,6 +129,7 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
       if (ReadBlob(type_id, dbid).has_value()) {
         result.dbid = dbid;
         result.error = std::format("entity ({},{}) already exists", type_id, dbid);
+        result.error_kind = DatabaseErrorKind::kDuplicateDbid;
         FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
       }
@@ -185,6 +186,7 @@ void XmlDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Write
       if (ReadBlob(type_id, dbid).has_value()) {
         result.dbid = dbid;
         result.error = std::format("entity ({},{}) already exists", type_id, dbid);
+        result.error_kind = DatabaseErrorKind::kDuplicateDbid;
         FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
         return;
       }

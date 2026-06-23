@@ -91,6 +91,10 @@ class DBApp : public ManagerApp {
   void PruneCreateDbidAllocators();
   void RecoverCreateDbidAllocators();
   void RecoverCreateDbidAllocator(const dbappmgr::ShardEntry& shard);
+  void PutCreateEntityWithRetry(const dbappmgr::ShardEntry& shard, DatabaseID dbid,
+                                uint16_t type_id, WriteFlags flags, std::vector<std::byte> blob,
+                                std::string identifier, std::optional<std::string> password_hash,
+                                std::function<void(PutResult)> callback);
 
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;

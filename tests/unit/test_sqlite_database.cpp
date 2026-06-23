@@ -132,6 +132,13 @@ TEST_F(SqliteDatabaseTest, PutNewEntityWithExplicitDbidAndGet) {
   ASSERT_TRUE(get.success);
   EXPECT_EQ(get.data.blob, make_blob("explicit"));
 
+  PutResult duplicate;
+  db_.PutEntity(kDbid, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid,
+                make_blob("duplicate"), "alice_duplicate",
+                [&](PutResult r) { duplicate = std::move(r); });
+  EXPECT_FALSE(duplicate.success);
+  EXPECT_EQ(duplicate.error_kind, DatabaseErrorKind::kDuplicateDbid);
+
   PutResult auto_put;
   db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew, make_blob("auto"), "bob",
                 [&](PutResult r) { auto_put = std::move(r); });

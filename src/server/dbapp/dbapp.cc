@@ -18,8 +18,9 @@ namespace atlas {
 namespace {
 
 constexpr Duration kDbAppMgrLoadReportInterval = std::chrono::seconds(1);
+constexpr int kCreateDbidDuplicateRetryLimit = 16;
 
-}
+}  // namespace
 
 auto DBApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
@@ -544,6 +545,47 @@ void DBApp::RecoverCreateDbidAllocator(const dbappmgr::ShardEntry& shard) {
       });
 }
 
+void DBApp::PutCreateEntityWithRetry(const dbappmgr::ShardEntry& shard, DatabaseID dbid,
+                                     uint16_t type_id, WriteFlags flags,
+                                     std::vector<std::byte> blob, std::string identifier,
+                                     std::optional<std::string> password_hash,
+                                     std::function<void(PutResult)> callback) {
+  auto final_callback = std::make_shared<std::function<void(PutResult)>>(std::move(callback));
+  auto attempt = std::make_shared<std::function<void(DatabaseID, int)>>();
+  std::weak_ptr<std::function<void(DatabaseID, int)>> weak_attempt = attempt;
+
+  *attempt = [this, weak_attempt, shard, type_id, flags, blob = std::move(blob),
+              identifier = std::move(identifier), password_hash = std::move(password_hash),
+              final_callback](DatabaseID attempt_dbid, int retries_left) {
+    auto attempt_keepalive = weak_attempt.lock();
+    auto on_put = [this, weak_attempt, attempt_keepalive, shard, retries_left,
+                   final_callback](PutResult result) {
+      if (!result.success && result.error_kind == DatabaseErrorKind::kDuplicateDbid &&
+          retries_left > 0) {
+        DatabaseID retry_dbid = AllocateCreateDbid(shard);
+        if (retry_dbid != kInvalidDBID) {
+          ATLAS_LOG_WARNING("DBApp: create DBID {} already exists, retrying with {}", result.dbid,
+                            retry_dbid);
+          if (auto attempt_fn = weak_attempt.lock()) {
+            (*attempt_fn)(retry_dbid, retries_left - 1);
+            return;
+          }
+        }
+      }
+      (*final_callback)(std::move(result));
+    };
+
+    if (password_hash.has_value()) {
+      database_->PutEntityWithPassword(attempt_dbid, type_id, flags, blob, identifier,
+                                       *password_hash, std::move(on_put));
+    } else {
+      database_->PutEntity(attempt_dbid, type_id, flags, blob, identifier, std::move(on_put));
+    }
+  };
+
+  (*attempt)(dbid, kCreateDbidDuplicateRetryLimit);
+}
+
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {
   if (ch == nullptr) return;
 
@@ -590,6 +632,7 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
 
   DatabaseID write_dbid = msg.dbid;
   WriteFlags write_flags = msg.flags;
+  std::optional<dbappmgr::ShardEntry> create_shard;
   if (HasFlag(write_flags, WriteFlags::kCreateNew) &&
       !HasFlag(write_flags, WriteFlags::kExplicitDbid) && write_dbid == kInvalidDBID &&
       HasAuthoritativeShardTable()) {
@@ -599,11 +642,17 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
       return;
     }
     write_flags = write_flags | WriteFlags::kExplicitDbid;
+    if (const auto* shard = FindShard(write_dbid); shard != nullptr) create_shard = *shard;
   }
 
   pending_write_requests_.insert(key);
-  database_->PutEntity(write_dbid, msg.type_id, write_flags, msg.blob, msg.identifier,
-                       std::move(send_ack));
+  if (create_shard.has_value()) {
+    PutCreateEntityWithRetry(*create_shard, write_dbid, msg.type_id, write_flags, msg.blob,
+                             msg.identifier, std::nullopt, std::move(send_ack));
+  } else {
+    database_->PutEntity(write_dbid, msg.type_id, write_flags, msg.blob, msg.identifier,
+                         std::move(send_ack));
+  }
 }
 
 void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::CheckoutEntity& msg) {
@@ -908,6 +957,7 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
             data.blob = {};
             DatabaseID create_dbid = kInvalidDBID;
             WriteFlags create_flags = WriteFlags::kCreateNew;
+            std::optional<dbappmgr::ShardEntry> create_shard;
             if (HasAuthoritativeShardTable()) {
               create_dbid = AllocateCreateDbidForRoute(DbShardRouteKey(username));
               if (create_dbid == kInvalidDBID) {
@@ -920,26 +970,36 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
                 return;
               }
               create_flags = create_flags | WriteFlags::kExplicitDbid;
+              if (const auto* shard = FindShard(create_dbid); shard != nullptr) {
+                create_shard = *shard;
+              }
             }
-            database_->PutEntityWithPassword(
-                create_dbid, account_type_id_, create_flags, data.blob, data.identifier,
-                password_hash,
-                [this, reply_addr, request_id, type_id = account_type_id_](PutResult put) {
-                  login::AuthLoginResult r;
-                  r.request_id = request_id;
-                  if (put.success) {
-                    r.success = true;
-                    r.status = login::LoginStatus::kSuccess;
-                    r.dbid = put.dbid;
-                    r.type_id = type_id;
-                  } else {
-                    r.success = false;
-                    r.status = login::LoginStatus::kInternalError;
-                  }
-                  if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
-                    (void)reply_ch->SendMessage(r);
-                  }
-                });
+            auto on_put = [this, reply_addr, request_id,
+                           type_id = account_type_id_](PutResult put) {
+              login::AuthLoginResult r;
+              r.request_id = request_id;
+              if (put.success) {
+                r.success = true;
+                r.status = login::LoginStatus::kSuccess;
+                r.dbid = put.dbid;
+                r.type_id = type_id;
+              } else {
+                r.success = false;
+                r.status = login::LoginStatus::kInternalError;
+              }
+              if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
+                (void)reply_ch->SendMessage(r);
+              }
+            };
+            if (create_shard.has_value()) {
+              PutCreateEntityWithRetry(*create_shard, create_dbid, account_type_id_, create_flags,
+                                       std::move(data.blob), std::move(data.identifier),
+                                       password_hash, std::move(on_put));
+            } else {
+              database_->PutEntityWithPassword(create_dbid, account_type_id_, create_flags,
+                                               data.blob, data.identifier, password_hash,
+                                               std::move(on_put));
+            }
             return;
           }
           reply.success = false;

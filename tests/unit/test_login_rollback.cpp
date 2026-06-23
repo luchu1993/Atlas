@@ -555,6 +555,14 @@ class FakeDatabase final : public IDatabase {
       return;
     }
     PutResult result;
+    if (duplicate_dbid_failures_before_success > 0) {
+      --duplicate_dbid_failures_before_success;
+      result.dbid = dbid;
+      result.error = "duplicate dbid";
+      result.error_kind = DatabaseErrorKind::kDuplicateDbid;
+      callback(std::move(result));
+      return;
+    }
     result.success = put_success;
     result.dbid = dbid != kInvalidDBID ? dbid : fallback_put_dbid;
     result.error = put_error;
@@ -576,6 +584,14 @@ class FakeDatabase final : public IDatabase {
       return;
     }
     PutResult result;
+    if (duplicate_dbid_failures_before_success > 0) {
+      --duplicate_dbid_failures_before_success;
+      result.dbid = dbid;
+      result.error = "duplicate dbid";
+      result.error_kind = DatabaseErrorKind::kDuplicateDbid;
+      callback(std::move(result));
+      return;
+    }
     result.success = put_success;
     result.dbid = dbid != kInvalidDBID ? dbid : fallback_put_dbid;
     result.error = put_error;
@@ -666,6 +682,7 @@ class FakeDatabase final : public IDatabase {
   bool put_success{true};
   DatabaseID fallback_put_dbid{42};
   std::string put_error;
+  int duplicate_dbid_failures_before_success{0};
   int lookup_by_name_calls{0};
   uint16_t last_lookup_type_id{0};
   std::string last_lookup_identifier;
@@ -911,6 +928,29 @@ TEST_F(DBAppRollbackTest, WriteEntityCreateResumesAfterStoredShardMaxDbid) {
   EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
 }
 
+TEST_F(DBAppRollbackTest, WriteEntityCreateRetriesDuplicateDbidInsideOwnedShard) {
+  db().duplicate_dbid_failures_before_success = 1;
+
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 1;
+  ack.entries.push_back(dbappmgr::ShardEntry{1000, 2000, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  dbapp::WriteEntity write;
+  write.request_id = 79;
+  write.type_id = 9;
+  write.flags = WriteFlags::kCreateNew;
+  write.shard_table_version = 1;
+  write_entity(test_support::FakeChannel(0x1505), write);
+
+  EXPECT_EQ(db().put_entity_calls, 2);
+  EXPECT_EQ(db().last_put_dbid, 1001);
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
+}
+
 TEST_F(DBAppRollbackTest, AuthLoginAutoCreateAllocatesDbidFromUsernameShard) {
   db().complete_put_immediately = false;
   set_auto_create_accounts(true, 1);
@@ -939,6 +979,38 @@ TEST_F(DBAppRollbackTest, AuthLoginAutoCreateAllocatesDbidFromUsernameShard) {
   EXPECT_EQ(db().last_lookup_identifier, username);
   EXPECT_EQ(db().put_entity_with_password_calls, 1);
   EXPECT_EQ(db().last_put_dbid, low);
+  EXPECT_EQ(db().last_put_identifier, username);
+  EXPECT_EQ(db().last_password_hash, "pw_hash");
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
+}
+
+TEST_F(DBAppRollbackTest, AuthLoginAutoCreateRetriesDuplicateDbidInsideUsernameShard) {
+  db().duplicate_dbid_failures_before_success = 1;
+  set_auto_create_accounts(true, 1);
+  const std::string username = "duplicate_retry_user";
+  const DatabaseID route_key = DbShardRouteKey(username);
+  const DatabaseID low = route_key;
+  const DatabaseID high = route_key < std::numeric_limits<DatabaseID>::max() - 2
+                              ? route_key + 3
+                              : std::numeric_limits<DatabaseID>::max();
+
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 1;
+  ack.entries.push_back(dbappmgr::ShardEntry{low, high, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  login::AuthLogin auth;
+  auth.request_id = 89;
+  auth.username = username;
+  auth.password_hash = "pw_hash";
+  auth.auto_create = true;
+  auth_login(test_support::FakeChannel(0x1506), auth);
+
+  EXPECT_EQ(db().put_entity_with_password_calls, 2);
+  EXPECT_EQ(db().last_put_dbid, low + 1);
   EXPECT_EQ(db().last_put_identifier, username);
   EXPECT_EQ(db().last_password_hash, "pw_hash");
   EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));

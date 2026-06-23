@@ -45,6 +45,12 @@ enum class WriteFlags : uint8_t {
   kCellData = 1 << 6,      // reserved: blob includes cell data
 };
 
+enum class DatabaseErrorKind : uint8_t {
+  kNone = 0,
+  kDuplicateDbid,
+  kDuplicateIdentifier,
+};
+
 [[nodiscard]] inline auto operator|(WriteFlags a, WriteFlags b) -> WriteFlags {
   return static_cast<WriteFlags>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
 }
@@ -74,6 +80,7 @@ struct PutResult {
   bool success{false};
   DatabaseID dbid{kInvalidDBID};  // assigned or existing DBID
   std::string error;
+  DatabaseErrorKind error_kind{DatabaseErrorKind::kNone};
 };
 
 struct GetResult {

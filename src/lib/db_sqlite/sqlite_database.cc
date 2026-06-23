@@ -18,6 +18,18 @@ auto UnixTimeMs() -> int64_t {
 
 constexpr int kSqliteSchemaVersion = 1;
 
+auto ConstraintErrorKind(sqlite3* db) -> atlas::DatabaseErrorKind {
+  switch (sqlite3_extended_errcode(db)) {
+    case SQLITE_CONSTRAINT_PRIMARYKEY:
+    case SQLITE_CONSTRAINT_ROWID:
+      return atlas::DatabaseErrorKind::kDuplicateDbid;
+    case SQLITE_CONSTRAINT_UNIQUE:
+      return atlas::DatabaseErrorKind::kDuplicateIdentifier;
+    default:
+      return atlas::DatabaseErrorKind::kNone;
+  }
+}
+
 }  // namespace
 
 namespace atlas {
@@ -157,6 +169,7 @@ void SqliteDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags fla
 
     rc = sqlite3_step(stmt.Get());
     if (rc != SQLITE_DONE) {
+      result.error_kind = ConstraintErrorKind(db_);
       result.error = std::string(SqliteError("SqliteDatabase: insert failed", rc).Message());
       FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
       return;
@@ -434,6 +447,7 @@ void SqliteDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Wr
 
   rc = sqlite3_step(stmt.Get());
   if (rc != SQLITE_DONE) {
+    result.error_kind = ConstraintErrorKind(db_);
     result.error = std::string(SqliteError("SqliteDatabase: password insert failed", rc).Message());
     FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
     return;

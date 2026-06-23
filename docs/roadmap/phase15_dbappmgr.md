@@ -5,7 +5,7 @@ table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元
 已起步；BaseApp shard cache 与 dbid 路由、LoginApp shard cache 与 username
 auth shard 路由、DBApp request version 校验和 request idempotency cache 已接入，
 DBApp range-scoped explicit DBID create allocation 已接入；allocator recovery /
-XML duplicate guard 已接入；duplicate retry、request retry 与 P15.2 HA
+XML duplicate guard 和 duplicate retry 已接入；request retry 与 P15.2 HA
 未完成。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
@@ -200,7 +200,7 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 
 | 阶段 | 内容 | 估计 |
 |---|---|---|
-| P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已起步，含 DBApp 注册接入；runtime new DBID range allocation、allocator recovery 与 XML duplicate guard 已接入，duplicate retry 待补 |
+| P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已起步，含 DBApp 注册接入；runtime new DBID range allocation、allocator recovery、XML duplicate guard 与 duplicate retry 已接入 |
 | P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已起步 |
 | P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | BaseApp dbid 路由与 LoginApp username auth 路由已接入；single-dbapp fast path 保留 |
 | P15.1-D4 | DBApp 端 request version 校验 + idempotency cache + request retry on death | version 校验与 completed ack idempotency cache 已接入；death retry 未完成 |

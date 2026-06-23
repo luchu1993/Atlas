@@ -171,6 +171,7 @@ TEST_F(XmlDatabaseTest, PutNewEntityWithExplicitDbidAndGet) {
                 [&](PutResult r) { duplicate = std::move(r); });
   EXPECT_FALSE(duplicate.success);
   EXPECT_EQ(duplicate.dbid, kDbid);
+  EXPECT_EQ(duplicate.error_kind, DatabaseErrorKind::kDuplicateDbid);
 
   GetResult after_duplicate;
   db_.GetEntity(kDbid, 1, [&](GetResult r) { after_duplicate = std::move(r); });
