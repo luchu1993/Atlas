@@ -76,7 +76,38 @@ jobs:
       - name: Build
         env:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
-        run: cmake --build build/debug --config Debug --parallel 2
+        shell: bash
+        run: |
+          set +e
+          cmake --build build/debug --config Debug --parallel 2 2>&1 | tee build-test.log
+          status=${PIPESTATUS[0]}
+          if [[ "$status" -ne 0 ]]; then
+            error_regex='(^FAILED:| error:|fatal error:|undefined reference|collect2:|ld:|ninja:|CMake Error|No such file|Killed)'
+            report=build-test-failure.txt
+            if grep -nEi "$error_regex" build-test.log > "$report.matches"; then
+              : > "$report"
+              while IFS=: read -r line _; do
+                start=$((line > 8 ? line - 8 : 1))
+                end=$((line + 20))
+                sed -n "${start},${end}p" build-test.log >> "$report"
+                echo "..." >> "$report"
+              done < <(head -n 8 "$report.matches")
+            else
+              tail -n 80 build-test.log > "$report"
+            fi
+            {
+              echo "### Linux test build failure"
+              echo '```text'
+              cat "$report"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail_output="$(head -n 120 "$report")"
+            tail_output="${tail_output//'%'/'%25'}"
+            tail_output="${tail_output//$'\r'/'%0D'}"
+            tail_output="${tail_output//$'\n'/'%0A'}"
+            echo "::error title=Linux test build failed::$tail_output"
+            exit "$status"
+          fi
 
       - name: sccache stats
         env:
