@@ -2405,9 +2405,8 @@ auto BaseApp::RequestSpawnCellOnly(uint16_t type_id, SpaceID space_id, math::Vec
   return true;
 }
 
-auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id,
-                                         math::Vector3 position, math::Vector3 direction,
-                                         bool on_ground) -> EntityID {
+auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id, math::Vector3 position,
+                                         math::Vector3 direction, bool on_ground) -> EntityID {
   const auto& defs = EntityDefs();
   auto* type = defs.FindById(type_id);
   if (!type) {

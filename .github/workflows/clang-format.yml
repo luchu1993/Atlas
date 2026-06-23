@@ -32,11 +32,25 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Install clang-format 19.1.5 via pip
         run: pip install clang-format==19.1.5
 
       - name: Run clang-format check
         run: |
-          find src tests \( -name '*.cc' -o -name '*.cpp' -o -name '*.h' -o -name '*.hpp' \) -print0 \
-            | xargs -0 clang-format --dry-run --Werror
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          if [ -z "$base" ] || echo "$base" | grep -Eq '^0+$'; then
+            base="$(git rev-list --max-parents=0 HEAD)"
+          fi
+          output="$(git clang-format --diff "$base" "${{ github.sha }}" -- src tests)"
+          echo "$output"
+          if ! echo "$output" | grep -Eq "clang-format did not modify any files|no modified files to format"; then
+            echo "::error::clang-format would modify changed lines"
+            exit 1
+          fi
