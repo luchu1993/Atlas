@@ -590,12 +590,13 @@ class Session {
                    static_cast<int>(movement::kMaxInputDtMs)));
     frame.move_z = 127;
 
-    const uint32_t phase = (frame.seq / 30u + static_cast<uint32_t>(id_)) % 4u;
+    const uint32_t phase_offset = static_cast<uint32_t>(id_ % std::size_t{4});
+    const uint32_t phase = (frame.seq / 30u + phase_offset) % 4u;
     frame.view_yaw = static_cast<uint16_t>(phase * 16384u);
 
     const int redundant = std::clamp(opts_.movement_input_redundant_frames, 1, 3);
-    const std::size_t history_count =
-        std::min<std::size_t>(movement_input_history_.size(), redundant - 1);
+    const std::size_t redundant_history = static_cast<std::size_t>(redundant - 1);
+    const std::size_t history_count = std::min(movement_input_history_.size(), redundant_history);
     msg.frames.reserve(history_count + 1);
     const auto first = movement_input_history_.end() - static_cast<std::ptrdiff_t>(history_count);
     msg.frames.insert(msg.frames.end(), first, movement_input_history_.end());
