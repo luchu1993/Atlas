@@ -115,7 +115,7 @@ TEST(CrossCellRpc, GhostSendCellRpcReachesRealsDispatcher) {
 
   Host shooter("shooter");
   Host target("target");
-  auto shooter_addr = shooter.StartServer();
+  shooter.StartServer();
   auto target_addr = target.StartServer();
 
   shooter.WireProviderWithDispatch();
