@@ -149,6 +149,29 @@ TEST_F(XmlDatabaseTest, PutNewEntityAndGet) {
   EXPECT_FALSE(get_result.checked_out_by.has_value());
 }
 
+TEST_F(XmlDatabaseTest, PutNewEntityWithExplicitDbidAndGet) {
+  constexpr DatabaseID kDbid = 5000;
+  auto blob = make_blob("explicit");
+
+  PutResult put_result;
+  db_.PutEntity(kDbid, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, blob, "explicit_hero",
+                [&](PutResult r) { put_result = r; });
+
+  ASSERT_TRUE(put_result.success);
+  EXPECT_EQ(put_result.dbid, kDbid);
+
+  GetResult get_result;
+  db_.GetEntity(kDbid, 1, [&](GetResult r) { get_result = std::move(r); });
+  ASSERT_TRUE(get_result.success);
+  EXPECT_EQ(get_result.data.blob, blob);
+
+  PutResult auto_result;
+  db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew, make_blob("auto"), "",
+                [&](PutResult r) { auto_result = r; });
+  ASSERT_TRUE(auto_result.success);
+  EXPECT_GT(auto_result.dbid, kDbid);
+}
+
 // ============================================================================
 // put (update) → get
 // ============================================================================
@@ -237,6 +260,24 @@ TEST_F(XmlDatabaseTest, LookupByNameReturnsStoredPasswordHash) {
   ASSERT_TRUE(lookup.found);
   EXPECT_EQ(lookup.dbid, put.dbid);
   EXPECT_EQ(lookup.password_hash, "pw_hash_123");
+}
+
+TEST_F(XmlDatabaseTest, PutEntityWithPasswordUsesExplicitDbid) {
+  constexpr DatabaseID kDbid = 6000;
+
+  PutResult put;
+  db_.PutEntityWithPassword(kDbid, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid,
+                            make_blob("acct"), "explicit_pw", "pw_hash_456",
+                            [&](PutResult r) { put = std::move(r); });
+
+  ASSERT_TRUE(put.success);
+  EXPECT_EQ(put.dbid, kDbid);
+
+  LookupResult lookup;
+  db_.LookupByName(1, "explicit_pw", [&](LookupResult r) { lookup = std::move(r); });
+  ASSERT_TRUE(lookup.found);
+  EXPECT_EQ(lookup.dbid, kDbid);
+  EXPECT_EQ(lookup.password_hash, "pw_hash_456");
 }
 
 TEST_F(XmlDatabaseTest, PasswordHashPersistsAcrossRestart) {

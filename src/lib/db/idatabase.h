@@ -36,8 +36,8 @@ struct DatabaseConfig {
 
 enum class WriteFlags : uint8_t {
   kNone = 0,
-  kCreateNew = 1 << 0,     // new entity, dbid=0, DB assigns ID
-  kExplicitDbid = 1 << 1,  // use specified dbid
+  kCreateNew = 1 << 0,     // new entity; DB assigns ID unless kExplicitDbid is set
+  kExplicitDbid = 1 << 1,  // use specified dbid for create/update
   kLogOff = 1 << 2,        // entity offline, clear checkout record
   kDelete = 1 << 3,        // delete from database
   kAutoLoadOn = 1 << 4,    // mark as auto-load

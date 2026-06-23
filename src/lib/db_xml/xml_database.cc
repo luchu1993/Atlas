@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <format>
 #include <fstream>
+#include <limits>
 #include <string_view>
 
 #include "foundation/log.h"
@@ -114,7 +115,13 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
   }
 
   if (HasFlag(flags, WriteFlags::kCreateNew) || dbid == kInvalidDBID) {
-    dbid = next_dbid_++;
+    if (HasFlag(flags, WriteFlags::kExplicitDbid) && dbid != kInvalidDBID) {
+      if (dbid >= next_dbid_ && dbid < std::numeric_limits<DatabaseID>::max()) {
+        next_dbid_ = dbid + 1;
+      }
+    } else {
+      dbid = next_dbid_++;
+    }
     MarkMetaDirty();
   }
 
@@ -158,7 +165,13 @@ void XmlDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Write
   }
 
   if (HasFlag(flags, WriteFlags::kCreateNew) || dbid == kInvalidDBID) {
-    dbid = next_dbid_++;
+    if (HasFlag(flags, WriteFlags::kExplicitDbid) && dbid != kInvalidDBID) {
+      if (dbid >= next_dbid_ && dbid < std::numeric_limits<DatabaseID>::max()) {
+        next_dbid_ = dbid + 1;
+      }
+    } else {
+      dbid = next_dbid_++;
+    }
     MarkMetaDirty();
   }
 

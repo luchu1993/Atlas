@@ -16,6 +16,7 @@
 #include "dbappmgr/dbappmgr_messages.h"
 #include "loginapp/loginapp.h"
 #include "serialization/binary_stream.h"
+#include "server/db_shard_routing.h"
 #include "test_null_channel.h"
 
 namespace atlas {
@@ -542,9 +543,43 @@ class FakeDatabase final : public IDatabase {
   Result<void> Startup(const DatabaseConfig&, const EntityDefRegistry&) override { return {}; }
   void Shutdown() override {}
 
-  void PutEntity(DatabaseID, uint16_t, WriteFlags, std::span<const std::byte>, const std::string&,
-                 std::function<void(PutResult)>) override {
-    ADD_FAILURE() << "PutEntity should not be called in this test";
+  void PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags, std::span<const std::byte>,
+                 const std::string& identifier, std::function<void(PutResult)> callback) override {
+    ++put_entity_calls;
+    last_put_dbid = dbid;
+    last_put_type_id = type_id;
+    last_put_flags = flags;
+    last_put_identifier = identifier;
+    if (!complete_put_immediately) {
+      put_callback = std::move(callback);
+      return;
+    }
+    PutResult result;
+    result.success = put_success;
+    result.dbid = dbid != kInvalidDBID ? dbid : fallback_put_dbid;
+    result.error = put_error;
+    callback(std::move(result));
+  }
+
+  void PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
+                             std::span<const std::byte>, const std::string& identifier,
+                             const std::string& password_hash,
+                             std::function<void(PutResult)> callback) override {
+    ++put_entity_with_password_calls;
+    last_put_dbid = dbid;
+    last_put_type_id = type_id;
+    last_put_flags = flags;
+    last_put_identifier = identifier;
+    last_password_hash = password_hash;
+    if (!complete_put_immediately) {
+      put_callback = std::move(callback);
+      return;
+    }
+    PutResult result;
+    result.success = put_success;
+    result.dbid = dbid != kInvalidDBID ? dbid : fallback_put_dbid;
+    result.error = put_error;
+    callback(std::move(result));
   }
 
   void GetEntity(DatabaseID, uint16_t, std::function<void(GetResult)>) override {
@@ -555,8 +590,17 @@ class FakeDatabase final : public IDatabase {
     ADD_FAILURE() << "DelEntity should not be called in this test";
   }
 
-  void LookupByName(uint16_t, const std::string&, std::function<void(LookupResult)>) override {
-    ADD_FAILURE() << "LookupByName should not be called in this test";
+  void LookupByName(uint16_t type_id, const std::string& identifier,
+                    std::function<void(LookupResult)> callback) override {
+    ++lookup_by_name_calls;
+    last_lookup_type_id = type_id;
+    last_lookup_identifier = identifier;
+    LookupResult result;
+    result.found = lookup_found;
+    result.dbid = lookup_dbid;
+    result.password_hash = lookup_password_hash;
+    result.error = lookup_error;
+    callback(std::move(result));
   }
 
   void CheckoutEntity(DatabaseID, uint16_t, const CheckoutInfo&,
@@ -597,6 +641,25 @@ class FakeDatabase final : public IDatabase {
   void ProcessResults() override {}
 
   std::function<void(GetResult)> checkout_callback;
+  int put_entity_calls{0};
+  int put_entity_with_password_calls{0};
+  DatabaseID last_put_dbid{kInvalidDBID};
+  uint16_t last_put_type_id{0};
+  WriteFlags last_put_flags{WriteFlags::kNone};
+  std::string last_put_identifier;
+  std::string last_password_hash;
+  bool complete_put_immediately{true};
+  std::function<void(PutResult)> put_callback;
+  bool put_success{true};
+  DatabaseID fallback_put_dbid{42};
+  std::string put_error;
+  int lookup_by_name_calls{0};
+  uint16_t last_lookup_type_id{0};
+  std::string last_lookup_identifier;
+  bool lookup_found{false};
+  DatabaseID lookup_dbid{kInvalidDBID};
+  std::string lookup_password_hash;
+  std::string lookup_error;
   int clear_checkout_calls{0};
   int mark_checkout_cleared_calls{0};
   std::optional<std::pair<DatabaseID, uint16_t>> last_cleared;
@@ -623,6 +686,10 @@ class DBAppRollbackTest : public ::testing::Test {
 
   void write_entity(Channel* ch, const dbapp::WriteEntity& write) {
     app_.OnWriteEntity(Address("127.0.0.1", 30001), ch, write);
+  }
+
+  void auth_login(Channel* ch, const login::AuthLogin& auth) {
+    app_.OnAuthLogin(Address("127.0.0.1", 30001), ch, auth);
   }
 
   void checkout_entity(Channel* ch, const dbapp::CheckoutEntity& checkout) {
@@ -667,6 +734,10 @@ class DBAppRollbackTest : public ::testing::Test {
   auto dbapp_id() const -> uint32_t { return app_.dbapp_id_; }
   auto shard_table_version() const -> uint32_t { return app_.shard_table_version_; }
   void set_shard_table_version(uint32_t version) { app_.shard_table_version_ = version; }
+  void set_auto_create_accounts(bool enabled, uint16_t account_type_id) {
+    app_.auto_create_accounts_ = enabled;
+    app_.account_type_id_ = account_type_id;
+  }
   auto shard_count() const -> std::size_t { return app_.shard_table_.size(); }
   auto shard_app_id(std::size_t index) const -> uint32_t {
     return app_.shard_table_.at(index).dbapp_id;
@@ -769,6 +840,62 @@ TEST_F(DBAppRollbackTest, ShardTableUpdateIgnoresStaleVersion) {
   EXPECT_EQ(shard_table_version(), 4u);
   ASSERT_EQ(shard_count(), 1u);
   EXPECT_EQ(shard_app_id(0), 7u);
+}
+
+TEST_F(DBAppRollbackTest, WriteEntityCreateAllocatesExplicitDbidFromOwnedShard) {
+  db().complete_put_immediately = false;
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 1;
+  ack.entries.push_back(dbappmgr::ShardEntry{1000, 2000, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  dbapp::WriteEntity write;
+  write.request_id = 77;
+  write.type_id = 9;
+  write.flags = WriteFlags::kCreateNew;
+  write.shard_table_version = 1;
+  write_entity(test_support::FakeChannel(0x1505), write);
+
+  EXPECT_EQ(db().put_entity_calls, 1);
+  EXPECT_EQ(db().last_put_dbid, 1000);
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
+}
+
+TEST_F(DBAppRollbackTest, AuthLoginAutoCreateAllocatesDbidFromUsernameShard) {
+  db().complete_put_immediately = false;
+  set_auto_create_accounts(true, 1);
+  const std::string username = "ranged_user";
+  const DatabaseID route_key = DbShardRouteKey(username);
+  const DatabaseID low = route_key;
+  const DatabaseID high = route_key < std::numeric_limits<DatabaseID>::max() - 1
+                              ? route_key + 2
+                              : std::numeric_limits<DatabaseID>::max();
+
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 1;
+  ack.entries.push_back(dbappmgr::ShardEntry{low, high, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  login::AuthLogin auth;
+  auth.request_id = 88;
+  auth.username = username;
+  auth.password_hash = "pw_hash";
+  auth.auto_create = true;
+  auth_login(test_support::FakeChannel(0x1506), auth);
+
+  EXPECT_EQ(db().lookup_by_name_calls, 1);
+  EXPECT_EQ(db().last_lookup_identifier, username);
+  EXPECT_EQ(db().put_entity_with_password_calls, 1);
+  EXPECT_EQ(db().last_put_dbid, low);
+  EXPECT_EQ(db().last_put_identifier, username);
+  EXPECT_EQ(db().last_password_hash, "pw_hash");
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
 }
 
 TEST_F(DBAppRollbackTest, WriteEntityRejectsStaleShardTableVersion) {

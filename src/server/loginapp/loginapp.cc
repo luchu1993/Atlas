@@ -1,8 +1,6 @@
 #include "loginapp.h"
 
-#include <algorithm>
 #include <format>
-#include <limits>
 
 #include "coro/rpc_call.h"
 #include "coro/scope_guard.h"
@@ -10,23 +8,10 @@
 #include "network/channel.h"
 #include "network/machined_types.h"
 #include "network/reliable_udp.h"
+#include "server/db_shard_routing.h"
 #include "server/watcher.h"
 
 namespace atlas {
-
-namespace {
-
-auto UsernameRouteDbid(std::string_view username) -> DatabaseID {
-  uint64_t hash = 14695981039346656037ull;
-  for (unsigned char c : username) {
-    hash ^= c;
-    hash *= 1099511628211ull;
-  }
-  const uint64_t kMax = static_cast<uint64_t>(std::numeric_limits<DatabaseID>::max());
-  return static_cast<DatabaseID>(1 + (hash % (kMax - 1)));
-}
-
-}  // namespace
 
 auto LoginApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
@@ -306,7 +291,7 @@ void LoginApp::ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::Shar
 
 auto LoginApp::ResolveAuthDbAppChannel(std::string_view username) -> Channel* {
   if (!dbapp_shard_table_.empty()) {
-    if (const auto* shard = FindDbAppShard(UsernameRouteDbid(username))) {
+    if (const auto* shard = FindDbAppShard(DbShardRouteKey(username))) {
       return ConnectDbAppChannel(shard->dbapp_addr);
     }
     return nullptr;

@@ -10,6 +10,7 @@
 #include "network/channel.h"
 #include "network/machined_types.h"
 #include "network/reliable_udp.h"
+#include "server/db_shard_routing.h"
 #include "server/watcher.h"
 
 namespace atlas {
@@ -358,6 +359,7 @@ void DBApp::OnRegisterDbAppAck(const Address& src, Channel* ch,
   dbapp_id_ = msg.dbapp_id;
   shard_table_version_ = msg.shard_table_version;
   shard_table_ = msg.entries;
+  PruneCreateDbidAllocators();
   last_dbappmgr_load_report_at_ = {};
   ReportLoadToDbAppMgr();
   ATLAS_LOG_INFO("DBApp: registered with DBAppMgr as id={} shard_version={} shards={}", dbapp_id_,
@@ -375,6 +377,7 @@ void DBApp::OnShardTableUpdate(const Address& src, Channel* ch,
 
   shard_table_version_ = msg.version;
   shard_table_ = msg.entries;
+  PruneCreateDbidAllocators();
   ATLAS_LOG_INFO("DBApp: shard table updated version={} shards={}", shard_table_version_,
                  shard_table_.size());
 }
@@ -428,6 +431,55 @@ auto DBApp::AcceptsShardTableVersion(uint32_t version) const -> bool {
   return version == 0 || shard_table_version_ == 0 || version == shard_table_version_;
 }
 
+auto DBApp::HasAuthoritativeShardTable() const -> bool {
+  return dbapp_id_ != 0 && !shard_table_.empty();
+}
+
+auto DBApp::FindShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry* {
+  for (const auto& entry : shard_table_) {
+    if (entry.low_dbid <= dbid && dbid < entry.high_dbid) return &entry;
+  }
+  return nullptr;
+}
+
+auto DBApp::AllocateCreateDbid(const dbappmgr::ShardEntry& shard) -> DatabaseID {
+  if (shard.dbapp_id != dbapp_id_ || shard.is_retiring) return kInvalidDBID;
+  auto& next = next_create_dbids_[shard.low_dbid];
+  if (next < shard.low_dbid) next = shard.low_dbid;
+  if (next >= shard.high_dbid) return kInvalidDBID;
+  return next++;
+}
+
+auto DBApp::AllocateCreateDbidForRoute(DatabaseID route_dbid) -> DatabaseID {
+  const auto* shard = FindShard(route_dbid);
+  if (shard == nullptr) return kInvalidDBID;
+  return AllocateCreateDbid(*shard);
+}
+
+auto DBApp::AllocateCreateDbidFromOwnedShard() -> DatabaseID {
+  for (const auto& entry : shard_table_) {
+    if (entry.dbapp_id != dbapp_id_ || entry.is_retiring) continue;
+    if (DatabaseID dbid = AllocateCreateDbid(entry); dbid != kInvalidDBID) return dbid;
+  }
+  return kInvalidDBID;
+}
+
+void DBApp::PruneCreateDbidAllocators() {
+  for (auto it = next_create_dbids_.begin(); it != next_create_dbids_.end();) {
+    const DatabaseID low = it->first;
+    const auto shard_it =
+        std::find_if(shard_table_.begin(), shard_table_.end(), [this, low](const auto& entry) {
+          return entry.low_dbid == low && entry.dbapp_id == dbapp_id_ && !entry.is_retiring;
+        });
+    if (shard_it == shard_table_.end()) {
+      it = next_create_dbids_.erase(it);
+      continue;
+    }
+    if (it->second < shard_it->low_dbid) it->second = shard_it->low_dbid;
+    ++it;
+  }
+}
+
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {
   if (ch == nullptr) return;
 
@@ -472,8 +524,21 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
   // Checkin path: LogOff flag means entity is going offline - clear checkout
   if (HasFlag(msg.flags, WriteFlags::kLogOff)) checkout_mgr_.Checkin(msg.dbid, msg.type_id);
 
+  DatabaseID write_dbid = msg.dbid;
+  WriteFlags write_flags = msg.flags;
+  if (HasFlag(write_flags, WriteFlags::kCreateNew) &&
+      !HasFlag(write_flags, WriteFlags::kExplicitDbid) && write_dbid == kInvalidDBID &&
+      HasAuthoritativeShardTable()) {
+    write_dbid = AllocateCreateDbidFromOwnedShard();
+    if (write_dbid == kInvalidDBID) {
+      send_ack(PutResult{false, kInvalidDBID, "no_dbid_range"});
+      return;
+    }
+    write_flags = write_flags | WriteFlags::kExplicitDbid;
+  }
+
   pending_write_requests_.insert(key);
-  database_->PutEntity(msg.dbid, msg.type_id, msg.flags, msg.blob, msg.identifier,
+  database_->PutEntity(write_dbid, msg.type_id, write_flags, msg.blob, msg.identifier,
                        std::move(send_ack));
 }
 
@@ -777,8 +842,23 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
             data.type_id = account_type_id_;
             data.identifier = username;
             data.blob = {};
+            DatabaseID create_dbid = kInvalidDBID;
+            WriteFlags create_flags = WriteFlags::kCreateNew;
+            if (HasAuthoritativeShardTable()) {
+              create_dbid = AllocateCreateDbidForRoute(DbShardRouteKey(username));
+              if (create_dbid == kInvalidDBID) {
+                ATLAS_LOG_ERROR("DBApp: no owned shard range for account '{}'", username);
+                reply.success = false;
+                reply.status = login::LoginStatus::kInternalError;
+                if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
+                  (void)reply_ch->SendMessage(reply);
+                }
+                return;
+              }
+              create_flags = create_flags | WriteFlags::kExplicitDbid;
+            }
             database_->PutEntityWithPassword(
-                kInvalidDBID, account_type_id_, WriteFlags::kCreateNew, data.blob, data.identifier,
+                create_dbid, account_type_id_, create_flags, data.blob, data.identifier,
                 password_hash,
                 [this, reply_addr, request_id, type_id = account_type_id_](PutResult put) {
                   login::AuthLoginResult r;

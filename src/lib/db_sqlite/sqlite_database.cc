@@ -105,13 +105,20 @@ void SqliteDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags fla
   }
 
   if (HasFlag(flags, WriteFlags::kCreateNew) || dbid == kInvalidDBID) {
+    const bool kUseExplicitDbid = HasFlag(flags, WriteFlags::kExplicitDbid) && dbid != kInvalidDBID;
     const auto kNowMs = UnixTimeMs();
-    auto stmt_result = Prepare(
-        "INSERT INTO entities "
-        "(type_id, blob, identifier, password_hash, auto_load, checked_out, "
-        "checkout_ip, checkout_port, checkout_app_id, checkout_eid, "
-        "created_at_ms, updated_at_ms) "
-        "VALUES (?, ?, ?, NULL, ?, 0, 0, 0, 0, 0, ?, ?)");
+    auto stmt_result =
+        Prepare(kUseExplicitDbid
+                    ? "INSERT INTO entities "
+                      "(dbid, type_id, blob, identifier, password_hash, auto_load, checked_out, "
+                      "checkout_ip, checkout_port, checkout_app_id, checkout_eid, "
+                      "created_at_ms, updated_at_ms) "
+                      "VALUES (?, ?, ?, ?, NULL, ?, 0, 0, 0, 0, 0, ?, ?)"
+                    : "INSERT INTO entities "
+                      "(type_id, blob, identifier, password_hash, auto_load, checked_out, "
+                      "checkout_ip, checkout_port, checkout_app_id, checkout_eid, "
+                      "created_at_ms, updated_at_ms) "
+                      "VALUES (?, ?, ?, NULL, ?, 0, 0, 0, 0, 0, ?, ?)");
     if (!stmt_result) {
       result.error = std::string(stmt_result.Error().Message());
       FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -119,21 +126,27 @@ void SqliteDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags fla
     }
 
     auto stmt = std::move(*stmt_result);
-    auto rc = sqlite3_bind_int(stmt.Get(), 1, static_cast<int>(type_id));
+    int bind_index = 1;
+    auto rc = SQLITE_OK;
+    if (kUseExplicitDbid) {
+      rc = sqlite3_bind_int64(stmt.Get(), bind_index++, dbid);
+    }
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int(stmt.Get(), bind_index++, static_cast<int>(type_id));
     if (rc == SQLITE_OK) {
-      auto bind_result = BindBlob(stmt, 2, blob);
+      auto bind_result = BindBlob(stmt, bind_index++, blob);
       rc = bind_result ? SQLITE_OK : 1;
       if (!bind_result) result.error = std::string(bind_result.Error().Message());
     }
     if (rc == SQLITE_OK) {
-      auto bind_result = BindIdentifier(stmt, 3, identifier);
+      auto bind_result = BindIdentifier(stmt, bind_index++, identifier);
       rc = bind_result ? SQLITE_OK : 1;
       if (!bind_result) result.error = std::string(bind_result.Error().Message());
     }
     if (rc == SQLITE_OK)
-      rc = sqlite3_bind_int(stmt.Get(), 4, HasFlag(flags, WriteFlags::kAutoLoadOn) ? 1 : 0);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), 5, kNowMs);
-    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), 6, kNowMs);
+      rc = sqlite3_bind_int(stmt.Get(), bind_index++,
+                            HasFlag(flags, WriteFlags::kAutoLoadOn) ? 1 : 0);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), bind_index++, kNowMs);
+    if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), bind_index++, kNowMs);
 
     if (rc != SQLITE_OK) {
       if (result.error.empty())
@@ -150,7 +163,7 @@ void SqliteDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags fla
     }
 
     result.success = true;
-    result.dbid = static_cast<DatabaseID>(sqlite3_last_insert_rowid(db_));
+    result.dbid = kUseExplicitDbid ? dbid : static_cast<DatabaseID>(sqlite3_last_insert_rowid(db_));
     FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
     return;
   }
@@ -363,13 +376,19 @@ void SqliteDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Wr
     return;
   }
 
+  const bool kUseExplicitDbid = HasFlag(flags, WriteFlags::kExplicitDbid) && dbid != kInvalidDBID;
   const auto kNowMs = UnixTimeMs();
   auto stmt_result = Prepare(
-      "INSERT INTO entities "
-      "(type_id, blob, identifier, password_hash, auto_load, checked_out, "
-      "checkout_ip, checkout_port, checkout_app_id, checkout_eid, "
-      "created_at_ms, updated_at_ms) "
-      "VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?)");
+      kUseExplicitDbid ? "INSERT INTO entities "
+                         "(dbid, type_id, blob, identifier, password_hash, auto_load, checked_out, "
+                         "checkout_ip, checkout_port, checkout_app_id, checkout_eid, "
+                         "created_at_ms, updated_at_ms) "
+                         "VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?)"
+                       : "INSERT INTO entities "
+                         "(type_id, blob, identifier, password_hash, auto_load, checked_out, "
+                         "checkout_ip, checkout_port, checkout_app_id, checkout_eid, "
+                         "created_at_ms, updated_at_ms) "
+                         "VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, ?, ?)");
   if (!stmt_result) {
     result.error = std::string(stmt_result.Error().Message());
     FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
@@ -377,27 +396,33 @@ void SqliteDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Wr
   }
 
   auto stmt = std::move(*stmt_result);
-  auto rc = sqlite3_bind_int(stmt.Get(), 1, static_cast<int>(type_id));
+  int bind_index = 1;
+  auto rc = SQLITE_OK;
+  if (kUseExplicitDbid) {
+    rc = sqlite3_bind_int64(stmt.Get(), bind_index++, dbid);
+  }
+  if (rc == SQLITE_OK) rc = sqlite3_bind_int(stmt.Get(), bind_index++, static_cast<int>(type_id));
   if (rc == SQLITE_OK) {
-    auto bind_result = BindBlob(stmt, 2, blob);
+    auto bind_result = BindBlob(stmt, bind_index++, blob);
     rc = bind_result ? SQLITE_OK : 1;
     if (!bind_result) result.error = std::string(bind_result.Error().Message());
   }
   if (rc == SQLITE_OK) {
-    auto bind_result = BindIdentifier(stmt, 3, identifier);
+    auto bind_result = BindIdentifier(stmt, bind_index++, identifier);
     rc = bind_result ? SQLITE_OK : 1;
     if (!bind_result) result.error = std::string(bind_result.Error().Message());
   }
   if (rc == SQLITE_OK) {
     if (password_hash.empty())
-      rc = sqlite3_bind_null(stmt.Get(), 4);
+      rc = sqlite3_bind_null(stmt.Get(), bind_index++);
     else
-      rc = sqlite3_bind_text(stmt.Get(), 4, password_hash.c_str(), -1, SQLITE_TRANSIENT);
+      rc = sqlite3_bind_text(stmt.Get(), bind_index++, password_hash.c_str(), -1, SQLITE_TRANSIENT);
   }
   if (rc == SQLITE_OK)
-    rc = sqlite3_bind_int(stmt.Get(), 5, HasFlag(flags, WriteFlags::kAutoLoadOn) ? 1 : 0);
-  if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), 6, kNowMs);
-  if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), 7, kNowMs);
+    rc =
+        sqlite3_bind_int(stmt.Get(), bind_index++, HasFlag(flags, WriteFlags::kAutoLoadOn) ? 1 : 0);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), bind_index++, kNowMs);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), bind_index++, kNowMs);
 
   if (rc != SQLITE_OK) {
     if (result.error.empty())
@@ -415,7 +440,7 @@ void SqliteDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Wr
   }
 
   result.success = true;
-  result.dbid = static_cast<DatabaseID>(sqlite3_last_insert_rowid(db_));
+  result.dbid = kUseExplicitDbid ? dbid : static_cast<DatabaseID>(sqlite3_last_insert_rowid(db_));
   FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 

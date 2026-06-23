@@ -83,6 +83,12 @@ class DBApp : public ManagerApp {
       -> bool;
   void RememberWriteAck(const RequestCacheKey& key, const dbapp::WriteEntityAck& ack);
   void RememberCheckoutAck(const RequestCacheKey& key, const dbapp::CheckoutEntityAck& ack);
+  [[nodiscard]] auto HasAuthoritativeShardTable() const -> bool;
+  [[nodiscard]] auto FindShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry*;
+  [[nodiscard]] auto AllocateCreateDbid(const dbappmgr::ShardEntry& shard) -> DatabaseID;
+  [[nodiscard]] auto AllocateCreateDbidForRoute(DatabaseID route_dbid) -> DatabaseID;
+  [[nodiscard]] auto AllocateCreateDbidFromOwnedShard() -> DatabaseID;
+  void PruneCreateDbidAllocators();
 
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;
@@ -112,6 +118,7 @@ class DBApp : public ManagerApp {
   uint32_t dbapp_id_{0};
   uint32_t shard_table_version_{0};
   std::vector<dbappmgr::ShardEntry> shard_table_;
+  std::unordered_map<DatabaseID, DatabaseID> next_create_dbids_;
   TimePoint last_dbappmgr_load_report_at_{};
 
   LatencyHistogram checkout_reply_latency_;

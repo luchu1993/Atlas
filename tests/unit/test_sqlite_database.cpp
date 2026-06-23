@@ -117,6 +117,28 @@ TEST_F(SqliteDatabaseTest, PutNewEntityAndGet) {
   EXPECT_EQ(get.data.identifier, "alice");
 }
 
+TEST_F(SqliteDatabaseTest, PutNewEntityWithExplicitDbidAndGet) {
+  constexpr DatabaseID kDbid = 5000;
+
+  PutResult put;
+  db_.PutEntity(kDbid, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("explicit"),
+                "alice", [&](PutResult r) { put = std::move(r); });
+
+  ASSERT_TRUE(put.success) << put.error;
+  EXPECT_EQ(put.dbid, kDbid);
+
+  GetResult get;
+  db_.GetEntity(kDbid, 1, [&](GetResult r) { get = std::move(r); });
+  ASSERT_TRUE(get.success);
+  EXPECT_EQ(get.data.blob, make_blob("explicit"));
+
+  PutResult auto_put;
+  db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew, make_blob("auto"), "bob",
+                [&](PutResult r) { auto_put = std::move(r); });
+  ASSERT_TRUE(auto_put.success);
+  EXPECT_GT(auto_put.dbid, kDbid);
+}
+
 TEST_F(SqliteDatabaseTest, CheckoutAndClear) {
   PutResult put;
   db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew, make_blob("data"), "bob",
@@ -174,6 +196,24 @@ TEST_F(SqliteDatabaseTest, LookupByNameReturnsStoredPasswordHash) {
   ASSERT_TRUE(lookup.found);
   EXPECT_EQ(lookup.dbid, put.dbid);
   EXPECT_EQ(lookup.password_hash, "pw_hash_123");
+}
+
+TEST_F(SqliteDatabaseTest, PutEntityWithPasswordUsesExplicitDbid) {
+  constexpr DatabaseID kDbid = 6000;
+
+  PutResult put;
+  db_.PutEntityWithPassword(kDbid, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid,
+                            make_blob("acct"), "eve", "pw_hash_456",
+                            [&](PutResult r) { put = std::move(r); });
+
+  ASSERT_TRUE(put.success) << put.error;
+  EXPECT_EQ(put.dbid, kDbid);
+
+  LookupResult lookup;
+  db_.LookupByName(1, "eve", [&](LookupResult r) { lookup = std::move(r); });
+  ASSERT_TRUE(lookup.found);
+  EXPECT_EQ(lookup.dbid, kDbid);
+  EXPECT_EQ(lookup.password_hash, "pw_hash_456");
 }
 
 TEST_F(SqliteDatabaseTest, CheckoutByNameAndClearCheckoutsForAddress) {
