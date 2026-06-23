@@ -13,6 +13,7 @@
 #include "dbapp/dbapp.h"
 #include "dbappmgr/dbappmgr_messages.h"
 #include "loginapp/loginapp.h"
+#include "serialization/binary_stream.h"
 #include "test_null_channel.h"
 
 namespace atlas {
@@ -25,6 +26,7 @@ class CapturingChannel final : public Channel {
 
   [[nodiscard]] auto Fd() const -> FdHandle override { return kInvalidFd; }
   [[nodiscard]] auto send_count() const -> std::size_t { return sends_.size(); }
+  [[nodiscard]] auto Sends() const -> const std::vector<std::vector<std::byte>>& { return sends_; }
 
  protected:
   [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<std::size_t> override {
@@ -35,6 +37,31 @@ class CapturingChannel final : public Channel {
  private:
   std::vector<std::vector<std::byte>> sends_;
 };
+
+template <typename Msg>
+auto DecodeSentMessages(const CapturingChannel& ch) -> std::vector<Msg> {
+  std::vector<Msg> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != Msg::Descriptor().id) continue;
+
+    if (Msg::Descriptor().length_style == MessageLengthStyle::kVariable) {
+      const auto len = reader.ReadPackedInt();
+      if (!len) continue;
+      const auto payload = reader.ReadBytes(*len);
+      if (!payload) continue;
+      BinaryReader msg_reader(*payload);
+      auto msg = Msg::Deserialize(msg_reader);
+      if (msg.HasValue()) out.push_back(std::move(*msg));
+      continue;
+    }
+
+    auto msg = Msg::Deserialize(reader);
+    if (msg.HasValue()) out.push_back(std::move(*msg));
+  }
+  return out;
+}
 
 }  // namespace
 
@@ -415,6 +442,9 @@ TEST_F(BaseAppRollbackTest, WriteToDbUsesShardChannelForKnownDbid) {
 
   EXPECT_EQ(shard.send_count(), 1u);
   EXPECT_EQ(legacy.send_count(), 0u);
+  const auto writes = DecodeSentMessages<dbapp::WriteEntity>(shard);
+  ASSERT_EQ(writes.size(), 1u);
+  EXPECT_EQ(writes[0].shard_table_version, 7u);
 }
 
 class FakeDatabase final : public IDatabase {
@@ -501,6 +531,14 @@ class DBAppRollbackTest : public ::testing::Test {
     app_.OnCheckoutEntity(Address("127.0.0.1", 30001), reinterpret_cast<Channel*>(1), checkout);
   }
 
+  void write_entity(Channel* ch, const dbapp::WriteEntity& write) {
+    app_.OnWriteEntity(Address("127.0.0.1", 30001), ch, write);
+  }
+
+  void checkout_entity(Channel* ch, const dbapp::CheckoutEntity& checkout) {
+    app_.OnCheckoutEntity(Address("127.0.0.1", 30001), ch, checkout);
+  }
+
   void abort_checkout(uint32_t request_id, DatabaseID dbid, uint16_t type_id) {
     dbapp::AbortCheckout abort;
     abort.request_id = request_id;
@@ -538,6 +576,7 @@ class DBAppRollbackTest : public ::testing::Test {
   auto abort_late_total() const -> uint64_t { return app_.abort_checkout_late_hit_total_; }
   auto dbapp_id() const -> uint32_t { return app_.dbapp_id_; }
   auto shard_table_version() const -> uint32_t { return app_.shard_table_version_; }
+  void set_shard_table_version(uint32_t version) { app_.shard_table_version_ = version; }
   auto shard_count() const -> std::size_t { return app_.shard_table_.size(); }
   auto shard_app_id(std::size_t index) const -> uint32_t {
     return app_.shard_table_.at(index).dbapp_id;
@@ -618,6 +657,68 @@ TEST_F(DBAppRollbackTest, ShardTableUpdateReplacesCachedTable) {
   EXPECT_EQ(shard_table_version(), 4u);
   ASSERT_EQ(shard_count(), 2u);
   EXPECT_EQ(shard_app_id(1), 8u);
+}
+
+TEST_F(DBAppRollbackTest, ShardTableUpdateIgnoresStaleVersion) {
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 4;
+  ack.entries.push_back(dbappmgr::ShardEntry{1, 1000, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  dbappmgr::ShardTableUpdate stale;
+  stale.version = 3;
+  stale.entries.push_back(dbappmgr::ShardEntry{1, 1000, 8, Address(0x7F000001u, 24002), false});
+  handle_shard_table_update(stale);
+
+  EXPECT_EQ(shard_table_version(), 4u);
+  ASSERT_EQ(shard_count(), 1u);
+  EXPECT_EQ(shard_app_id(0), 7u);
+}
+
+TEST_F(DBAppRollbackTest, WriteEntityRejectsStaleShardTableVersion) {
+  set_shard_table_version(9);
+  InterfaceTable channel_table;
+  CapturingChannel reply(dispatcher_, channel_table, Address(0x7F000001u, 30001));
+
+  dbapp::WriteEntity msg;
+  msg.request_id = 44;
+  msg.dbid = 777;
+  msg.type_id = 9;
+  msg.shard_table_version = 8;
+  write_entity(&reply, msg);
+
+  const auto acks = DecodeSentMessages<dbapp::WriteEntityAck>(reply);
+  ASSERT_EQ(acks.size(), 1u);
+  EXPECT_EQ(acks[0].request_id, 44u);
+  EXPECT_FALSE(acks[0].success);
+  EXPECT_EQ(acks[0].dbid, 777);
+  EXPECT_EQ(acks[0].current_shard_table_version, 9u);
+  EXPECT_EQ(acks[0].error, std::string(dbapp::kInvalidShardTableError));
+}
+
+TEST_F(DBAppRollbackTest, CheckoutEntityRejectsStaleShardTableVersion) {
+  set_shard_table_version(9);
+  InterfaceTable channel_table;
+  CapturingChannel reply(dispatcher_, channel_table, Address(0x7F000001u, 30001));
+
+  dbapp::CheckoutEntity msg;
+  msg.request_id = 45;
+  msg.dbid = 778;
+  msg.type_id = 9;
+  msg.shard_table_version = 8;
+  checkout_entity(&reply, msg);
+
+  const auto acks = DecodeSentMessages<dbapp::CheckoutEntityAck>(reply);
+  ASSERT_EQ(acks.size(), 1u);
+  EXPECT_EQ(acks[0].request_id, 45u);
+  EXPECT_EQ(acks[0].status, dbapp::CheckoutStatus::kDbError);
+  EXPECT_EQ(acks[0].dbid, 778);
+  EXPECT_EQ(acks[0].current_shard_table_version, 9u);
+  EXPECT_EQ(acks[0].error, std::string(dbapp::kInvalidShardTableError));
+  EXPECT_FALSE(pending_request_contains(45));
+  EXPECT_FALSE(checkout_owner(778, 9).has_value());
 }
 
 }  // namespace atlas

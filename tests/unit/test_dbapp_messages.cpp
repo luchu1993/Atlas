@@ -41,6 +41,7 @@ TEST(DbappMessages, WriteEntityRoundTrip) {
   msg.dbid = kInvalidDBID;
   msg.entity_id = 42;
   msg.request_id = 999;
+  msg.shard_table_version = 17;
   msg.identifier = "hero_test";
   msg.blob = make_blob("blob-payload");
 
@@ -52,6 +53,7 @@ TEST(DbappMessages, WriteEntityRoundTrip) {
   EXPECT_EQ(out->dbid, kInvalidDBID);
   EXPECT_EQ(out->entity_id, 42u);
   EXPECT_EQ(out->request_id, 999u);
+  EXPECT_EQ(out->shard_table_version, 17u);
   EXPECT_EQ(out->identifier, "hero_test");
   EXPECT_EQ(out->blob, msg.blob);
 }
@@ -79,6 +81,7 @@ TEST(DbappMessages, WriteEntityAckSuccess) {
   msg.request_id = 77;
   msg.success = true;
   msg.dbid = 42;
+  msg.current_shard_table_version = 5;
   msg.error = "";
 
   auto out = round_trip(msg);
@@ -86,6 +89,7 @@ TEST(DbappMessages, WriteEntityAckSuccess) {
   EXPECT_EQ(out->request_id, 77u);
   EXPECT_TRUE(out->success);
   EXPECT_EQ(out->dbid, 42);
+  EXPECT_EQ(out->current_shard_table_version, 5u);
   EXPECT_TRUE(out->error.empty());
 }
 
@@ -114,6 +118,7 @@ TEST(DbappMessages, CheckoutEntityByName) {
   msg.identifier = "alice";
   msg.entity_id = 55;
   msg.request_id = 100;
+  msg.shard_table_version = 9;
 
   auto out = round_trip(msg);
   ASSERT_TRUE(out.has_value());
@@ -122,6 +127,7 @@ TEST(DbappMessages, CheckoutEntityByName) {
   EXPECT_EQ(out->identifier, "alice");
   EXPECT_EQ(out->entity_id, 55u);
   EXPECT_EQ(out->request_id, 100u);
+  EXPECT_EQ(out->shard_table_version, 9u);
 }
 
 TEST(DbappMessages, CheckoutEntityByDBID) {
@@ -151,12 +157,14 @@ TEST(DbappMessages, CheckoutEntityAckSuccess) {
   msg.holder_addr = Address(0, 0);
   msg.holder_app_id = 0;
   msg.holder_entity_id = 0;
+  msg.current_shard_table_version = 4;
 
   auto out = round_trip(msg);
   ASSERT_TRUE(out.has_value());
   EXPECT_EQ(out->request_id, 101u);
   EXPECT_EQ(out->status, CheckoutStatus::kSuccess);
   EXPECT_EQ(out->dbid, 42);
+  EXPECT_EQ(out->current_shard_table_version, 4u);
   EXPECT_EQ(out->blob, msg.blob);
 }
 

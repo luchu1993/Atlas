@@ -9,6 +9,7 @@
 #include <map>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 #include "baseapp_messages.h"
@@ -727,6 +728,9 @@ void BaseApp::RegisterInternalHandlers() {
 
   (void)table.RegisterTypedHandler<dbapp::WriteEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::WriteEntityAck& msg) {
+        if (!msg.success && std::string_view(msg.error) == dbapp::kInvalidShardTableError) {
+          RequestDbAppShardTable();
+        }
         auto logoff_it = pending_logoff_writes_.find(msg.request_id);
         if (logoff_it != pending_logoff_writes_.end()) {
           const PendingLogoffWrite kPendingWrite = logoff_it->second;
@@ -818,6 +822,10 @@ void BaseApp::RegisterInternalHandlers() {
 
   (void)table.RegisterTypedHandler<dbapp::CheckoutEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::CheckoutEntityAck& msg) {
+        if (msg.status == dbapp::CheckoutStatus::kDbError &&
+            std::string_view(msg.error) == dbapp::kInvalidShardTableError) {
+          RequestDbAppShardTable();
+        }
         if (auto canceled_it = canceled_login_checkouts_.find(msg.request_id);
             canceled_it != canceled_login_checkouts_.end()) {
           if (msg.status == dbapp::CheckoutStatus::kSuccess && msg.dbid != kInvalidDBID) {
@@ -936,6 +944,7 @@ void BaseApp::OnCreateBaseFromDb(Channel& /*ch*/, const baseapp::CreateBaseFromD
   req.dbid = msg.dbid;
   req.identifier = msg.identifier;
   req.entity_id = ent->EntityId();
+  req.shard_table_version = dbapp_shard_table_version_;
   (void)db_ch->SendMessage(req);
 }
 
@@ -1469,6 +1478,7 @@ void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len
   msg.dbid = ent->Dbid();
   msg.entity_id = entity_id;
   msg.request_id = entity_id;  // echoed in WriteEntityAck
+  msg.shard_table_version = dbapp_shard_table_version_;
   msg.blob.assign(data, data + len);
   (void)db_ch->SendMessage(msg);
 }
@@ -1883,6 +1893,7 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
   co.request_id = kRid;
   co.dbid = kDbid;
   co.type_id = kTypeId;
+  co.shard_table_version = dbapp_shard_table_version_;
   auto send_result = db_ch->SendMessage(co);
   if (!send_result) {
     FailPendingPrepareLogin(kRid, "checkout_send_failed");
@@ -2006,6 +2017,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     msg.dbid = dbid;
     msg.entity_id = entity_id;
     msg.request_id = next_prepare_request_id_++;
+    msg.shard_table_version = dbapp_shard_table_version_;
     msg.blob = std::move(blob);
     if (auto r = db_ch->SendMessage(msg); !r) {
       // Destroy follows immediately; a dropped WriteEntity = silent data loss.
@@ -2118,6 +2130,7 @@ void BaseApp::ContinueLoginAfterForceLogoff(uint32_t force_request_id) {
   co.request_id = new_rid;
   co.dbid = pending.dbid;
   co.type_id = pending.type_id;
+  co.shard_table_version = dbapp_shard_table_version_;
   auto send_result = db_ch->SendMessage(co);
   if (!send_result) {
     pending_logins_.erase(new_rid);

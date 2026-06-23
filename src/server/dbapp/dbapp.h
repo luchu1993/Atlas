@@ -64,6 +64,7 @@ class DBApp : public ManagerApp {
   void RegisterWithDbAppMgr();
   void ReportLoadToDbAppMgr();
   [[nodiscard]] auto CurrentLoadFraction() const -> float;
+  [[nodiscard]] auto AcceptsShardTableVersion(uint32_t version) const -> bool;
 
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;

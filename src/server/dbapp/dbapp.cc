@@ -308,7 +308,7 @@ void DBApp::OnShardTableUpdate(const Address& src, Channel* ch,
                       src.ToString());
     return;
   }
-  if (msg.version == 0 || msg.version == shard_table_version_) return;
+  if (msg.version == 0 || msg.version <= shard_table_version_) return;
 
   shard_table_version_ = msg.version;
   shard_table_ = msg.entries;
@@ -361,6 +361,10 @@ auto DBApp::CurrentLoadFraction() const -> float {
   return static_cast<float>(std::clamp(load, 0.0, 1.0));
 }
 
+auto DBApp::AcceptsShardTableVersion(uint32_t version) const -> bool {
+  return version == 0 || shard_table_version_ == 0 || version == shard_table_version_;
+}
+
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {
   if (ch == nullptr) return;
 
@@ -370,6 +374,7 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
     ack.request_id = request_id;
     ack.success = result.success;
     ack.dbid = result.dbid;
+    ack.current_shard_table_version = shard_table_version_;
     ack.error = std::move(result.error);
     write_reply_latency_.Record(Clock::now() - t0);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
@@ -383,6 +388,18 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
       }
     }
   };
+
+  if (!AcceptsShardTableVersion(msg.shard_table_version)) {
+    dbapp::WriteEntityAck ack;
+    ack.request_id = msg.request_id;
+    ack.success = false;
+    ack.dbid = msg.dbid;
+    ack.current_shard_table_version = shard_table_version_;
+    ack.error = std::string(dbapp::kInvalidShardTableError);
+    write_reply_latency_.Record(Clock::now() - t0);
+    (void)ch->SendMessage(ack);
+    return;
+  }
 
   // Checkin path: LogOff flag means entity is going offline - clear checkout
   if (HasFlag(msg.flags, WriteFlags::kLogOff)) checkout_mgr_.Checkin(msg.dbid, msg.type_id);
@@ -406,6 +423,7 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     dbapp::CheckoutEntityAck ack;
     ack.request_id = request_id;
     ack.dbid = result.data.dbid;
+    ack.current_shard_table_version = shard_table_version_;
 
     if (!result.success) {
       ack.status = dbapp::CheckoutStatus::kNotFound;
@@ -433,6 +451,18 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     }
   };
 
+  if (!AcceptsShardTableVersion(msg.shard_table_version)) {
+    dbapp::CheckoutEntityAck ack;
+    ack.request_id = msg.request_id;
+    ack.status = dbapp::CheckoutStatus::kDbError;
+    ack.dbid = msg.dbid;
+    ack.current_shard_table_version = shard_table_version_;
+    ack.error = std::string(dbapp::kInvalidShardTableError);
+    checkout_reply_latency_.Record(Clock::now() - t0);
+    (void)ch->SendMessage(ack);
+    return;
+  }
+
   auto co_result = checkout_mgr_.TryCheckout(
       msg.mode == dbapp::LoadMode::kByDbid ? msg.dbid : kInvalidDBID, msg.type_id, owner);
 
@@ -450,6 +480,7 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     ack.request_id = msg.request_id;
     ack.status = dbapp::CheckoutStatus::kAlreadyCheckedOut;
     ack.dbid = msg.dbid;
+    ack.current_shard_table_version = shard_table_version_;
     ack.holder_addr = co_result.current_owner.base_addr;
     ack.holder_app_id = co_result.current_owner.app_id;
     ack.holder_entity_id = co_result.current_owner.entity_id;

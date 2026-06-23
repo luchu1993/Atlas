@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "db/idatabase.h"
@@ -11,6 +12,8 @@
 #include "network/message_ids.h"
 
 namespace atlas::dbapp {
+
+inline constexpr std::string_view kInvalidShardTableError = "invalid_shard_table";
 
 enum class LoadMode : uint8_t {
   kByDbid = 0,
@@ -30,6 +33,7 @@ struct WriteEntity {
   DatabaseID dbid{kInvalidDBID};
   uint32_t entity_id{0};
   uint32_t request_id{0};
+  uint32_t shard_table_version{0};
   std::string identifier;
   std::vector<std::byte> blob;
 
@@ -47,6 +51,7 @@ struct WriteEntity {
     w.Write(dbid);
     w.Write(entity_id);
     w.Write(request_id);
+    w.Write(shard_table_version);
     w.WriteString(identifier);
     w.Write(static_cast<uint32_t>(blob.size()));
     w.WriteBytes(blob);
@@ -58,9 +63,10 @@ struct WriteEntity {
     auto db = r.Read<int64_t>();
     auto eid = r.Read<uint32_t>();
     auto rid = r.Read<uint32_t>();
+    auto version = r.Read<uint32_t>();
     auto id_str = r.ReadString();
     auto blob_sz = r.Read<uint32_t>();
-    if (!f || !ti || !db || !eid || !rid || !id_str || !blob_sz)
+    if (!f || !ti || !db || !eid || !rid || !version || !id_str || !blob_sz)
       return Error{ErrorCode::kInvalidArgument, "WriteEntity: truncated"};
     auto blob_span = r.ReadBytes(*blob_sz);
     if (!blob_span) return Error{ErrorCode::kInvalidArgument, "WriteEntity: blob truncated"};
@@ -70,6 +76,7 @@ struct WriteEntity {
     msg.dbid = *db;
     msg.entity_id = *eid;
     msg.request_id = *rid;
+    msg.shard_table_version = *version;
     msg.identifier = std::move(*id_str);
     msg.blob.assign(blob_span->begin(), blob_span->end());
     return msg;
@@ -81,6 +88,7 @@ struct WriteEntityAck {
   uint32_t request_id{0};
   bool success{false};
   DatabaseID dbid{kInvalidDBID};
+  uint32_t current_shard_table_version{0};
   std::string error;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -97,6 +105,7 @@ struct WriteEntityAck {
     w.Write(request_id);
     w.Write(static_cast<uint8_t>(success ? 1 : 0));
     w.Write(dbid);
+    w.Write(current_shard_table_version);
     w.WriteString(error);
   }
 
@@ -104,13 +113,15 @@ struct WriteEntityAck {
     auto rid = r.Read<uint32_t>();
     auto ok = r.Read<uint8_t>();
     auto db = r.Read<int64_t>();
+    auto version = r.Read<uint32_t>();
     auto err = r.ReadString();
-    if (!rid || !ok || !db || !err)
+    if (!rid || !ok || !db || !version || !err)
       return Error{ErrorCode::kInvalidArgument, "WriteEntityAck: truncated"};
     WriteEntityAck msg;
     msg.request_id = *rid;
     msg.success = *ok != 0;
     msg.dbid = *db;
+    msg.current_shard_table_version = *version;
     msg.error = std::move(*err);
     return msg;
   }
@@ -124,6 +135,7 @@ struct CheckoutEntity {
   std::string identifier;
   uint32_t entity_id{0};
   uint32_t request_id{0};
+  uint32_t shard_table_version{0};
   Address owner_addr;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -143,6 +155,7 @@ struct CheckoutEntity {
     w.WriteString(identifier);
     w.Write(entity_id);
     w.Write(request_id);
+    w.Write(shard_table_version);
     w.Write(owner_addr.Ip());
     w.Write(owner_addr.Port());
   }
@@ -154,9 +167,10 @@ struct CheckoutEntity {
     auto id_str = r.ReadString();
     auto eid = r.Read<uint32_t>();
     auto rid = r.Read<uint32_t>();
+    auto version = r.Read<uint32_t>();
     auto oip = r.Read<uint32_t>();
     auto oport = r.Read<uint16_t>();
-    if (!m || !ti || !db || !id_str || !eid || !rid || !oip || !oport)
+    if (!m || !ti || !db || !id_str || !eid || !rid || !version || !oip || !oport)
       return Error{ErrorCode::kInvalidArgument, "CheckoutEntity: truncated"};
     CheckoutEntity msg;
     msg.mode = static_cast<LoadMode>(*m);
@@ -165,6 +179,7 @@ struct CheckoutEntity {
     msg.identifier = std::move(*id_str);
     msg.entity_id = *eid;
     msg.request_id = *rid;
+    msg.shard_table_version = *version;
     msg.owner_addr = Address(*oip, *oport);
     return msg;
   }
@@ -179,6 +194,7 @@ struct CheckoutEntityAck {
   Address holder_addr;
   uint32_t holder_app_id{0};
   uint32_t holder_entity_id{0};
+  uint32_t current_shard_table_version{0};
   std::string error;
 
   static auto Descriptor() -> const MessageDesc& {
@@ -201,6 +217,7 @@ struct CheckoutEntityAck {
     w.Write(holder_addr.Port());
     w.Write(holder_app_id);
     w.Write(holder_entity_id);
+    w.Write(current_shard_table_version);
     w.WriteString(error);
   }
 
@@ -216,8 +233,9 @@ struct CheckoutEntityAck {
     auto h_port = r.Read<uint16_t>();
     auto h_app = r.Read<uint32_t>();
     auto h_eid = r.Read<uint32_t>();
+    auto version = r.Read<uint32_t>();
     auto err = r.ReadString();
-    if (!blob_span || !h_ip || !h_port || !h_app || !h_eid || !err)
+    if (!blob_span || !h_ip || !h_port || !h_app || !h_eid || !version || !err)
       return Error{ErrorCode::kInvalidArgument, "CheckoutEntityAck: field truncated"};
     CheckoutEntityAck msg;
     msg.request_id = *rid;
@@ -227,6 +245,7 @@ struct CheckoutEntityAck {
     msg.holder_addr = Address(*h_ip, *h_port);
     msg.holder_app_id = *h_app;
     msg.holder_entity_id = *h_eid;
+    msg.current_shard_table_version = *version;
     msg.error = std::move(*err);
     return msg;
   }
