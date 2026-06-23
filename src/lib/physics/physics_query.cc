@@ -34,6 +34,13 @@ struct RaycastCandidate {
   math::Vector3 normal{0.0f, 1.0f, 0.0f};
 };
 
+struct QueryRegion {
+  bool valid{false};
+  PhysicsQueryRegion bounds;
+};
+
+[[nodiscard]] auto NormalizedDirection(const math::Vector3& direction) -> math::Vector3;
+
 [[nodiscard]] auto IsFinite(const math::Vector3& value) -> bool {
   return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
 }
@@ -53,6 +60,63 @@ struct RaycastCandidate {
 
 [[nodiscard]] auto NonNegativeFinite(float value) -> float {
   return std::isfinite(value) && value > 0.0f ? value : 0.0f;
+}
+
+[[nodiscard]] auto IsFinite(const PhysicsQueryRegion& region) -> bool {
+  return std::isfinite(region.min_x) && std::isfinite(region.min_z) &&
+         std::isfinite(region.max_x) && std::isfinite(region.max_z);
+}
+
+[[nodiscard]] auto NormalizeRegion(PhysicsQueryRegion region) -> PhysicsQueryRegion {
+  if (region.max_x < region.min_x) std::swap(region.min_x, region.max_x);
+  if (region.max_z < region.min_z) std::swap(region.min_z, region.max_z);
+  return region;
+}
+
+[[nodiscard]] auto IsValidRegion(const PhysicsQueryRegion& region) -> bool {
+  return IsFinite(region) && region.max_x >= region.min_x && region.max_z >= region.min_z;
+}
+
+[[nodiscard]] auto RegionsIntersect(const PhysicsQueryRegion& a,
+                                     const PhysicsQueryRegion& b) -> bool {
+  return a.min_x <= b.max_x && a.max_x >= b.min_x && a.min_z <= b.max_z &&
+         a.max_z >= b.min_z;
+}
+
+[[nodiscard]] auto RegionAround(const math::Vector3& point, float radius) -> QueryRegion {
+  if (!IsFinite(point)) return {};
+  const float r = NonNegativeFinite(radius);
+  return QueryRegion{true, {point.x - r, point.z - r, point.x + r, point.z + r}};
+}
+
+[[nodiscard]] auto RegionForGroundProbe(const GroundProbeQuery& query) -> QueryRegion {
+  if (!std::isfinite(query.radius_m)) return {};
+  return RegionAround(query.origin, query.radius_m);
+}
+
+[[nodiscard]] auto RegionForRaycast(const RaycastQuery& query) -> QueryRegion {
+  if (!IsFinite(query.origin) || !std::isfinite(query.max_distance_m)) return {};
+  const auto direction = NormalizedDirection(query.direction);
+  if (direction.LengthSquared() <= kEpsilon * kEpsilon) return {};
+  const auto end = query.origin + direction * NonNegativeFinite(query.max_distance_m);
+  return QueryRegion{true,
+                     {std::min(query.origin.x, end.x), std::min(query.origin.z, end.z),
+                      std::max(query.origin.x, end.x), std::max(query.origin.z, end.z)}};
+}
+
+[[nodiscard]] auto RegionForCapsule(const Capsule& capsule) -> QueryRegion {
+  if (!IsFinite(capsule)) return {};
+  return RegionAround(capsule.center, capsule.radius_m);
+}
+
+[[nodiscard]] auto RegionForCapsuleCast(const CapsuleCastQuery& query) -> QueryRegion {
+  if (!IsFinite(query.capsule) || !IsFinite(query.displacement)) return {};
+  const float r = NonNegativeFinite(query.capsule.radius_m);
+  const auto start = query.capsule.center;
+  const auto end = start + query.displacement;
+  return QueryRegion{true,
+                     {std::min(start.x, end.x) - r, std::min(start.z, end.z) - r,
+                      std::max(start.x, end.x) + r, std::max(start.z, end.z) + r}};
 }
 
 [[nodiscard]] auto NormalizeBox(const StaticBox& box) -> StaticBox {
@@ -652,6 +716,100 @@ auto StaticPhysicsQuery::DepenetrateCapsule(const OverlapQuery& query) const
     const auto candidate = ExitExpandedBox(query.capsule.center,
                                            ExpandedBoxForCapsule(box, query.capsule));
     apply_candidate(candidate, box.layer);
+  }
+  return best;
+}
+
+void ChunkedPhysicsQuery::SetFallback(std::unique_ptr<PhysicsQuery> query) {
+  fallback_ = std::move(query);
+}
+
+void ChunkedPhysicsQuery::AddChunk(const PhysicsQueryRegion& region,
+                                   std::unique_ptr<PhysicsQuery> query) {
+  if (!query) return;
+  auto normalized = NormalizeRegion(region);
+  if (!IsValidRegion(normalized)) return;
+  chunks_.push_back(Chunk{normalized, std::move(query)});
+}
+
+auto ChunkedPhysicsQuery::GroundProbe(const GroundProbeQuery& query) const -> GroundHit {
+  GroundHit best;
+  auto consider = [&](const PhysicsQuery& candidate_query) {
+    auto hit = candidate_query.GroundProbe(query);
+    if (!hit.hit) return;
+    if (!best.hit || hit.distance_m < best.distance_m - kEpsilon) best = hit;
+  };
+
+  if (fallback_) consider(*fallback_);
+  const auto region = RegionForGroundProbe(query);
+  if (!region.valid) return best;
+  for (const auto& chunk : chunks_) {
+    if (RegionsIntersect(region.bounds, chunk.region)) consider(*chunk.query);
+  }
+  return best;
+}
+
+auto ChunkedPhysicsQuery::Raycast(const RaycastQuery& query) const -> RaycastHit {
+  RaycastHit best;
+  auto consider = [&](const PhysicsQuery& candidate_query) {
+    auto hit = candidate_query.Raycast(query);
+    if (!hit.hit) return;
+    if (!best.hit || hit.distance_m < best.distance_m - kEpsilon) best = hit;
+  };
+
+  if (fallback_) consider(*fallback_);
+  const auto region = RegionForRaycast(query);
+  if (!region.valid) return best;
+  for (const auto& chunk : chunks_) {
+    if (RegionsIntersect(region.bounds, chunk.region)) consider(*chunk.query);
+  }
+  return best;
+}
+
+auto ChunkedPhysicsQuery::CastCapsule(const CapsuleCastQuery& query) const -> ShapeCastHit {
+  ShapeCastHit best;
+  auto consider = [&](const PhysicsQuery& candidate_query) {
+    auto hit = candidate_query.CastCapsule(query);
+    if (!hit.hit) return;
+    if (!best.hit || hit.fraction < best.fraction - kEpsilon) best = hit;
+  };
+
+  if (fallback_) consider(*fallback_);
+  const auto region = RegionForCapsuleCast(query);
+  if (!region.valid) return best;
+  for (const auto& chunk : chunks_) {
+    if (RegionsIntersect(region.bounds, chunk.region)) consider(*chunk.query);
+  }
+  return best;
+}
+
+auto ChunkedPhysicsQuery::OverlapCapsule(const OverlapQuery& query) const -> bool {
+  if (fallback_ && fallback_->OverlapCapsule(query)) return true;
+  const auto region = RegionForCapsule(query.capsule);
+  if (!region.valid) return false;
+  for (const auto& chunk : chunks_) {
+    if (RegionsIntersect(region.bounds, chunk.region) &&
+        chunk.query->OverlapCapsule(query)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+auto ChunkedPhysicsQuery::DepenetrateCapsule(const OverlapQuery& query) const
+    -> DepenetrationHit {
+  DepenetrationHit best;
+  auto consider = [&](const PhysicsQuery& candidate_query) {
+    auto hit = candidate_query.DepenetrateCapsule(query);
+    if (!hit.hit) return;
+    if (!best.hit || hit.depth_m < best.depth_m - kEpsilon) best = hit;
+  };
+
+  if (fallback_) consider(*fallback_);
+  const auto region = RegionForCapsule(query.capsule);
+  if (!region.valid) return best;
+  for (const auto& chunk : chunks_) {
+    if (RegionsIntersect(region.bounds, chunk.region)) consider(*chunk.query);
   }
   return best;
 }

@@ -29,6 +29,8 @@ inline constexpr std::size_t kCollisionMeshBufferHeaderBytes = 8;
 inline constexpr std::array<char, 4> kCollisionCacheMagic{'A', 'C', 'A', 'C'};
 inline constexpr uint32_t kCollisionCacheVersion = 2;
 inline constexpr std::size_t kCollisionCacheHeaderBytes = 20;
+inline constexpr float kDefaultCollisionChunkSizeM = 128.0f;
+inline constexpr float kDefaultCollisionChunkBorderM = 2.0f;
 
 struct MeshGeometry {
   std::vector<math::Vector3> vertices;
@@ -88,6 +90,10 @@ struct LoadedCollisionCache {
 
 [[nodiscard]] auto BuildStaticPhysicsQueryFromAsset(const CollisionAsset& asset)
     -> std::unique_ptr<StaticPhysicsQuery>;
+[[nodiscard]] auto BuildChunkedStaticPhysicsQueryFromAsset(const CollisionAsset& asset,
+                                                           float chunk_size_m,
+                                                           float border_m)
+    -> std::unique_ptr<PhysicsQuery>;
 [[nodiscard]] auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string;
 
 [[nodiscard]] auto WriteCollisionCacheBytes(std::string_view source_json,

@@ -33,7 +33,7 @@
 - `tools\bin\build.bat debug`
 - `tools\bin\build_mvp_ue.bat --config Debug --skip-defs --skip-codegen
   --skip-stage --skip-ue`
-- `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_pipeline|lag_compensation" --output-on-failure`
+- `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_asset|collision_pipeline|test_space|lag_compensation|backend_parity" --output-on-failure`
 - `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj
   --configuration Debug`
 - `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine
@@ -61,5 +61,8 @@
 - `tools\bin\run_world_stress.bat --clients 400 --account-pool 400 --duration-sec 30 --shortline-pct 0 --move-rate-hz 10 --move-mode input --space-count 8 --cellapp-count 4 --spread-radius 400 --movement-verify --login-rate-limit-trusted-cidr 127.0.0.0/8 --login-rate-limit-global 10000`：PASS；`move_sent=106339`，`movement_ack_recv=16151`，BaseApp / active CellApp `rate`、`invalid`、`seqgap`、`overflow` 均为 0。该次运行 8 个 Space 都调度到 `cellapp_03`，不作为多 Cell 分摊证明。
 - `tools\bin\run_world_stress.bat --clients 0 --script-clients 2 --script-verify --duration-sec 20 --client-transport-impairment-ms 75 200 --login-rate-limit-trusted-cidr 127.0.0.0/8 --login-rate-limit-global 10000`：PASS；两个脚本客户端均产生 `mIn` / `mAck` / `mRpt`，BaseApp `rate`、`invalid`、`seqgap`、`ackstale`、`rptdrop` 均为 0。
 - `ctest --test-dir build\debug -C Debug -R "backend_parity" --output-on-failure`：PASS，1 / 1。
+- `tools\bin\build.bat debug --build-only`：PASS，14.4 Static chunk / border query。
+- `tools\bin\build_mvp_ue.bat --config Debug --skip-defs --skip-codegen --skip-stage --skip-ue`：PASS。
+- `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_asset|collision_pipeline|test_space|lag_compensation|backend_parity" --output-on-failure`：PASS，19 / 19；包含 `chunk_boundary_cross` parity 场景。
 
 仍未由本地命令证明：Linux 服务端 parity、Unity runtime native predictor parity。

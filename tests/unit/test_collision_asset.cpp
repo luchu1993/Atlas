@@ -72,6 +72,57 @@ TEST(CollisionAsset, BuildsStaticPhysicsQuery) {
   EXPECT_EQ(hit.layer, 1u);
 }
 
+TEST(CollisionAsset, BuildChunkedStaticPhysicsQueryCastsAcrossChunkBorder) {
+  CollisionAsset asset;
+  asset.boxes.push_back(StaticBox{{10.2f, 0.0f, -2.0f}, {10.6f, 2.0f, 2.0f}, 1});
+
+  auto query = BuildChunkedStaticPhysicsQueryFromAsset(asset, 10.0f, 0.5f);
+  auto* chunked = dynamic_cast<ChunkedPhysicsQuery*>(query.get());
+  ASSERT_NE(chunked, nullptr);
+  EXPECT_GT(chunked->ChunkCount(), 0u);
+
+  CapsuleCastQuery cast;
+  cast.capsule.center = {9.0f, 0.0f, 0.0f};
+  cast.capsule.radius_m = 0.35f;
+  cast.capsule.half_height_m = 0.9f;
+  cast.displacement = {2.0f, 0.0f, 0.0f};
+  cast.filter.mask.bits = 1u << 1;
+
+  const auto hit = query->CastCapsule(cast);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_LT(hit.fraction, 1.0f);
+  EXPECT_EQ(hit.layer, 1u);
+}
+
+TEST(CollisionAsset, BuildChunkedStaticPhysicsQueryKeepsGlobalPlanes) {
+  CollisionAsset asset;
+  asset.boxes.push_back(StaticBox{{100.0f, 0.0f, 100.0f}, {101.0f, 1.0f, 101.0f}, 1});
+  asset.planes.push_back(StaticPlane{{0.0f, -2.0f, 0.0f}, {0.0f, 1.0f, 0.0f}, 2});
+
+  auto query = BuildChunkedStaticPhysicsQueryFromAsset(asset, 10.0f, 0.5f);
+
+  GroundProbeQuery ground;
+  ground.origin = {0.0f, 3.0f, 0.0f};
+  ground.max_distance_m = 6.0f;
+  ground.radius_m = 0.2f;
+  ground.filter.mask.bits = 1u << 2;
+
+  const auto hit = query->GroundProbe(ground);
+  ASSERT_TRUE(hit.hit);
+  EXPECT_FLOAT_EQ(hit.position.y, -2.0f);
+  EXPECT_EQ(hit.layer, 2u);
+}
+
+TEST(CollisionAsset, BuildChunkedStaticPhysicsQueryDuplicatesBorderBoxes) {
+  CollisionAsset asset;
+  asset.boxes.push_back(StaticBox{{9.8f, 0.0f, 2.0f}, {10.2f, 1.0f, 3.0f}, 1});
+
+  auto query = BuildChunkedStaticPhysicsQueryFromAsset(asset, 10.0f, 0.5f);
+  auto* chunked = dynamic_cast<ChunkedPhysicsQuery*>(query.get());
+  ASSERT_NE(chunked, nullptr);
+  EXPECT_EQ(chunked->ChunkCount(), 2u);
+}
+
 TEST(CollisionAsset, DumpsObjPreview) {
   auto asset = LoadCollisionAssetFromJson(kValidAsset);
   ASSERT_TRUE(asset.HasValue()) << asset.Error().Message();

@@ -1,7 +1,9 @@
 #ifndef ATLAS_LIB_PHYSICS_PHYSICS_QUERY_H_
 #define ATLAS_LIB_PHYSICS_PHYSICS_QUERY_H_
 
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "math/vector3.h"
@@ -51,6 +53,13 @@ struct RaycastQuery {
   math::Vector3 direction{0.0f, 0.0f, 1.0f};
   float max_distance_m{0.0f};
   QueryFilter filter;
+};
+
+struct PhysicsQueryRegion {
+  float min_x{0.0f};
+  float min_z{0.0f};
+  float max_x{0.0f};
+  float max_z{0.0f};
 };
 
 struct StaticBox {
@@ -175,6 +184,29 @@ class StaticPhysicsQuery final : public PhysicsQuery {
   float ground_y_{0.0f};
   std::vector<StaticBox> boxes_;
   std::vector<StaticPlane> planes_;
+};
+
+class ChunkedPhysicsQuery final : public PhysicsQuery {
+ public:
+  void SetFallback(std::unique_ptr<PhysicsQuery> query);
+  void AddChunk(const PhysicsQueryRegion& region, std::unique_ptr<PhysicsQuery> query);
+  [[nodiscard]] auto ChunkCount() const -> std::size_t { return chunks_.size(); }
+
+  [[nodiscard]] auto GroundProbe(const GroundProbeQuery& query) const -> GroundHit override;
+  [[nodiscard]] auto Raycast(const RaycastQuery& query) const -> RaycastHit override;
+  [[nodiscard]] auto CastCapsule(const CapsuleCastQuery& query) const -> ShapeCastHit override;
+  [[nodiscard]] auto OverlapCapsule(const OverlapQuery& query) const -> bool override;
+  [[nodiscard]] auto DepenetrateCapsule(const OverlapQuery& query) const
+      -> DepenetrationHit override;
+
+ private:
+  struct Chunk {
+    PhysicsQueryRegion region;
+    std::unique_ptr<PhysicsQuery> query;
+  };
+
+  std::unique_ptr<PhysicsQuery> fallback_;
+  std::vector<Chunk> chunks_;
 };
 
 }  // namespace atlas::physics

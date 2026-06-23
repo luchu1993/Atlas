@@ -1,10 +1,11 @@
 # Phase 14: 服务端权威移动与本地预测
 
-**Status:** 🟨 14.1–14.3 主线已交付——输入帧协议、CellApp 权威 step、owner
+**Status:** 🟨 14.1–14.4 静态查询主线已交付——输入帧协议、CellApp 权威 step、owner
 预测和解、MovementCommand fanout、Jolt 查询后端（M1a–M5b）、Unity collision /
 mesh / heightfield 导出（M7）、position history 与服务端 lag-compensation 原型
-都已落地。14.4（chunk / border query）后置。收紧的 wire contract 与最小回归
-命令集见 [`phase14_status.md`](phase14_status.md)。
+以及 Static collision asset 的 chunk / border query 起步都已落地。Jolt cache
+chunking、大地图 streaming 和跨 Cell 物理仍后置。收紧的 wire contract 与
+最小回归命令集见 [`phase14_status.md`](phase14_status.md)。
 
 **前置依赖:** Phase 10 (CellApp / Witness / volatile 位置流)、Phase 11
 (Real/Ghost / Offload)、Phase 12 (atlas_net_client / Atlas.Client)、
@@ -24,8 +25,8 @@ mesh / heightfield 导出（M7）、position history 与服务端 lag-compensati
 
 ### 14.2 Jolt query backend（里程碑）
 
-（M1a / M1b / M1c / M2 / M3 / M4 / M5 / M5b 均已交付。后续遇到再做：chunking、
-moving platform、ladder、跨 cell 物理。）
+（M1a / M1b / M1c / M2 / M3 / M4 / M5 / M5b 均已交付。后续遇到再做：
+Jolt cache chunking、moving platform、ladder、跨 cell 物理。）
 
 ### 14.3 Unity 导出 MVP（里程碑）
 
@@ -33,7 +34,7 @@ moving platform、ladder、跨 cell 物理。）
 
 ### 之后
 
-按遇到再做：chunking、moving platform、ladder、跨 cell 物理、
+按遇到再做：大地图 streaming、Jolt cache chunking、moving platform、ladder、跨 cell 物理、
 完整 data-driven skill timeline、pathfinding。**不提前规划**。
 
 ## 决策日志
@@ -50,8 +51,9 @@ moving platform、ladder、跨 cell 物理。）
   base64。大地图 mesh 几百 MB，JSON 内嵌读写会爆内存。
 - **Layer 起步集**：`StaticWorld` / `Character` / `Projectile` 三个，遇到再加。
   独立开发可随时改名 + 重 cook，不需要团队对齐。
-- **Chunking 起步策略**：不做。单 Space 单 PhysicsScene 跑通；地图大到一个
-  scene 装不下时再加 chunk。
+- **Chunking 起步策略**：先给 Static box/plane 查询加最小 chunk wrapper，
+  box 按 X/Z chunk + border 复制，plane 作为全局 fallback；Jolt cache
+  chunking 和流式加载等地图规模逼近时再做。
 - **Cache mismatch 策略**：拒绝启动，不 silent fallback。否则升级 Jolt 后
   会跑在过期 cache 上而不自知。
 - **Unity exporter 走 batch mode**：不解析 YAML。prefab variant / nested
@@ -99,8 +101,8 @@ moving platform、ladder、跨 cell 物理。）
 
 ## 非目标
 
-- 14.4 chunk / border query、moving platform、ladder、跨 cell 物理、volume export
-  和完整 data-driven skill timeline 后置。
+- moving platform、ladder、跨 cell 物理、volume export、大地图 streaming、
+  Jolt cache chunking 和完整 data-driven skill timeline 后置。
 - 不实现完整 root-motion 曲线。
 - 不把移动输入塞进 `ClientCellRpc`，也不通过 `.def` 生成高频移动 RPC。
 - 不让 `client_dt_ms` 驱动服务端时间；它只能用于诊断和异常检测。
@@ -153,8 +155,9 @@ auto Step(const MovementState& previous, const InputFrame& input,
 当前提供 `FlatGroundQuery`、`PhysicsCharacterQuery`、Static backend，并可经
 `PhysicsQuery` 接入 Jolt collision backend，验证输入、预测、权威 tick、
 grounded、速度、基础阻挡、depenetration、slope、step 和 snap。Unity collision
-asset 导出、mesh / heightfield side-car 与 cache cook 已落地；14.4 chunk /
-border query 和 volume export 后置。
+asset 导出、mesh / heightfield side-car、cache cook，以及 Static box/plane
+chunk / border query 起步已落地；volume export、大地图 streaming 和 Jolt
+cache chunking 后置。
 
 ### 服务端状态归属
 
@@ -301,7 +304,7 @@ CellApp 推荐顺序：
 | 14.1 | Flat/Test query | 输入帧、权威 Step、预测和解、MVP 替换 `ReportPos` |
 | 14.2 | PhysicsQuery + Jolt scene | Static query、collision asset validate 与 Jolt backend |
 | 14.3 | Unity collision export / cook | primitive / mesh / convex / heightfield 导出、`.bin` side-car 与 cache cook |
-| 14.4 | chunk / border query | 大地图 streaming、Cell 边界 ghost region 查询 |
+| 14.4 | chunk / border query | Static collision asset chunk wrapper、border box 复制、plane fallback；完整 streaming / Jolt cache chunking 后置 |
 
 Jolt 只提供查询事实，不使用 Jolt CharacterController。
 
@@ -397,6 +400,13 @@ Phase 14.2 完成条件：
   depenetration、slope limit、step up、snap to ground。
 - Jolt 类型不泄露到 gameplay / server / script 边界。
 - Test backend 覆盖 box / plane KCC 状态机和 raycast，不依赖 Jolt runtime。
+
+Phase 14.4 当前完成条件：
+
+- `Space::SetCollisionAsset` 对 box-bearing Static asset 默认安装 chunked query。
+- box 按 X/Z chunk + border 复制，plane 作为全局 fallback。
+- 单元 / pipeline 测试覆盖跨 chunk cast、border box 复制、plane fallback 和
+  Space 接入；backend parity 覆盖 `chunk_boundary_cross`。
 
 ## 测试矩阵
 

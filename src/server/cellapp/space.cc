@@ -13,6 +13,15 @@
 #include "physics/collision_backend.h"
 
 namespace atlas {
+namespace {
+
+[[nodiscard]] auto CountCollisionObjects(const physics::CollisionAsset& asset) -> std::size_t {
+  return asset.boxes.size() + asset.planes.size() + asset.spheres.size() +
+         asset.capsules.size() + asset.meshes.size() + asset.convexes.size() +
+         asset.heightfields.size();
+}
+
+}  // namespace
 
 Space::Space(SpaceID id) : id_(id) {}
 
@@ -98,12 +107,11 @@ void Space::SetPhysicsQuery(std::unique_ptr<physics::PhysicsQuery> query) {
 }
 
 void Space::SetCollisionAsset(const physics::CollisionAsset& asset) {
-  auto query = physics::BuildStaticPhysicsQueryFromAsset(asset);
+  auto query = physics::BuildChunkedStaticPhysicsQueryFromAsset(
+      asset, physics::kDefaultCollisionChunkSizeM, physics::kDefaultCollisionChunkBorderM);
   physics_query_ = std::move(query);
   collision_asset_source_hash_ = asset.source_hash;
-  collision_asset_object_count_ = asset.boxes.size() + asset.planes.size() +
-                                  asset.spheres.size() + asset.capsules.size() +
-                                  asset.convexes.size();
+  collision_asset_object_count_ = CountCollisionObjects(asset);
 }
 
 void Space::SetCollisionBackendFactory(
@@ -127,10 +135,7 @@ auto Space::LoadCollisionCacheFromFile(const std::filesystem::path& path) -> Res
     if (!query) return query.Error();
     physics_query_ = std::move(*query);
     collision_asset_source_hash_ = cache->asset.source_hash;
-    collision_asset_object_count_ = cache->asset.boxes.size() + cache->asset.planes.size() +
-                                    cache->asset.spheres.size() + cache->asset.capsules.size() +
-                                    cache->asset.meshes.size() + cache->asset.convexes.size() +
-                                    cache->asset.heightfields.size();
+    collision_asset_object_count_ = CountCollisionObjects(cache->asset);
     return {};
   }
 

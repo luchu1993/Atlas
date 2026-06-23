@@ -104,6 +104,28 @@ TEST(CollisionPipeline, CookedBoxCacheBlocksMovementAtWall) {
   physics::jolt::Shutdown();
 }
 
+TEST(CollisionPipeline, SpaceStaticCollisionAssetUsesChunkedQuery) {
+  physics::CollisionAsset asset;
+  asset.source_hash = "chunked_static";
+  asset.boxes.push_back(
+      physics::StaticBox{{10.2f, 0.0f, -2.0f}, {10.6f, 2.0f, 2.0f}, 1});
+
+  Space space(1);
+  space.SetCollisionAsset(asset);
+  auto* chunked = dynamic_cast<physics::ChunkedPhysicsQuery*>(&space.PhysicsQuery());
+  ASSERT_NE(chunked, nullptr);
+  EXPECT_GT(chunked->ChunkCount(), 0u);
+
+  physics::CapsuleCastQuery cast;
+  cast.capsule.center = {9.0f, 0.0f, 0.0f};
+  cast.capsule.radius_m = 0.35f;
+  cast.capsule.half_height_m = 0.9f;
+  cast.displacement = {2.0f, 0.0f, 0.0f};
+  cast.filter.mask.bits = 1u << 1;
+
+  EXPECT_TRUE(space.PhysicsQuery().CastCapsule(cast).hit);
+}
+
 TEST(CollisionPipeline, CookedGroundOnlyCacheAllowsTraversal) {
   physics::jolt::Initialize();
   // Control: same walk, no wall — the capsule must pass where the wall stood.

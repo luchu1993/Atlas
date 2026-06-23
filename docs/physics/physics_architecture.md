@@ -165,7 +165,8 @@ bytes 8..    raw float32 顶点 + uint32 索引，按 JSON 中的字节偏移寻
 ```
 
 Static backend 只加载 box / plane，忽略 sphere / capsule / mesh / convex /
-heightfield；Jolt backend (`atlas_physics_jolt`) 通过 `AddSphere` /
+heightfield；raw asset 的 box 查询经 Static chunk wrapper 安装，plane 保持全局
+fallback。Jolt backend (`atlas_physics_jolt`) 通过 `AddSphere` /
 `AddCapsule` / `AddConvexHull` / `AddMesh` / `AddHeightField` 跑对应静态 body。
 parity gate 维持在两后端都支持的 box / plane 形状上。两后端都按 query 的 `LayerMask` 过滤：每个 body 带自己的
 Atlas `layer`（Jolt 用作 object layer），query 只命中 mask 命中位的 layer
@@ -173,7 +174,8 @@ Atlas `layer`（Jolt 用作 object layer），query 只命中 mask 命中位的 
 Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
 清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
-material、volume 和 chunk 仍属于后续导出 / cook 阶段。
+material、volume、大地图 streaming 和 Jolt cache chunking 仍属于后续导出 /
+cook 阶段。
 
 **Cooked cache** (M5+)：`atlas_tool cook_collision <input.collision.json>` 把
 source JSON + side-car bin 打成单个 `.collisioncache` 文件，便于部署只下发
@@ -592,6 +594,8 @@ step、Unity / UE native predictor、NPC movement intent 和 ack replay。14.2
 可用于内容管线前置检查。Space 已有装载 collision asset 并替换本 Space
 physics query 的入口，Cell C# 脚本可通过
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 调用该入口。
+box-bearing raw asset 会安装 Static chunk wrapper，覆盖跨 chunk query region、
+border box 复制和 plane fallback；完整 streaming / Jolt cache chunking 后置。
 CharacterMotor 已使用 ground normal 做
 slope limit，在非跳跃 grounded sweep 命中时支持基础 step-up，并显式标记
 snap-to-ground；起跳 tick 不会被 snap 拉回地面，还会按配置预算执行初始重叠

@@ -1,5 +1,6 @@
 #include "parity_scenarios.h"
 
+#include "physics/collision_asset.h"
 #include "physics/physics_query.h"
 
 #ifdef ATLAS_PARITY_HAS_JOLT
@@ -270,6 +271,43 @@ constexpr float kGiantBoxThickness = 100.0f;
   return s;
 }
 
+[[nodiscard]] auto MakeChunkBoundaryBackend(BackendKind kind)
+    -> std::unique_ptr<PhysicsQuery> {
+  const StaticBox ground{{-5.0f, -1.0f, -5.0f}, {5.0f, 0.0f, 40.0f}, 0};
+  switch (kind) {
+    case BackendKind::kFlat:
+      return nullptr;
+    case BackendKind::kStatic: {
+      CollisionAsset asset;
+      asset.boxes.push_back(ground);
+      return BuildChunkedStaticPhysicsQueryFromAsset(asset, 10.0f, 0.5f);
+    }
+    case BackendKind::kJolt: {
+#ifdef ATLAS_PARITY_HAS_JOLT
+      auto query = std::make_unique<JoltPhysicsQuery>();
+      query->AddBox(ground);
+      return query;
+#else
+      return nullptr;
+#endif
+    }
+  }
+  return nullptr;
+}
+
+[[nodiscard]] auto ChunkBoundaryCross() -> ParityScenario {
+  ParityScenario s;
+  s.id = "chunk_boundary_cross";
+  s.initial_state = InitialStateOnGround(0.0f);
+  s.initial_state.position = {0.0f, 0.0f, 8.0f};
+  s.inputs = {ForwardInput()};
+  s.tick_count = 90;
+  s.tolerance = kNormalTolerance;
+  s.backends = {BackendKind::kStatic, BackendKind::kJolt};
+  s.make_query = [](BackendKind kind) { return MakeChunkBoundaryBackend(kind); };
+  return s;
+}
+
 }  // namespace
 
 auto AllScenarios() -> std::vector<ParityScenario> {
@@ -281,6 +319,7 @@ auto AllScenarios() -> std::vector<ParityScenario> {
       BoxWalkSteady(),
       MeshWalkLongPath(),
       LayerMaskExcludesHigherBox(),
+      ChunkBoundaryCross(),
   };
 }
 

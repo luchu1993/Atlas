@@ -81,7 +81,7 @@ builder（构造同语义的 Static / Jolt 场景）、容差档位、`skip_back
 |---|---|---|
 | `mesh_walk_long_path` | 跨多个 mesh triangle 长距离前进 | 14.2 mesh 落地 |
 | `heightfield_slope_traverse` | 在 heightfield 上斜向移动 | 14.2 heightfield 落地 |
-| `chunk_boundary_cross` | 跨 chunk 边界查询 | 14.4 chunk 落地 |
+| `chunk_boundary_cross` | 跨 chunk 边界查询 | 14.4 Static chunk wrapper 已覆盖 |
 | `moving_platform_ride` | 站在移动平台上 | 14.2.19 落地 |
 | `skill_dash_through_corridor` | MovementCommand dash 沿走廊 | 14.5 skill 接入 |
 

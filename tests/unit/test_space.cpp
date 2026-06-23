@@ -124,7 +124,7 @@ TEST(Space, PhysicsQueryCanBeReplaced) {
   EXPECT_FLOAT_EQ(hit.position.y, -2.0f);
 }
 
-TEST(Space, CollisionAssetInstallsStaticPhysicsQuery) {
+TEST(Space, CollisionAssetInstallsPhysicsQuery) {
   auto asset = physics::LoadCollisionAssetFromJson(R"({
     "version": 1,
     "coordinate_system": "x_right_y_up_z_forward_meters",
@@ -154,6 +154,24 @@ TEST(Space, CollisionAssetInstallsStaticPhysicsQuery) {
 
   query.filter.mask.bits = 1u;
   EXPECT_FALSE(space.PhysicsQuery().GroundProbe(query).hit);
+}
+
+TEST(Space, CollisionAssetMetadataCountsAllShapeKinds) {
+  physics::CollisionAsset asset;
+  asset.source_hash = "all-shapes";
+  asset.boxes.push_back({});
+  asset.planes.push_back({});
+  asset.spheres.push_back({});
+  asset.capsules.push_back({});
+  asset.meshes.push_back({});
+  asset.convexes.push_back({});
+  asset.heightfields.push_back({});
+
+  Space space(1);
+  space.SetCollisionAsset(asset);
+
+  EXPECT_EQ(space.CollisionAssetSourceHash(), "all-shapes");
+  EXPECT_EQ(space.CollisionAssetObjectCount(), 7u);
 }
 
 TEST(Space, LoadCollisionAssetFromFileKeepsPreviousQueryOnFailure) {

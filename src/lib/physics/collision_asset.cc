@@ -17,6 +17,7 @@
 #pragma GCC diagnostic pop
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -35,8 +36,52 @@ namespace {
 constexpr float kEpsilon = 1e-5f;
 constexpr float kDebugPlaneHalfExtentM = 10.0f;
 
+struct StaticChunk {
+  int32_t x{0};
+  int32_t z{0};
+  std::unique_ptr<StaticPhysicsQuery> query;
+};
+
 [[nodiscard]] auto Invalid(std::string message) -> Error {
   return Error{ErrorCode::kInvalidArgument, std::move(message)};
+}
+
+[[nodiscard]] auto ChunkIndex(float value, float chunk_size_m) -> int32_t {
+  return static_cast<int32_t>(std::floor(value / chunk_size_m));
+}
+
+[[nodiscard]] auto ChunkRegion(int32_t x, int32_t z, float chunk_size_m)
+    -> PhysicsQueryRegion {
+  const float min_x = static_cast<float>(x) * chunk_size_m;
+  const float min_z = static_cast<float>(z) * chunk_size_m;
+  return {min_x, min_z, min_x + chunk_size_m, min_z + chunk_size_m};
+}
+
+[[nodiscard]] auto BoxMinX(const StaticBox& box) -> float {
+  return std::min(box.min.x, box.max.x);
+}
+
+[[nodiscard]] auto BoxMinZ(const StaticBox& box) -> float {
+  return std::min(box.min.z, box.max.z);
+}
+
+[[nodiscard]] auto BoxMaxX(const StaticBox& box) -> float {
+  return std::max(box.min.x, box.max.x);
+}
+
+[[nodiscard]] auto BoxMaxZ(const StaticBox& box) -> float {
+  return std::max(box.min.z, box.max.z);
+}
+
+[[nodiscard]] auto FindOrAddChunk(std::vector<StaticChunk>& chunks, int32_t x, int32_t z)
+    -> StaticPhysicsQuery& {
+  for (auto& chunk : chunks) {
+    if (chunk.x == x && chunk.z == z) return *chunk.query;
+  }
+  chunks.push_back(StaticChunk{x, z,
+                               std::make_unique<StaticPhysicsQuery>(
+                                   StaticGroundMode::kDisabled)});
+  return *chunks.back().query;
 }
 
 void AppendVertex(std::string& out, const math::Vector3& v) {
@@ -716,6 +761,39 @@ auto BuildStaticPhysicsQueryFromAsset(const CollisionAsset& asset)
   for (const auto& box : asset.boxes) query->AddBox(box);
   for (const auto& plane : asset.planes) query->AddPlane(plane);
   return query;
+}
+
+auto BuildChunkedStaticPhysicsQueryFromAsset(const CollisionAsset& asset, float chunk_size_m,
+                                             float border_m)
+    -> std::unique_ptr<PhysicsQuery> {
+  if (!std::isfinite(chunk_size_m) || chunk_size_m <= kEpsilon) {
+    return BuildStaticPhysicsQueryFromAsset(asset);
+  }
+
+  const float border = std::isfinite(border_m) && border_m > 0.0f ? border_m : 0.0f;
+  std::vector<StaticChunk> chunks;
+  for (const auto& box : asset.boxes) {
+    const auto min_x = ChunkIndex(BoxMinX(box) - border, chunk_size_m);
+    const auto max_x = ChunkIndex(BoxMaxX(box) + border, chunk_size_m);
+    const auto min_z = ChunkIndex(BoxMinZ(box) - border, chunk_size_m);
+    const auto max_z = ChunkIndex(BoxMaxZ(box) + border, chunk_size_m);
+    for (int32_t z = min_z; z <= max_z; ++z) {
+      for (int32_t x = min_x; x <= max_x; ++x) {
+        FindOrAddChunk(chunks, x, z).AddBox(box);
+      }
+    }
+  }
+
+  if (chunks.empty()) return BuildStaticPhysicsQueryFromAsset(asset);
+
+  auto chunked = std::make_unique<ChunkedPhysicsQuery>();
+  auto fallback = std::make_unique<StaticPhysicsQuery>(StaticGroundMode::kDisabled);
+  for (const auto& plane : asset.planes) fallback->AddPlane(plane);
+  chunked->SetFallback(std::move(fallback));
+  for (auto& chunk : chunks) {
+    chunked->AddChunk(ChunkRegion(chunk.x, chunk.z, chunk_size_m), std::move(chunk.query));
+  }
+  return chunked;
 }
 
 auto DumpCollisionAssetToObj(const CollisionAsset& asset) -> std::string {
