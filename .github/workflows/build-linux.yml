@@ -41,10 +41,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -56,10 +56,10 @@ jobs:
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .sccache
           key: sccache-linux-${{ matrix.preset }}-${{ github.sha }}
@@ -67,7 +67,7 @@ jobs:
             sccache-linux-${{ matrix.preset }}-
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: nuget-linux-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
@@ -75,7 +75,7 @@ jobs:
             nuget-linux-
 
       - name: Cache FetchContent _deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: build/${{ matrix.preset }}/_deps
           key: deps-linux-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}

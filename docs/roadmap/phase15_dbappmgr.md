@@ -22,8 +22,8 @@ DBAppMgr 在 BigWorld 里负责:
 4. **故障转移** — DBApp 死亡后,接管它的 shard。
 5. **Pending request 恢复** — 死亡前在途的 checkout 请求重新路由。
 
-整套和 CellAppMgr / BaseAppMgr 同构,共享 Phase 13 的 Reviver / snapshot /
-reattach 框架。
+整套和 CellAppMgr / BaseAppMgr 同构,共享 Phase 13 的 Reviver /
+worker 重建恢复框架。
 
 ## 1. 范围
 
@@ -32,8 +32,9 @@ reattach 框架。
 - **P15.1 — DBAppMgr 本体(无 HA)**:实现 mgr 进程 + DBApp 注册 + 路由
   查询 + 简单分片。让客户端 query "dbid → DBApp",但 mgr 自身 crash
   仍丢全部状态。
-- **P15.2 — DBAppMgr HA**:加 snapshot/restore/reattach,接入 Reviver
-  多 target 框架,verify 脚本。镜像 BaseAppMgr B1-B4 模式。
+- **P15.2 — DBAppMgr HA**:加 worker 重建恢复,接入 Reviver
+  multi-target 框架和 verify 脚本。镜像 Phase 13 的 CellAppMgr /
+  BaseAppMgr 模式,不引入 manager snapshot。
 
 本文档定义 P15.1 + P15.2 的目标设计,不包含实现。
 

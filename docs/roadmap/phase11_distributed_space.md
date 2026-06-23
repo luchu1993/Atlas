@@ -1,17 +1,14 @@
 # Phase 11: 分布式空间 — Real/Ghost + CellAppMgr
 
 **Status:** ✅ 主线已落地；✅ BigWorld-style CellApp LB / retire drain /
-CellAppMgr HA 已进入可验证状态。当前 CellAppMgr 已覆盖注册、`app_id`
+CellAppMgr worker 重建恢复已进入可验证状态。当前 CellAppMgr 已覆盖注册、`app_id`
 分配、Space bootstrap、BSP 负载均衡、late CellApp elastic split、自动
 split / merge、retire handoff / drain、geometry 广播、`ShouldOffload`
-freeze/unfreeze、CellApp 死亡 rehome、CellAppMgr Snapshot / Restore、
-Reviver 重启、direct heartbeat、manager health audit、liveness / registry audit
-和 Reviver leader lock。存活 CellApp 会订阅 CellAppMgr birth / death，在
-mgr 被 Reviver 重启后主动重连并重新注册，HA reattach 可在 live cluster
-收敛。
+freeze/unfreeze 和 CellApp 死亡 rehome。Phase 13 已把 CellAppMgr
+HA 收敛为 worker 重建：manager 被 Reviver 重启后,存活 CellApp
+重新注册并用 `RecoverCellAppState` 主动重报 BSP。
 剩余工作集中在更大规模连续 rebalance / retire / crash 基线、
-完整 `EntityBoundLevels` 等价能力和
-跨机器共享 snapshot / 外部 leader lock。
+完整 `EntityBoundLevels` 等价能力和 Phase 15 的 DBAppMgr HA。
 **前置依赖:** Phase 10 (CellApp 单机)、Phase 9 (BaseAppMgr)
 **BigWorld 参考:** `server/cellapp/real_entity.hpp`,
 `entity_ghost_maintainer.cpp`, `server/cellappmgr/`
@@ -28,13 +25,13 @@ BigWorld 高阶能力。
 
 | 能力 | 当前状态 |
 |---|---|
-| CellApp 注册 | CellAppMgr 分配 `app_id ∈ [1,255]`，回包携带 `game_time` 和 tick alignment epoch；CellApp 订阅 CellAppMgr birth / death，manager 重启后会断开旧 channel、清空旧 `app_id` 并重新注册 |
+| CellApp 注册 | CellAppMgr 分配 `app_id ∈ [1,255]`，回包携带 `game_time` 和 tick alignment epoch；CellApp 订阅 CellAppMgr birth / death，manager 重启后会断开旧 channel、携带 `known_app_id` 重新注册并保留原 `app_id` |
 | Space 创建 | `CreateSpaceRequest.initial_cell_count` 支持多 Cell bootstrap，按新鲜 load、负载和 `app_id` 选 host |
 | 启动缓冲 | CreateSpace 可等待 startup quiescence window，让 stagger-launched CellApp 一起参与初始分区 |
 | 负载上报 | CellApp 上报 EWMA `load`、real entity count、per-cell script / native tick、witness / AoI / backup bytes、entity count、30-sample median，以及 X/Z 8-bucket entity / tick-cost shape；CellAppMgr 只接受匹配已注册 channel / address 的 `InformCellLoad` |
 | BSP 均衡 | CellAppMgr 每 30 tick 运行 `BSPTree::Balance(0.9)`，按加权 leaf load 和 X/Z bucket shape 移动已有 split line |
 | late join / 自动扩缩容 | 新 CellApp 注册后，已存在 Space 可把最重 leaf split 到新 host；持续热点 leaf 可自动 split 到 load 新鲜的空闲 CellApp；持续空闲 sibling leaf 可自动 merge；退役 CellApp 不再承接新 cell，空 leaf 可移除，非空 leaf 可 handoff 后 drain；primary leaf handoff 先拉 SpaceData snapshot 再发布 geometry |
-| geometry 广播 | `BroadcastGeometry` 缓存 BSP blob；拓扑未变时不重发 CellApp geometry，BaseApp debug payload 独立按负载变化更新；deferred `AddCellToSpaceAck` 必须来自已 reattach 的目标 CellApp channel / address 且 `success=true` 才会发布拓扑 |
+| geometry 广播 | `BroadcastGeometry` 缓存 BSP blob；拓扑未变时不重发 CellApp geometry，BaseApp debug payload 独立按负载变化更新；deferred `AddCellToSpaceAck` 必须来自当前已注册的目标 CellApp channel / address 且 `success=true` 才会发布拓扑 |
 | offload freeze | geometry 广播按 `ShouldOffload(false, epoch) → UpdateGeometry(version) → ShouldOffload(true, epoch)` 顺序发送；CellApp 忽略旧 epoch |
 | LB watcher | `cellappmgr/lb/cellapps`、`cellappmgr/lb/spaces`、`cellappmgr/lb/last_decision`、`decision_history`、`decision_count`、`pending_geometry_broadcasts`、`pending_space_create_status`、`load_report_stale_count`、`retire/status` 暴露 host/leaf load、load report age / stale 状态、tick load、`script_us`、`native_us`、witness / AoI / backup 指标、median、entity / load bucket shape、hot/idle ticks、geometry version、split / merge / retire / rehome 决策、retire/drain 状态、stuck drain、pending Space create 和 pending ack 数 |
 | offload 校验 | `OffloadEntity` 携带 target cell 和 geometry version；接收端拒绝 stale geometry / target missing，Ack 带 reject reason |
@@ -120,7 +117,7 @@ Real lost 场景，完整故障恢复会在本 Phase 的后续里程碑和 Phase
 | `AddCellToSpace` / `AddCellToSpaceAck` | 7004 / 7008 | 双向 | 分配 Cell，并确认 receiver 已建好本地 Cell |
 | `RemoveCellFromSpace` | 7009 | Mgr → CellApp | 删除已 drain 为空的本地 Cell |
 | `RequestCellAppState` | 7010 | Mgr → CellApp | 要求 CellApp 立即用 `InformCellLoad` 回报 load 和本地 geometry version |
-| `HealthProbe` / `HealthProbeAck` | 7011 / 7012 | Reviver ↔ Mgr | Reviver 直接二进制 heartbeat；Ack 携带 game time 和 snapshot save / failure / dirty / stale 摘要 |
+| `HealthProbe` / `HealthProbeAck` | 7011 / 7012 | Reviver ↔ Mgr | Reviver 直接二进制 heartbeat；Ack 携带 game time、reviver priority 和 active-monitor 判定 |
 | `UpdateGeometry` | 7005 | Mgr → CellApp | BSP 树 / Cell 边界更新 |
 | `ShouldOffload` | 7006 | Mgr → CellApp | geometry 广播前后 freeze / unfreeze 本 Cell 的 offload |
 | `SpaceCreatedResult` | 7007 | Mgr → 请求方 | 创建结果回包 |
@@ -316,100 +313,15 @@ offload pingpong。
 验收：CellApp crash 后统计 `promoted/restored/lost`；有 Ghost backup 的实体在
 Base cached backup 缺失时也能恢复。
 
-### M7 — CellAppMgr HA
+### M7 — Manager Recovery
 
-与 Phase 13 对齐，补齐 manager 崩溃后的状态恢复。
+CellAppMgr HA 的最终实现已归并到 Phase 13：manager 不再持久化自身
+协调态。Reviver 负责重启全局唯一 CellAppMgr；新 mgr 在 recovery 窗口内等待存活
+CellApp 重新注册并发送 `RecoverCellAppState`,再从 worker 报告重建
+Space BSP 和 cell→app 归属。
 
-交付：
-- 已落地：`CellAppMgr::Snapshot()` / `Restore()` 覆盖 cellapps、spaces BSP、
-  next ids、leaf load profile（含 native tick 和 tick-cost buckets）以及
-  pending geometry broadcasts 和 retire drain 状态。
-- 已落地：CellAppMgr 支持 `--snapshot-path` 周期性写本地 HA snapshot；
-  CellApp 注册、geometry 发布、deferred geometry ack / timeout、retire 流程、
-  CellApp death 和 registry reconcile 会标记 dirty snapshot，并按最多 1s
-  节流提前落盘；受控 shutdown 前会再 flush 一次；新进程启动时会先尝试读取并
-  `Restore()`。
-- 已落地：Reviver 启动新 CellAppMgr 时传递 snapshot path 和 interval；
-  `cellappmgr/ha/snapshot_interval_ms` 可验证新进程实际配置。
-- 已落地：Reviver 使用 `--config` 启动时会把同一配置文件传给 revived
-  CellAppMgr，再用 CLI 覆盖目标进程身份和端口，避免 LB 权重等运行配置漂移。
-- 已落地：snapshot 文件使用 magic / version / payload size / checksum
-  envelope；当前开发期 schema 持久化 `native_tick_us`、tick-cost buckets 和
-  retire drain 状态。写入通过 tmp 文件和平台原子替换完成，所有成功落盘都会
-  递增 `snapshot_saves`，并保留上一份 `.bak`；启动恢复主文件失败时会回退到
-  通过完整校验的 `.bak`，并通过 `snapshot_fallback_restores` 单独记录，不计入硬失败。
-- 已落地：启动恢复时 snapshot 缺失可跳过；主备 snapshot 均损坏、
-  checksum 不匹配或版本不兼容时会失败启动，避免 CellAppMgr 在未知旧状态上
-  继续提供权威 BSP。
-- 已落地：Restore 校验 `app_id` 唯一性、finite load、leaf host、pending
-  geometry 和 retire drain 的跨表引用；语义不一致的 snapshot 会被拒绝。
-- 已落地：restore 后的 CellApp 重新注册会保留原 `app_id`、重挂 channel，
-  并重发本地 leaf 的 `AddCellToSpace` 与当前 `UpdateGeometry`。
-- 已落地：存活 CellApp 订阅 CellAppMgr birth / death；Reviver 拉起新 mgr 后，
-  CellApp 会断开旧 mgr channel、清空旧 `app_id` 并重新注册，让
-  `reattach_pending` 收敛到 0。同一 pid / 地址的 birth replay 会被忽略，
-  避免重复断连重注册；同端口新 pid 仍会触发重连。
-- 已落地：restore 后尚未 reattach 的 CellApp 不参与新 Space bootstrap、
-  auto split 或 CellApp death rehome；其 `InformCellLoad` 会被忽略，避免把
-  拓扑或负载分配给不可达 host。
-- 已落地：restore 后还有 reattach pending 时，CellAppMgr 会冻结 LB tick、
-  elastic grow、auto split / merge 和 retire drain 拓扑推进；pending
-  `AddCellToSpaceAck` 未完成的 Space 不再提前移动 BSP 边界，且恢复出来的
-  pending geometry 不会在目标 CellApp reattach 前通过 timeout fallback 发布。
-- 已落地：`cellappmgr/ha/reattach_status`、`reattach_pending`、
-  `reattach_completed_count`、`reattach_completed`、`reattach_stuck` 和
-  `reattach_state`、`reattach_watchdog_ms`、`restore_gate_active`、
-  `restore_gate_blocked_pending_geometry` 和 `restore_gate_status` 暴露 HA
-  restore 后旧 CellApp 的回归收敛状态和恢复期 LB gate；
-  超时未回归的 host 会被标为 stuck 并写 warning。
-- 已落地：reattach pending 期间会审计 machined CellApp registry；已消失且
-  不持有 leaf 的 restored host 会被清理，有可用 survivor 时会复用
-  CellApp death rehome 路径，缺少可接管目标时保持 restore gate closed 并通过
-  `reattach_registry_status` 暴露 blocked。
-- 已落地：reattach replay 后 mgr 发送 `RequestCellAppState`，CellApp 绕过
-  load 节流立即用 `InformCellLoad` 回传最新 load、local cell 和 geometry version。
-- 已落地：新 mgr 通过 reattach replay 的 full `UpdateGeometry` 让 CellApp
-  以 mgr 为权威重同步。
-- 已落地：最小 Reviver 进程按 BigWorld 风格监控全局唯一 CellAppMgr；
-  异常 death 后按受控连续次数重启同名 mgr，并把 snapshot path 传给新进程；
-  新 mgr direct heartbeat ack 后重置连续重启预算；启动后未在
-  `revive-cellappmgr-launch-timeout-ms` 内注册会按失败重试，预算耗尽时通过
-  watcher 暴露 `status=restart_limited`、`restart_limit_reached` 和
-  `restart_limit_hits`。同 pid / 地址的 birth 或 query replay 会被 Reviver
-  幂等忽略，不会重置 heartbeat 状态或递增 active generation。
-- 已落地：持锁 Reviver 会直接向目标 CellAppMgr 发送 `HealthProbe` heartbeat，
-  并通过 `app/uptime_seconds` watcher 检查事件循环响应性；对本地目标检查
-  PID liveness，并周期性审计 machined registry。活跃 CellAppMgr 连续缺失时，
-  即使没有收到 listener death 通知也会按异常路径重启。本地目标 health
-  failure、manager health watcher timeout 或 registry missing 达到阈值时，
-  Reviver 会终止旧 pid 后再重启。
-  direct heartbeat 有独立响应超时，并与 manager watcher 使用独立连续失败计数；
-  `HealthProbeAck` 还带回目标 mgr 的 snapshot save、failure、dirty 和 stale
-  摘要，Reviver 通过 `heartbeat_last_ack_age_ms` 和
-  `heartbeat_snapshot_status` 汇总 watcher 可在 machined watcher 之外观察
-  heartbeat 与 HA snapshot 是否仍新鲜。
-  旧 pid 会先被终止，避免挂死进程继续占用 internal port。
-- 已落地：MachinedClient async registry query 和 watcher query 有本地超时，
-  避免 machined 连接保持但请求无回复时让 Reviver audit pending 卡死。
-- 已落地：machined 在同名注册时会清理 PID 已死亡的 stale entry，避免旧
-  registry 阻塞新 CellAppMgr 注册。
-- 已落地：machined 转发 `shutdown` 后保留目标 reason，目标随后 deregister /
-  disconnect / heartbeat timeout 时的 `DeathNotification` 会携带同一 reason；
-  abnormal shutdown 可稳定触发 Reviver restart，reason 0 保持正常退出语义。
-- 已落地：Reviver 默认获取目标 CellAppMgr 的进程级 leader lock；同机多
-  Reviver 只有持锁实例会 cold-start / restart mgr，其余实例保持 standby
-  并通过 watcher 暴露 leader 状态。
-- 已落地：`run_world_stress.py --with-cellappmgr-reviver` 可直接拉起 Reviver、
-  CellAppMgr snapshot 和 leader lock；`--cellappmgr-reviver-count N` 可启动共享
-  snapshot / leader lock 的多 Reviver leader / standby 拓扑；结束时会通过
-  machined 关闭 revived CellAppMgr，避免 Reviver 启动的 mgr 成为残留进程；
-  Reviver 拉起的新 CellAppMgr stdout / stderr 会写入独立日志，避免混入 Reviver
-  自身日志。
-- 当前边界：Reviver 只覆盖全局唯一 CellAppMgr；跨机器外部 leader lock、
-  共享 snapshot 以及 BaseAppMgr / DBAppMgr 接管归 Phase 13。
-
-验收：kill CellAppMgr 后，Reviver 拉起新 mgr，已有 Space 不丢，CellApp 不需要
-整体重启。
+验收归 Phase 13：kill CellAppMgr 后,Reviver 拉起新 mgr,存活 CellApp
+重注册并重报 BSP,已有 Space 收敛且不需要整体重启。
 
 ## 当前边界
 
@@ -426,13 +338,10 @@ Base cached backup 缺失时也能恢复。
   crash / rehome verifier 已覆盖拓扑 rehome、BaseApp notification、restore
   scheduled / restored / lost / timeout / pending 收敛和 restore elapsed 上限检查，
   仍缺更大规模实体恢复成功率基线。
-- CellAppMgr HA 已有本地 Snapshot / Restore、snapshot 文件、最小 Reviver
-  接管、Reviver leader lock、CellApp reattach geometry replay 和 CellApp
-  侧 load / geometry version 重拉；live fault-injection 已验证 mgr 重启后
-  存活 CellApp 自动重连并完成 reattach。snapshot 文件已有 envelope 校验、
-  dirty topology flush 和原子替换，并会保存 native tick 与 tick-cost bucket
-  负载形状，但仍不是 WAL，也不是跨机器共享存储。BaseAppMgr / DBAppMgr 接管归
-  Phase 13。
+- CellAppMgr HA 当前走 Phase 13 worker 重建：mgr 重启后表为空,存活
+  CellApp 重新注册并重报 BSP；recovery 窗口冻结拓扑推进,避免在局部视图上
+  split / merge / retire。BaseAppMgr 已用同一模式接入 Reviver；DBAppMgr
+  仍归 Phase 15。
 - `EntityRangeListNode` owner 已改为强类型 `CellEntity*`；RangeList 节点
   仍只保存非拥有指针，空间库通过前置声明避免反向依赖 CellApp 实现。
 
@@ -441,38 +350,9 @@ Base cached backup 缺失时也能恢复。
 现有覆盖：
 - `tests/unit/test_bsp_tree.cpp` 覆盖 split / balance / serialize / unsplit。
 - `tests/unit/test_cellappmgr.cpp` 覆盖注册、负载、建 Space、死亡 rehome、geometry freeze。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr Snapshot / Restore 对
-  cellapps、Space BSP、next ids、leaf load profile 和 pending geometry broadcast
-  的保留。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA snapshot 文件 round-trip
-  和成功保存计数 / primary file envelope readiness /
-  `.bak` readiness summary watcher。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA snapshot 主文件损坏或
-  缺失时回退上一份 `.bak`，并区分 fallback restore、restore failure counter、
-  最后恢复来源、fallback primary error、restore status summary、
-  restore attempt / success age 与硬失败 watcher。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA snapshot save 失败时的
-  save failure counter 和 last save error watcher。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA snapshot freshness / stale
-  watcher。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA 周期 snapshot 失败时按
-  interval 节流重试。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA dirty topology snapshot
-  在周期 interval 前提前落盘，并清空 dirty watcher。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr 受控 shutdown 前 flush
-  最新 HA snapshot。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA 当前 snapshot schema、
-  unsupported version、checksum mismatch、损坏文件、重复 `app_id` 和 dangling
-  leaf host 拒绝。
-- `tests/unit/test_filesystem.cpp` 覆盖 HA snapshot 落盘依赖的原子文件替换。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 CellAppMgr HA restore 后 reattach
-  pending / completed / stuck watcher 收敛。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 Snapshot / Restore 后 CellApp reattach
-  保留原 `app_id` 并重放 `AddCellToSpace` / `UpdateGeometry` / state request。
-- `tests/unit/test_cellappmgr.cpp` 覆盖 Snapshot / Restore 后未 reattach 的
-  CellApp 不参与新 Space 分配。
-- `tests/unit/test_cellapp_handlers.cpp` 覆盖 `RequestCellAppState` 触发
-  CellApp 立即回传带 geometry version 的 `InformCellLoad`。
+- `tests/unit/test_cellappmgr.cpp` 覆盖 `known_app_id` 保留、worker 重报
+  `RecoverCellAppState` 重建 Space、leaf owner 未知时跳过、版本未更新时忽略,
+  以及 recovery 窗口冻结 / 开启。
 - `tests/unit/test_cellapp_handlers.cpp` 覆盖 CellAppMgr birth replay 判定：
   同 pid / 地址不重连，新 pid、新地址或旧 channel down 后会重连。
 - `tests/unit/test_cellappmgr.cpp` 覆盖 per-cell weighted LB metrics、load report
@@ -526,50 +406,18 @@ Base cached backup 缺失时也能恢复。
 - `tests/integration/test_cellappmgr_integration.cpp` 覆盖真实 RUDP 注册、建 Space、
   elastic split、AddCell ack 和 timeout fallback。
 - `tests/integration/test_cellappmgr_process.cpp` 覆盖 Reviver cold-start 和异常
-  终止后重启真实 CellAppMgr 进程，以及同机多 Reviver leader lock 防止重复
-  cold-start、late Reviver attach 不重启已有 mgr、Reviver 启动前目标已死时
-  拉起新 mgr、leader 退出后 standby 接管不重启已有 mgr、目标 watcher 可响应
-  但 direct heartbeat 不回包时 forced termination + restart、连续 no-ack manager
-  达到 restart limit 后停止重启、manager health watcher pending timeout、
-  launched process 不注册时重试到 restart limit，并验证 Reviver `status`、
-  `launch_pending`、direct heartbeat last ack age、manager health、registry audit
-  watcher 和 revived CellAppMgr 配置继承 / output path。
+  终止后重启真实 CellAppMgr 进程、priority 仲裁、standby 接管、late attach
+  不重启已有 mgr、direct heartbeat / manager health / registry audit 失败路径、
+  restart limit、launched process 不注册重试，以及 revived CellAppMgr 配置继承 /
+  output path。
 - `tests/integration/test_machined_registration.cpp` 覆盖 machined 转发 shutdown
   后，目标 deregister 产生的 death notification 保留原 reason。
 - `tools/bin/verify_cellappmgr_ha.{bat,sh}` 用于 live cluster CellAppMgr HA
-  fault-injection smoke：通过 machined 关闭 mgr，等待 Reviver 重启，并验证
-  Reviver active generation 递增、direct heartbeat last ack age、manager health、
-  snapshot save / restore watcher 健康、primary snapshot file envelope / checksum readiness
-  （失败时暴露有界 `error_detail`）、
-  primary snapshot file dry-run restore topology readiness（失败时暴露有界
-  `error_detail`），且健康或允许缺失状态必须为 `error_detail=none`、
-  snapshot freshness / stale 状态、
-  `.bak` fallback envelope / checksum readiness（默认要求 `state=ready valid=1`）、
-  `.bak` fallback dry-run restore topology readiness、
-  Reviver leader lock 唯一 active leader、
-  重启前后 `cellappmgr/lb/spaces` 的 Space / leaf topology fingerprint 一致性、
-  kill 前最后一次成功落盘 snapshot 的 topology fingerprint 与当前 live topology
-  一致性且 pending ack 为 0、
-  restore 成功后 `snapshot_last_restore_topology` 与预期 topology fingerprint 一致性且
-  pending ack 为 0、
-  restore attempt / success age、restore status summary、
-  fallback primary error、snapshot failure 聚合计数一致性、CellApp 自动重连、reattach completed、
-  restored / pending / completed_count / state watcher 与 status summary 字段一致、
-  stuck watcher 收敛，revived CellAppMgr 独立日志包含新 pid；
-  snapshot save 校验允许历史累计失败，但会拒绝验证窗口内新增 save failure
-  或 dirty snapshot 未清空，
-  每轮 restore 收敛后还会等待 revived CellAppMgr 重新写出 fresh snapshot，并要求
-  last save age 不大于 last restore age；
-  `--no-inject` 也会校验聚合计数、freshness、reattach / restore gate /
-  registry watcher 与 summary 一致性，以及当前拓扑可解析且无 pending ack。
-  高 churn 压测可用 `--allow-topology-change` 显式跳过拓扑指纹一致性。
-  收敛后等待稳定窗口确认没有二次 restart、heartbeat timeout 或 forced termination；
-  `--cycles` 可连续注入多轮
-  异常接管，`--no-inject` 可复用同一稳定窗口做非破坏性巡检；
-  `--summary-json` 可在全部检查通过后写出机器可读接管摘要；
-  `--max-takeover-ms` 可限制每轮 shutdown 到 revived mgr 写出 fresh snapshot 的
-  takeover elapsed；`--min-revivers` 可要求验证拓扑包含 standby Reviver 并拒绝
-  多 active leader。
+  fault-injection smoke：通过 machined 关闭 mgr,等待 Reviver 重启,并验证
+  direct heartbeat、manager health、priority 仲裁、worker 重注册 / BSP 重报、
+  recovery 窗口收敛、Space / leaf topology fingerprint、pending ack 和稳定窗口。
+  `--cycles` 可连续注入多轮异常接管,`--no-inject` 可做非破坏性巡检,
+  `--summary-json` 可写出机器可读接管摘要。
 - `tests/integration/test_offload_traversal.cpp` 覆盖实体跨 BSP split 后 offload。
 - `tools/bin/run_mvp_cluster.bat` 用于 4 CellApp + NPC 的端到端 LB smoke。
 - `tools/bin/verify_retire_drain.{bat,sh}` 用于 live cluster retire drain smoke。

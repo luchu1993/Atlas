@@ -39,8 +39,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# Cluster needs five contiguous ports (machined, dbapp, baseappmgr, baseapp,
-# loginapp). Reserve a 16-slot block to give downstream tools elbow room.
+# Reserve one 16-slot block for machined, its UDP ports, core apps, and tools.
 _PORT_BLOCK_SIZE = 16
 
 
@@ -92,14 +91,14 @@ _EARLY_EXIT_GRACE_SEC = 2.0
 
 
 def _spawn_cluster(args: argparse.Namespace, port_base: int) -> int:
-    # machined_app.cc binds its UDP heartbeat to internal_port + 1, so
-    # port_base+1 is reserved — peers start at port_base+2.
+    # machined_app.cc binds UDP heartbeat to internal_port+1 and mesh to
+    # internal_port+2, so peers start at port_base+3.
     machined_port = port_base
-    dbapp_port = port_base + 2
-    baseappmgr_port = port_base + 3
-    baseapp_internal_port = port_base + 4
-    baseapp_external_port = port_base + 5
-    loginapp_port = port_base + 6
+    dbapp_port = port_base + 3
+    baseappmgr_port = port_base + 4
+    baseapp_internal_port = port_base + 5
+    baseapp_external_port = port_base + 6
+    loginapp_port = port_base + 7
 
     repo_root = resolve_repo_root()
     bin_name = args.build_dir

@@ -67,7 +67,7 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   active Reviver 自己也死时 standby 按 priority-scaled grace + 注册表 dedup 经
   `AuditRevive` 接管。**删除 leader lock（本地文件锁 + machined-lease）、machined
   LeaseStore + lease wire 消息 + MachinedClient lease API + lease config**。
-- **M4 machined → per-host UDP 广播网格**（进行中，不可逆点）：每台机一个
+- **M4 machined → per-host UDP 广播网格** ✅（不可逆点）：每台机一个
   machined，UDP 广播发现 + ring/buddy，单例 manager 靠"广播查询 → first-found"，
   删单地址 TCP 中心模型。依赖 M3。分片：
   - **M4-1**（commit `5383521`，纯增量可逆）：UDP 广播传输原语——`Socket::SetBroadcast`
@@ -139,7 +139,7 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   当前 mgr 的残留 control-plane 消息（`cellapp/ha/cellappmgr_stale_drops`
   watcher）；无显式 generation/fencing（与 BigWorld 一致）。partition / recovery
   窗口内旧 mgr 的在途包不会污染拓扑决策。
-- **CellApp reattach（轻量）**：mgr 重启后表为空，存活 CellApp 经 machined
+- **CellApp 重新注册**：mgr 重启后表为空，存活 CellApp 经 machined
   birth / death 重连并重注册（保留 app_id），随即主动重报 BSP。重复注册
   （同 channel）幂等 re-ack；同 pid / 地址的 birth replay 被忽略，新 pid 或
   新地址会触发重连。
@@ -225,7 +225,7 @@ live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha.py` / `verify_basea
   PID liveness 和 registry audit；跨机器仲裁靠 priority+timeout + 注册表收敛。
 - 全集群同时重启会丢失 manager 态（与 BigWorld 同）；单 manager 重启由存活 worker
   重报恢复。
-- restore 后始终不重连的 CellApp：M2 删除 reattach 对账后，mgr 表里本就不存在
+- Manager 重启后始终不重连的 CellApp：mgr 表里本就不存在
   "待重连"的 ghost（表为空、靠 worker 主动重报），所以无需 force-resolve；machined
   registry 是 CellApp 是否存活的真相来源。
 - DBAppMgr 多 DBApp、分片迁移和 DBApp 故障转移仍未实现（Phase 15）。
@@ -255,9 +255,7 @@ live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha.py` / `verify_basea
 
 ## 后续工作
 
-1. **M4 — machined per-host UDP 广播网格**（不可逆点）：每台机一个 machined，UDP
-   广播发现 + ring/buddy，删单地址 TCP 中心模型；断容器 / 云部署。
-2. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
+1. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
    原则实现（不再用 snapshot）。
 
 ## 验证基线

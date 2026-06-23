@@ -1,8 +1,7 @@
 name: Sanitizers
 
-# Sanitizers (asan / ubsan) are slow and disk-heavy, so they don't gate PRs.
-# Run weekly and on demand. tsan is excluded — TSan + custom allocator paths
-# in atlas::HeapAlloc produce noisy false positives that need a dedicated pass.
+# Sanitizers are slow and disk-heavy, so they run weekly/on demand.
+# TSan is excluded because allocator paths currently produce noisy reports.
 on:
   workflow_dispatch:
   schedule:
@@ -23,10 +22,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
@@ -38,10 +37,10 @@ jobs:
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .sccache
           key: sccache-linux-${{ matrix.preset }}-${{ github.sha }}
@@ -49,7 +48,7 @@ jobs:
             sccache-linux-${{ matrix.preset }}-
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
@@ -57,7 +56,7 @@ jobs:
             nuget-${{ runner.os }}-
 
       - name: Cache FetchContent _deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: build/${{ matrix.preset }}/_deps
           key: deps-${{ runner.os }}-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
@@ -94,10 +93,8 @@ jobs:
       - name: Unit Tests
         working-directory: build/${{ matrix.preset }}
         env:
-          # Atlas's pool allocator legitimately leaks at static-init shutdown;
-          # the asan preset doesn't switch to std heap on Linux (only asan-msvc
-          # does), so leak detection would dominate noise. Keep heap-use-
-          # after-free etc., drop leaks.
+          # Atlas's pool allocator can leak at static-init shutdown on Linux.
+          # Keep memory errors, but drop leak detection noise in this preset.
           ASAN_OPTIONS: detect_leaks=0:halt_on_error=1:abort_on_error=1
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1:abort_on_error=1
         run: ctest --build-config Debug --label-regex unit --output-on-failure

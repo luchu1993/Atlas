@@ -1,9 +1,7 @@
 name: Windows Tests
 
-# Fires after Windows Build completes; runs only when the build succeeded.
-# Re-builds the debug preset locally so it has the test binaries (sccache
-# restores the populated cache from the build run, so it's an incremental
-# link rather than a full compile).
+# Runs after a successful Windows Build and rebuilds debug for test binaries.
+# sccache should make the rebuild incremental instead of a full compile.
 on:
   workflow_run:
     workflows: ["Windows Build"]
@@ -21,25 +19,25 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
       - name: Setup .NET SDK
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
 
       - name: Setup MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
+        uses: step-security/msvc-dev-cmd@v1
         with:
           arch: x64
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.6
+        uses: mozilla-actions/sccache-action@v0.0.10
 
       - name: Cache sccache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .sccache
           key: sccache-windows-debug-${{ github.event.workflow_run.head_sha }}
@@ -47,7 +45,7 @@ jobs:
             sccache-windows-debug-
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.nuget/packages
           key: nuget-windows-${{ hashFiles('**/*.csproj', '**/Directory.Build.props') }}
@@ -55,7 +53,7 @@ jobs:
             nuget-windows-
 
       - name: Cache FetchContent _deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: build/debug/_deps
           key: deps-windows-debug-${{ hashFiles('cmake/Dependencies.cmake') }}
