@@ -44,5 +44,5 @@ target_link_libraries(atlas_platform
 if(WIN32)
   target_link_libraries(atlas_platform PUBLIC ws2_32 dbghelp)
 elseif(UNIX)
-  target_link_libraries(atlas_platform PUBLIC dl Threads::Threads)
+  target_link_libraries(atlas_platform PUBLIC ${CMAKE_DL_LIBS} Threads::Threads)
 endif()
