@@ -20,7 +20,7 @@ if(WIN32)
     process_launcher_windows.cc
     threading_windows.cc
   )
-elseif(UNIX)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   target_sources(atlas_platform PRIVATE
     child_process_linux.cc
     crash_handler_linux.cc
@@ -28,10 +28,8 @@ elseif(UNIX)
     filesystem_linux.cc
     io_poller_epoll.cc
     threading_linux.cc
+    process_launcher_linux.cc
   )
-  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(atlas_platform PRIVATE process_launcher_linux.cc)
-  endif()
 endif()
 
 if(ATLAS_USE_IOURING AND UNIX)
