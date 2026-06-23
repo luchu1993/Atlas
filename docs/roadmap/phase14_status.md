@@ -43,8 +43,8 @@
 
 这套命令只代表 Phase 14 最小回归，不等同于完整验收。完整闭环还需要记录
 50 / 100 / 400 `world_stress --move-mode input --movement-verify`、150ms RTT /
-2% loss 双客户端，以及 Windows / Linux / Unity native predictor parity 的 PASS
-日期和命令输出。
+2% loss 双客户端、Linux 服务端 parity，以及 Unity Player runtime native
+predictor parity 的 PASS 日期和命令输出。
 
 ---
 
@@ -52,7 +52,7 @@
 
 - `tools\bin\build.bat debug --clean`：PASS。
 - `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_pipeline|lag_compensation" --output-on-failure`：PASS，16 / 16。
-- `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj --configuration Debug`：PASS，98 / 98。
+- `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj --configuration Debug`：PASS，99 / 99；包含 C# / Unity 共用 `AtlasNetNative` binding 的 native predictor 10k tick 运行覆盖。
 - `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine --target UEClientEditor --build-config Development --platform Win64 --skip-native --skip-defs --skip-codegen --skip-stage`：PASS。
 - `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine --target UEClient --build-config Development --platform Win64 --skip-native --skip-defs --skip-codegen --skip-stage`：PASS。
 - `UnrealEditor-Cmd.exe ... -ExecCmds="Automation RunTests Atlas.NetClient" -TestExit="Automation Test Queue Empty"`：PASS，9 / 9。
@@ -65,4 +65,4 @@
 - `tools\bin\build_mvp_ue.bat --config Debug --skip-defs --skip-codegen --skip-stage --skip-ue`：PASS。
 - `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_asset|collision_pipeline|test_space|lag_compensation|backend_parity" --output-on-failure`：PASS，19 / 19；包含 `chunk_boundary_cross` parity 场景。
 
-仍未由本地命令证明：Linux 服务端 parity、Unity runtime native predictor parity。
+仍未由本地命令证明：Linux 服务端 parity、Unity Player runtime native predictor parity。
