@@ -199,7 +199,8 @@ class BaseApp : public EntityApp {
 
   // Allocates an ID, hydrates C#, and sends CreateCellEntity if cell-bound.
   // Returns the new EntityID, or 0 on failure.
-  auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID;
+  auto CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id, math::Vector3 position,
+                                  math::Vector3 direction, bool on_ground) -> EntityID;
 
   // Routes SpawnLocalEntity to a deterministically-picked CellApp; the cell
   // assigns the id, so this returns only whether the message went out.

@@ -797,6 +797,7 @@ void CellAppMgr::ExecuteCreateSpace(const cellappmgr::CreateSpaceRequest& msg, c
   SpacePartition partition;
   partition.space_id = msg.space_id;
   partition.space_master_type = msg.space_master_type;
+  partition.auto_merge_after = Clock::now() + startup_quiescence_window_;
   partition.bsp.InitSingleCell(leaf);
 
   if (hosts.size() >= 2) BootstrapMultiCellPartition(partition, hosts);
@@ -1102,6 +1103,10 @@ auto CellAppMgr::PickMergeCandidate(const SpacePartition& partition)
   const uint32_t sustain_ticks = std::max<uint32_t>(1, s_lb_auto_merge_sustain_ticks.Value());
   const auto primary = partition.bsp.PrimaryCellId();
   const auto now = Clock::now();
+  if (partition.auto_merge_after.time_since_epoch() != Duration::zero() &&
+      now < partition.auto_merge_after) {
+    return std::nullopt;
+  }
   auto has_fresh_assignable_owner = [&](const CellInfo& leaf) {
     const auto app_it = cellapps_.find(leaf.cellapp_addr);
     return app_it != cellapps_.end() && IsAssignableForLb(app_it->second, now);

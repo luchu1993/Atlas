@@ -103,6 +103,11 @@ class INativeApiProvider {
   virtual void SetSpaceMasterType(uint32_t space_id, const char* name, int32_t len) = 0;
 
   virtual auto CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t = 0;
+  virtual auto CreateBaseEntityAt(uint16_t type_id, uint32_t space_id, float pos_x, float pos_y,
+                                  float pos_z, float dir_x, float dir_y, float dir_z,
+                                  bool on_ground) -> uint32_t {
+    return CreateBaseEntity(type_id, space_id);
+  }
 
   // Cell-only entity: lives on this CellApp, no Base counterpart, no DB row.
   // Returns 0 on failure. Non-trivial only on CellAppNativeProvider.

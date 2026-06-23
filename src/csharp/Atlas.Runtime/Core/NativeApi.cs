@@ -153,12 +153,25 @@ internal static unsafe partial class NativeApi
     [LibraryImport(LibName, EntryPoint = "AtlasCreateBaseEntity")]
     private static partial uint CreateBaseEntityNative(ushort typeId, uint spaceId);
 
+    [LibraryImport(LibName, EntryPoint = "AtlasCreateBaseEntityAt")]
+    private static partial uint CreateBaseEntityAtNative(ushort typeId, uint spaceId,
+        float posX, float posY, float posZ, float dirX, float dirY, float dirZ,
+        [MarshalAs(UnmanagedType.U1)] bool onGround);
+
     // Returns 0 on failure; instance available via EntityManager.Get after return.
     // For has_cell types also fires CreateCellEntity to spaceId's CellApp.
     public static uint CreateBaseEntity(ushort typeId, uint spaceId = 1)
     {
         ThreadGuard.EnsureMainThread();
         return CreateBaseEntityNative(typeId, spaceId);
+    }
+
+    public static uint CreateBaseEntity(ushort typeId, uint spaceId,
+        Vector3 position, Vector3 direction, bool onGround = false)
+    {
+        ThreadGuard.EnsureMainThread();
+        return CreateBaseEntityAtNative(typeId, spaceId, position.X, position.Y, position.Z,
+            direction.X, direction.Y, direction.Z, onGround);
     }
 
     [LibraryImport(LibName, EntryPoint = "AtlasCreateLocalCellEntity")]

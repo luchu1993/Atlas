@@ -597,9 +597,11 @@ tools\bin\run_world_stress.bat `
 和 correction report。`move_sent` 是输入包发送数，`movement_ack_recv` 是裸协议
 客户端收到的 `MovementStateAck` 数。
 
-`--move-mode input` 下，`--spread-radius > 0` 会在 CellReady 后发送一次
-`StressAvatar.ReportPos` 作为压测初始落点播种，并延迟首个 input 包；后续
-`move_sent` 仍只统计 Phase14 input。400 档建议配合多 Space，例如
+`--move-mode input` 下，`--spread-radius > 0` 会把裸协议客户端的初始象限编进
+`SelectAvatar`，Stress Base 脚本用带 pose 的 `CreateBaseEntity` 创建
+has_cell avatar，使首个 native movement state 落到对应 BSP leaf；随后仍会在
+CellReady 后发送一次 stress-only `ReportPos`，但 `move_sent` 只统计 Phase14
+input。400 档建议配合多 Space，例如
 `--clients 400 --space-count 8 --cellapp-count 4 --spread-radius 400`。
 `--movement-input-redundant-frames 2|3` 会把最近输入帧作为冗余帧打进同一包，
 用于覆盖协议的 1..3 frame burst 和 CellApp stale 去重路径；此时 CellApp
@@ -612,9 +614,10 @@ reorder 时 BaseApp / CellApp `stale` 允许大于 0。BaseApp `rate` /
 `invalid` / `seqgap` 必须为 0；CellApp `rate` / `invalid` / `seqgap` /
 `overflow` 必须为 0。
 
-当前 400 档短 smoke 基线：`spawn_pos_sent=400`、`move_sent=48051`、
-`movement_ack_recv=6556`、`echo_loss=0`。BaseApp `rate` / `invalid` /
-`seqgap` 和 CellApp `rate` / `invalid` / `seqgap` / `overflow` 均为 0。
+当前 400 档基线：`spawn_pos_sent=400`、`move_sent=106221`、
+`movement_ack_recv=14242`、`echo_loss=40`；4 个 CellApp 都有 movement input /
+frame / ack 覆盖。BaseApp `rate` / `invalid` / `seqgap` / `ackstale` /
+`rptdrop` 和 CellApp `rate` / `invalid` / `seqgap` / `overflow` 均为 0。
 3 帧冗余短 smoke 基线：`move_sent=118`、`move_frames_sent=348`、CellApp
 `stale=230`，BaseApp `rate` / `invalid` / `seqgap` 和 CellApp `rate` /
 `invalid` / `seqgap` / `overflow` 仍为 0。

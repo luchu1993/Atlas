@@ -66,6 +66,7 @@ class CellAppMgr : public ManagerApp {
     std::size_t last_debug_geometry_baseapp_count{0};
     // Entity type name the primary host auto-spawns on AddCellToSpace.
     std::string space_master_type;
+    TimePoint auto_merge_after{};
   };
 
   [[nodiscard]] auto CellApps() const -> const std::unordered_map<Address, CellAppInfo>& {

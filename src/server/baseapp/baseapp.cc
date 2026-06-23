@@ -2405,7 +2405,9 @@ auto BaseApp::RequestSpawnCellOnly(uint16_t type_id, SpaceID space_id, math::Vec
   return true;
 }
 
-auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> EntityID {
+auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id,
+                                         math::Vector3 position, math::Vector3 direction,
+                                         bool on_ground) -> EntityID {
   const auto& defs = EntityDefs();
   auto* type = defs.FindById(type_id);
   if (!type) {
@@ -2443,9 +2445,9 @@ auto BaseApp::CreateBaseEntityFromScript(uint16_t type_id, SpaceID space_id) -> 
       msg.entity_id = kEid;
       msg.type_id = type_id;
       msg.space_id = effective_space_id;
-      msg.position = {0.f, 0.f, 0.f};
-      msg.direction = {1.f, 0.f, 0.f};
-      msg.on_ground = false;
+      msg.position = position;
+      msg.direction = direction;
+      msg.on_ground = on_ground;
       msg.base_addr = Network().RudpAddress();
       msg.request_id = kEid;
       ent->SetLastCellPose(msg.position, msg.direction, msg.on_ground);

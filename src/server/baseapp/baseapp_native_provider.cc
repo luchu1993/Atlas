@@ -147,7 +147,15 @@ void BaseAppNativeProvider::SetSpaceMasterType(uint32_t space_id, const char* na
 }
 
 auto BaseAppNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t space_id) -> uint32_t {
-  return app_.CreateBaseEntityFromScript(type_id, space_id);
+  return app_.CreateBaseEntityFromScript(type_id, space_id, math::Vector3{0.f, 0.f, 0.f},
+                                         math::Vector3{1.f, 0.f, 0.f}, false);
+}
+
+auto BaseAppNativeProvider::CreateBaseEntityAt(uint16_t type_id, uint32_t space_id, float pos_x,
+                                               float pos_y, float pos_z, float dir_x, float dir_y,
+                                               float dir_z, bool on_ground) -> uint32_t {
+  return app_.CreateBaseEntityFromScript(type_id, space_id, math::Vector3{pos_x, pos_y, pos_z},
+                                         math::Vector3{dir_x, dir_y, dir_z}, on_ground);
 }
 
 auto BaseAppNativeProvider::RequestSpawnCellOnly(uint16_t type_id, uint32_t space_id, float px,

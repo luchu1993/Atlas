@@ -400,10 +400,15 @@ class Session {
     constexpr uint32_t kSelectAvatarRpcId = (3u << 22) | (1u << 8) | 1u;
     const int32_t kSpaceCount = opts_.space_count > 0 ? opts_.space_count : 1;
     const int32_t kSpaceId = static_cast<int32_t>(id_ % static_cast<std::size_t>(kSpaceCount)) + 1;
+    int32_t avatar_index = kSpaceId;
+    if (opts_.move_mode == MoveMode::kMovementInput && opts_.spread_radius > 0.f) {
+      const int32_t spawn_code = 1 + (init_x_ >= 0.f ? 1 : 0) + (init_z_ >= 0.f ? 2 : 0);
+      avatar_index = (spawn_code << 16) | (kSpaceId & 0xFFFF);
+    }
     baseapp::ClientBaseRpc rpc;
     rpc.rpc_id = kSelectAvatarRpcId;
-    rpc.payload.resize(sizeof(kSpaceId));
-    std::memcpy(rpc.payload.data(), &kSpaceId, sizeof(kSpaceId));
+    rpc.payload.resize(sizeof(avatar_index));
+    std::memcpy(rpc.payload.data(), &avatar_index, sizeof(avatar_index));
     const auto kRpcSend = auth_channel_->SendMessage(rpc);
     if (kRpcSend) {
       ++metrics_.select_avatar_sent;

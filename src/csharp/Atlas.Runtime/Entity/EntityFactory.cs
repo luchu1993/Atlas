@@ -66,6 +66,15 @@ public static class EntityFactory
         return CreateBaseByTypeId(typeId, spaceId);
     }
 
+    public static BaseServerEntity? CreateBase(string typeName, uint spaceId,
+                                               Vector3 position, Vector3 direction,
+                                               bool onGround = false)
+    {
+        var typeId = GetTypeId(typeName);
+        if (typeId == 0) return null;
+        return CreateBaseByTypeId(typeId, spaceId, position, direction, onGround);
+    }
+
     /// <summary>
     /// Creates a new base entity of the given type id on the local BaseApp.
     /// The C# instance is materialised synchronously via the RestoreEntity
@@ -76,6 +85,15 @@ public static class EntityFactory
     public static BaseServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId = 1)
     {
         var entityId = NativeApi.CreateBaseEntity(typeId, spaceId);
+        if (entityId == 0) return null;
+        return EntityManager.Instance.Get(entityId) as BaseServerEntity;
+    }
+
+    public static BaseServerEntity? CreateBaseByTypeId(ushort typeId, uint spaceId,
+                                                       Vector3 position, Vector3 direction,
+                                                       bool onGround = false)
+    {
+        var entityId = NativeApi.CreateBaseEntity(typeId, spaceId, position, direction, onGround);
         if (entityId == 0) return null;
         return EntityManager.Instance.Get(entityId) as BaseServerEntity;
     }

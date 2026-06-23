@@ -119,6 +119,15 @@ auto BaseNativeProvider::CreateBaseEntity(uint16_t type_id, uint32_t /*space_id*
   return 0;
 }
 
+auto BaseNativeProvider::CreateBaseEntityAt(uint16_t type_id, uint32_t /*space_id*/,
+                                            float /*pos_x*/, float /*pos_y*/, float /*pos_z*/,
+                                            float /*dir_x*/, float /*dir_y*/, float /*dir_z*/,
+                                            bool /*on_ground*/) -> uint32_t {
+  ATLAS_LOG_ERROR("create_base_entity_at() not supported on this process type (type_id={})",
+                  type_id);
+  return 0;
+}
+
 auto BaseNativeProvider::CreateLocalCellEntity(uint16_t type_id, uint32_t /*space_id*/,
                                                float /*pos_x*/, float /*pos_y*/, float /*pos_z*/,
                                                float /*dir_x*/, float /*dir_y*/, float /*dir_z*/,

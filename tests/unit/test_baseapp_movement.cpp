@@ -11,6 +11,8 @@
 #include "baseapp/baseapp.h"
 #include "baseapp/baseapp_messages.h"
 #include "cellapp/cellapp_messages.h"
+#include "entitydef/entity_def_registry.h"
+#include "entitydef/entity_type_descriptor.h"
 #include "foundation/clock.h"
 #include "foundation/intrusive_ptr.h"
 #include "network/channel.h"
@@ -60,6 +62,23 @@ auto MovementForwards(const RecordingChannel& ch)
   return out;
 }
 
+auto CreateCellEntities(const RecordingChannel& ch) -> std::vector<cellapp::CreateCellEntity> {
+  std::vector<cellapp::CreateCellEntity> out;
+  for (const auto& frame : ch.Sends()) {
+    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
+    const auto id = reader.ReadPackedInt();
+    if (!id || *id != cellapp::CreateCellEntity::Descriptor().id) continue;
+    const auto len = reader.ReadPackedInt();
+    if (!len) continue;
+    const auto payload = reader.ReadBytes(*len);
+    if (!payload) continue;
+    BinaryReader msg_reader(*payload);
+    auto msg = cellapp::CreateCellEntity::Deserialize(msg_reader);
+    if (msg.HasValue()) out.push_back(std::move(*msg));
+  }
+  return out;
+}
+
 }  // namespace
 
 class BaseAppMovementInputTest : public ::testing::Test {
@@ -77,6 +96,7 @@ class BaseAppMovementInputTest : public ::testing::Test {
         cell_ch_(make_intrusive<RecordingChannel>(dispatcher_, table_, cell_addr_)) {}
 
   void SetUp() override {
+    EntityDefRegistry::Instance().clear();
     dispatcher_.SetMaxPollWait(Milliseconds(1));
     client_network_.InterfaceTable().RegisterTypedHandler<baseapp::MovementCommandStartToClient>(
         [this](const Address&, Channel*, const baseapp::MovementCommandStartToClient& msg) {
@@ -93,6 +113,8 @@ class BaseAppMovementInputTest : public ::testing::Test {
     client_ch_ = make_intrusive<RecordingChannel>(dispatcher_, table_, client_addr_);
   }
 
+  void TearDown() override { EntityDefRegistry::Instance().clear(); }
+
   auto SeedClientEntity() -> EntityID {
     app_.entity_mgr_.SetIdClient(&app_.id_client_);
     app_.id_client_.AddIds(1200, 1300);
@@ -103,6 +125,27 @@ class BaseAppMovementInputTest : public ::testing::Test {
     (void)external_network_.ConnectRudp(client_addr_);
     if (!app_.BindClient(entity->EntityId(), client_addr_)) return kInvalidEntityID;
     return entity->EntityId();
+  }
+
+  void RegisterCellBackedType(uint16_t type_id) {
+    auto& reg = EntityDefRegistry::Instance();
+    reg.clear();
+    EntityTypeDescriptor type{};
+    type.type_id = type_id;
+    type.has_cell = true;
+    type.has_client = false;
+    reg.id_index[type_id] = reg.types.size();
+    reg.types.push_back(std::move(type));
+  }
+
+  auto CreateScriptEntityAt(uint16_t type_id, SpaceID space_id, math::Vector3 position,
+                            math::Vector3 direction, bool on_ground) -> EntityID {
+    app_.entity_mgr_.SetIdClient(&app_.id_client_);
+    app_.id_client_.AddIds(2000, 2100);
+    app_.cellapp_peers_.InsertForTest(cell_addr_, cell_ch_.get());
+    BaseAppNativeProvider provider(app_);
+    return provider.CreateBaseEntityAt(type_id, space_id, position.x, position.y, position.z,
+                                       direction.x, direction.y, direction.z, on_ground);
   }
 
   void OnClientMovementInput(const baseapp::ClientMovementInput& msg) {
@@ -205,6 +248,31 @@ TEST_F(BaseAppMovementInputTest, ForwardsStampedMovementInputToCurrentCell) {
   EXPECT_EQ(forwards[0].target_entity_id, entity_id);
   ASSERT_EQ(forwards[0].frames.size(), 1u);
   EXPECT_EQ(forwards[0].frames[0].seq, 42u);
+}
+
+TEST_F(BaseAppMovementInputTest, CreateBaseEntityAtSeedsInitialCellPose) {
+  constexpr uint16_t kTypeId = 7;
+  constexpr SpaceID kSpaceId = 5;
+  const math::Vector3 position{300.f, 1.5f, -300.f};
+  const math::Vector3 direction{0.f, 0.f, 1.f};
+  RegisterCellBackedType(kTypeId);
+
+  const EntityID entity_id =
+      CreateScriptEntityAt(kTypeId, kSpaceId, position, direction, /*on_ground=*/true);
+
+  ASSERT_NE(entity_id, kInvalidEntityID);
+  auto creates = CreateCellEntities(*cell_ch_);
+  ASSERT_EQ(creates.size(), 1u);
+  EXPECT_EQ(creates[0].entity_id, entity_id);
+  EXPECT_EQ(creates[0].type_id, kTypeId);
+  EXPECT_EQ(creates[0].space_id, kSpaceId);
+  EXPECT_FLOAT_EQ(creates[0].position.x, position.x);
+  EXPECT_FLOAT_EQ(creates[0].position.y, position.y);
+  EXPECT_FLOAT_EQ(creates[0].position.z, position.z);
+  EXPECT_FLOAT_EQ(creates[0].direction.x, direction.x);
+  EXPECT_FLOAT_EQ(creates[0].direction.y, direction.y);
+  EXPECT_FLOAT_EQ(creates[0].direction.z, direction.z);
+  EXPECT_TRUE(creates[0].on_ground);
 }
 
 TEST_F(BaseAppMovementInputTest, RejectsCrossEntityMovementInput) {

@@ -143,6 +143,12 @@ TEST_F(AtlasEngineExports, RegisterEntityTypeExported) {
   EXPECT_NE(*sym, nullptr);
 }
 
+TEST_F(AtlasEngineExports, CreateBaseEntityAtExported) {
+  auto sym = lib_->GetSymbol<void*>("AtlasCreateBaseEntityAt");
+  EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
+  EXPECT_NE(*sym, nullptr);
+}
+
 TEST_F(AtlasEngineExports, UnregisterAllEntityTypesExported) {
   auto sym = lib_->GetSymbol<void*>("AtlasUnregisterAllEntityTypes");
   EXPECT_TRUE(sym.HasValue()) << sym.Error().Message();
