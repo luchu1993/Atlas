@@ -87,14 +87,9 @@ class RecordingChannel final : public Channel {
   std::vector<std::vector<std::byte>> sends_;
 };
 
-// Pull the first baseapp::CellAppDeath payload out of a RecordingChannel
-// capture. Channel SendMessage frames carry a msg_id prefix + length
-// header followed by the serialised struct; the InterfaceTable we ship
-// to outbound sends uses the standard descriptor so the decoder here
-// matches the test_watcher_forwarder helper shape.
+// Decode the first baseapp::CellAppDeath payload from captured outbound frames.
+// Rehome also emits SpaceBspGeometry, so scan by msg_id.
 auto FirstCellAppDeath(const RecordingChannel& ch) -> baseapp::CellAppDeath {
-  // OnCellAppDeath now also fans out a SpaceBspGeometry (rehome triggers
-  // BroadcastGeometry); scan by msg_id rather than taking front().
   for (const auto& frame : ch.Sends()) {
     BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
     const auto id = reader.ReadPackedInt();
@@ -177,24 +172,6 @@ auto UpdateGeometryMessages(const RecordingChannel& ch)
   return out;
 }
 
-auto RegisterCellAppAcks(const RecordingChannel& ch)
-    -> std::vector<cellappmgr::RegisterCellAppAck> {
-  std::vector<cellappmgr::RegisterCellAppAck> out;
-  for (const auto& frame : ch.Sends()) {
-    BinaryReader reader(std::span<const std::byte>(frame.data(), frame.size()));
-    const auto id = reader.ReadPackedInt();
-    if (!id || *id != cellappmgr::RegisterCellAppAck::Descriptor().id) continue;
-    auto msg = cellappmgr::RegisterCellAppAck::Deserialize(reader);
-    if (msg.HasValue()) out.push_back(*msg);
-  }
-  return out;
-}
-
-
-// ============================================================================
-// Register / Ack
-// ============================================================================
-
 TEST(CellAppMgr, Register_AssignsAppIdAndStoresPeer) {
   CellAppMgrHarness h;
   cellappmgr::RegisterCellApp msg;
@@ -232,10 +209,6 @@ TEST(CellAppMgr, Register_MonotonicAppIds) {
   std::sort(ids.begin(), ids.end());
   for (size_t i = 0; i < ids.size(); ++i) EXPECT_EQ(ids[i], i + 1);
 }
-
-// ============================================================================
-// InformCellLoad
-// ============================================================================
 
 TEST(CellAppMgr, InformCellLoad_UpdatesPeerAndLeafLoad) {
   CellAppMgrHarness h;
