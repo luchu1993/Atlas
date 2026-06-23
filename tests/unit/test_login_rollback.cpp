@@ -100,8 +100,8 @@ class BaseAppRollbackTest : public ::testing::Test {
 
   void seed_expired_prepared_login(uint32_t login_request_id, EntityID entity_id) {
     app_.prepared_login_entities_[login_request_id] = BaseApp::PreparedLoginEntity{
-        entity_id, 1234, 7,
-        Clock::now() - BaseApp::kPreparedLoginTimeout - std::chrono::seconds(1)};
+        entity_id, 1234, 7, Clock::now() - BaseApp::kPreparedLoginTimeout - std::chrono::seconds(1),
+        "alice"};
     app_.prepared_login_requests_by_entity_[entity_id] = login_request_id;
   }
 
