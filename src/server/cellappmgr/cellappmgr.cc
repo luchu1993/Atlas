@@ -973,8 +973,12 @@ auto CellAppMgr::SplitLeafToHost(SpacePartition& partition, const CellInfo& targ
     SendAddCell(new_app, space_id, new_cell_id, new_leaf_in_tree->bounds,
                 /*is_primary=*/false, /*space_master_type=*/"");
   }
-  pending_geometry_broadcasts_.push_back({space_id, new_cell_id, new_app.internal_addr,
-                                          Clock::now()});
+  PendingGeometryBroadcast pending_geometry;
+  pending_geometry.space_id = space_id;
+  pending_geometry.awaiting_cell_id = new_cell_id;
+  pending_geometry.awaiting_addr = new_app.internal_addr;
+  pending_geometry.sent_at = Clock::now();
+  pending_geometry_broadcasts_.push_back(std::move(pending_geometry));
   hot_leaf_balance_ticks_.erase(target_cell_id);
   hot_leaf_balance_ticks_.erase(new_cell_id);
 
@@ -1285,9 +1289,14 @@ auto CellAppMgr::TryRetireHandoffLeaf(SpacePartition& partition) -> bool {
   mutable_leaf->cellapp_addr = target->internal_addr;
   mutable_leaf->load = target->load;
 
-  pending_geometry_broadcasts_.push_back(
-      {partition.space_id, cell_id, target->internal_addr, Clock::now(),
-       {ExtraGeometryRecipient{source_addr, cell_id}}, !is_primary});
+  PendingGeometryBroadcast pending_geometry;
+  pending_geometry.space_id = partition.space_id;
+  pending_geometry.awaiting_cell_id = cell_id;
+  pending_geometry.awaiting_addr = target->internal_addr;
+  pending_geometry.sent_at = Clock::now();
+  pending_geometry.extra_recipients.push_back(ExtraGeometryRecipient{source_addr, cell_id});
+  pending_geometry.allow_timeout_broadcast = !is_primary;
+  pending_geometry_broadcasts_.push_back(std::move(pending_geometry));
   RetireDrain drain;
   drain.space_id = partition.space_id;
   drain.cell_id = cell_id;
