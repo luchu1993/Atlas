@@ -27,9 +27,12 @@
 
 ## 最小回归命令集合
 
-每次 PR 推荐重跑这套作为最小回归：
+每次 PR 推荐重跑这套作为最小回归；如果 CTest 枚举 0 个测试，说明本地
+`build/debug` cache 关闭过 `ATLAS_BUILD_TESTS`，先用 `--clean` 重建：
 
-- `tools\bin\build.bat debug --build-only`
+- `tools\bin\build.bat debug`
+- `tools\bin\build_mvp_ue.bat --config Debug --skip-defs --skip-codegen
+  --skip-stage --skip-ue`
 - `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_pipeline|lag_compensation" --output-on-failure`
 - `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj
   --configuration Debug`
@@ -42,3 +45,21 @@
 50 / 100 / 400 `world_stress --move-mode input --movement-verify`、150ms RTT /
 2% loss 双客户端，以及 Windows / Linux / Unity native predictor parity 的 PASS
 日期和命令输出。
+
+---
+
+## 2026-06-23 本地验收记录
+
+- `tools\bin\build.bat debug --clean`：PASS。
+- `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_pipeline|lag_compensation" --output-on-failure`：PASS，16 / 16。
+- `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj --configuration Debug`：PASS，98 / 98。
+- `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine --target UEClientEditor --build-config Development --platform Win64 --skip-native --skip-defs --skip-codegen --skip-stage`：PASS。
+- `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine --target UEClient --build-config Development --platform Win64 --skip-native --skip-defs --skip-codegen --skip-stage`：PASS。
+- `UnrealEditor-Cmd.exe ... -ExecCmds="Automation RunTests Atlas.NetClient" -TestExit="Automation Test Queue Empty"`：PASS，9 / 9。
+- `tools\bin\run_world_stress.bat --clients 50 --account-pool 50 --duration-sec 30 --shortline-pct 0 --move-rate-hz 10 --move-mode input --spread-radius 400 --movement-verify --login-rate-limit-trusted-cidr 127.0.0.0/8 --login-rate-limit-global 10000`：PASS；`move_sent=13550`，`movement_ack_recv=3961`，BaseApp / CellApp `rate`、`invalid`、`seqgap`、`overflow` 均为 0。
+- `tools\bin\run_world_stress.bat --clients 100 --account-pool 100 --duration-sec 30 --shortline-pct 0 --move-rate-hz 10 --move-mode input --space-count 2 --cellapp-count 2 --spread-radius 400 --movement-verify --login-rate-limit-trusted-cidr 127.0.0.0/8 --login-rate-limit-global 10000`：PASS；`move_sent=27100`，`movement_ack_recv=4058`，BaseApp / CellApp `rate`、`invalid`、`seqgap`、`overflow` 均为 0。
+- `tools\bin\run_world_stress.bat --clients 400 --account-pool 400 --duration-sec 30 --shortline-pct 0 --move-rate-hz 10 --move-mode input --space-count 8 --cellapp-count 4 --spread-radius 400 --movement-verify --login-rate-limit-trusted-cidr 127.0.0.0/8 --login-rate-limit-global 10000`：PASS；`move_sent=106339`，`movement_ack_recv=16151`，BaseApp / active CellApp `rate`、`invalid`、`seqgap`、`overflow` 均为 0。该次运行 8 个 Space 都调度到 `cellapp_03`，不作为多 Cell 分摊证明。
+- `tools\bin\run_world_stress.bat --clients 0 --script-clients 2 --script-verify --duration-sec 20 --client-transport-impairment-ms 75 200 --login-rate-limit-trusted-cidr 127.0.0.0/8 --login-rate-limit-global 10000`：PASS；两个脚本客户端均产生 `mIn` / `mAck` / `mRpt`，BaseApp `rate`、`invalid`、`seqgap`、`ackstale`、`rptdrop` 均为 0。
+- `ctest --test-dir build\debug -C Debug -R "backend_parity" --output-on-failure`：PASS，1 / 1。
+
+仍未由本地命令证明：Linux 服务端 parity、Unity runtime native predictor parity。
