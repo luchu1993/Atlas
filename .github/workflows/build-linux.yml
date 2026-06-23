@@ -74,14 +74,6 @@ jobs:
           restore-keys: |
             nuget-linux-
 
-      - name: Cache FetchContent _deps
-        uses: actions/cache@v5
-        with:
-          path: build/${{ matrix.preset }}/_deps
-          key: deps-linux-${{ matrix.preset }}-${{ hashFiles('cmake/Dependencies.cmake') }}
-          restore-keys: |
-            deps-linux-${{ matrix.preset }}-
-
       - name: Restore .NET packages
         shell: bash
         run: |

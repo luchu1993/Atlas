@@ -69,6 +69,17 @@ const char* SignalName(int sig) {
   }
 }
 
+void CopyProcessNameForCrashPath(const std::string& process_name) {
+  const char* source = process_name.empty() ? "process" : process_name.c_str();
+  const std::size_t max_len = sizeof(g_process_name_buf) - 1;
+  std::size_t len = std::strlen(source);
+  if (len > max_len) {
+    len = max_len;
+  }
+  std::memcpy(g_process_name_buf, source, len);
+  g_process_name_buf[len] = '\0';
+}
+
 void WriteCrashFile(int fd, int sig, siginfo_t* info, void* /*ucontext*/) {
   SafeWrite(fd, "Atlas crash report\n");
   SafeWrite(fd, "process: ");
@@ -128,8 +139,7 @@ bool InstallCrashHandler(const CrashHandlerOptions& opts) {
 
   if (!PrepareDumpDir(opts.dump_dir)) return false;
 
-  std::snprintf(g_process_name_buf, sizeof(g_process_name_buf), "%s",
-                opts.process_name.empty() ? "process" : opts.process_name.c_str());
+  CopyProcessNameForCrashPath(opts.process_name);
 
   stack_t ss{};
   ss.ss_sp = g_alt_stack;

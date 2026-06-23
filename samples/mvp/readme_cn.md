@@ -322,9 +322,10 @@ bin/debug/test_cellappmgr_integration.exe    # 6 个用例（含 multi-cell boot
 
 ## 已知 MVP 简化点
 
-- 移动已走服务端权威输入帧、owner replay 和共享 CharacterMotor；Static
-  PhysicsQuery 已覆盖坡面、台阶、depenetration 和大纠正审计。Jolt scene
-  加载与 Unity collision export 仍是 Phase 14 后续项。
+- 移动已走服务端权威输入帧、owner replay 和共享 CharacterMotor；Static / Jolt
+  PhysicsQuery 已覆盖坡面、台阶、depenetration 和大纠正审计。`run_mvp_cluster`
+  会 cook 并加载 Unity 导出的 collision cache；chunk / border query 和 volume
+  export 仍是 Phase 14 后续项。
 - MVP `Avatar.ReportPos` 已移除；仅压测用 `StressAvatar.ReportPos`
   保留给 legacy load generation。
 - NPC AI 通过 movement intent 随机游走 + 周期性开火；没有仇恨 / 目标选择。

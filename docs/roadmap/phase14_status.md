@@ -25,16 +25,20 @@
 
 ---
 
-## 已验证的命令集合
+## 最小回归命令集合
 
 每次 PR 推荐重跑这套作为最小回归：
 
 - `tools\bin\build.bat debug --build-only`
-- `ctest --test-dir build\debug -C Debug --output-on-failure`，过滤 BaseApp /
-  CellApp movement message、handler、ABI 和 `movement_sim` 相关测试。
+- `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_pipeline|lag_compensation" --output-on-failure`
 - `dotnet test tests\csharp\Atlas.Client.Tests\Atlas.Client.Tests.csproj
   --configuration Debug`
 - `tools\bin\build_mvp_ue.bat --config Debug --ue-root E:\UE\UnrealEngine
   --target UEClientEditor --build-config Development --platform Win64 --skip-native
   --skip-defs --skip-codegen --skip-stage`
 - `UnrealEditor-Cmd.exe` 跑 `Automation RunTests Atlas.NetClient`。
+
+这套命令只代表 Phase 14 最小回归，不等同于完整验收。完整闭环还需要记录
+50 / 100 / 400 `world_stress --move-mode input --movement-verify`、150ms RTT /
+2% loss 双客户端，以及 Windows / Linux / Unity native predictor parity 的 PASS
+日期和命令输出。

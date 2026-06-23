@@ -478,8 +478,9 @@ bin/debug/test_cellappmgr_integration.exe    # 6 cases incl. multi-cell bootstra
 ## Known MVP shortcuts
 
 - Movement uses server-authoritative input frames, owner replay, and the
-  shared CharacterMotor with Static PhysicsQuery for slope, step-up,
-  depenetration, and correction audit. Jolt scene loading and Unity collision
+  shared CharacterMotor with Static / Jolt PhysicsQuery for slope, step-up,
+  depenetration, and correction audit. `run_mvp_cluster` cooks and loads the
+  Unity-exported collision cache when present; chunk / border query and volume
   export remain Phase 14 follow-ups.
 - `Avatar.ReportPos` is removed from the MVP Avatar; stress-only
   `StressAvatar.ReportPos` remains for legacy load generation.

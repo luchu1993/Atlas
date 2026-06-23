@@ -4,7 +4,10 @@
 >
 > **读者**：工程（必读）、战斗策划（§8 技能位移必读）、客户端开发（Unity 侧，§11 必读）。
 >
-> **状态**：14.1 基础链路已落地：Unity owner 输入帧、本地预测、CellApp 权威 step 和 ack replay。
+> **状态**：14.1-14.3 主体实现已落地：Unity / UE owner 输入帧、本地预测、
+> CellApp 权威 step、ack replay、MovementCommand fanout、PhysicsQuery / Jolt
+> collision backend、Unity collision export / cache，以及 position history /
+> lag-compensation 原型。14.4 chunk / border query 和 stress / parity 验收基线待补。
 >
 > **前置文档**：`OVERVIEW.md`、`00_foundations/DETERMINISM_CONTRACT.md`、`03_combat/SKILL_SYSTEM.md`
 >

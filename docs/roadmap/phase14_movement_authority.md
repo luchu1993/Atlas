@@ -12,10 +12,10 @@ mesh / heightfield 导出（M7）、position history 与服务端 lag-compensati
 
 ## 工作上下文
 
-继续工作时不要重置当前脏工作树；大量未提交改动都属于 Phase 14 推进中的
-上下文。UE 源码根目录为 `E:\UE\UnrealEngine`。现行 wire contract 与最小回归
-命令集放在 [`phase14_status.md`](phase14_status.md)；本文件只承载目标 / 验收 /
-里程碑 / 决策日志 / 红线，不重复 status。
+继续工作时先确认本地 `git status`；不要重置与当前任务无关的用户改动。UE
+源码根目录为 `E:\UE\UnrealEngine`。现行 wire contract 与最小回归命令集放在
+[`phase14_status.md`](phase14_status.md)；本文件只承载目标 / 验收 / 里程碑 /
+决策日志 / 红线，不重复 status。
 
 ## 里程碑驱动的下一步
 
@@ -99,8 +99,9 @@ moving platform、ladder、跨 cell 物理。）
 
 ## 非目标
 
-- 第一阶段不接 Jolt，不做 Unity collision export / cook / chunk streaming。
-- 第一阶段不实现完整技能位移、root-motion 曲线、lag compensation。
+- 14.4 chunk / border query、moving platform、ladder、跨 cell 物理、volume export
+  和完整 data-driven skill timeline 后置。
+- 不实现完整 root-motion 曲线。
 - 不把移动输入塞进 `ClientCellRpc`，也不通过 `.def` 生成高频移动 RPC。
 - 不让 `client_dt_ms` 驱动服务端时间；它只能用于诊断和异常检测。
 - 不要求 Unity PhysX / UE Physics 与服务端物理端同。
@@ -149,10 +150,11 @@ auto Step(const MovementState& previous, const InputFrame& input,
 }
 ```
 
-当前提供 `FlatGroundQuery`、`PhysicsCharacterQuery` 和 Static backend，
-验证输入、预测、权威 tick、grounded、速度、基础阻挡、depenetration、
-slope、step 和 snap。Jolt backend 和地图碰撞导出继续后置接入，不阻塞
-协议和预测链路落地。
+当前提供 `FlatGroundQuery`、`PhysicsCharacterQuery`、Static backend，并可经
+`PhysicsQuery` 接入 Jolt collision backend，验证输入、预测、权威 tick、
+grounded、速度、基础阻挡、depenetration、slope、step 和 snap。Unity collision
+asset 导出、mesh / heightfield side-car 与 cache cook 已落地；14.4 chunk /
+border query 和 volume export 后置。
 
 ### 服务端状态归属
 
@@ -297,8 +299,8 @@ CellApp 推荐顺序：
 | 阶段 | 查询后端 | 交付 |
 |---|---|---|
 | 14.1 | Flat/Test query | 输入帧、权威 Step、预测和解、MVP 替换 `ReportPos` |
-| 14.2 | PhysicsQuery + Jolt scene | Static query 与 collision asset validate 已建；Jolt scene |
-| 14.3 | Unity collision export / cook | primitive / static mesh / layer / material，CI validate |
+| 14.2 | PhysicsQuery + Jolt scene | Static query、collision asset validate 与 Jolt backend |
+| 14.3 | Unity collision export / cook | primitive / mesh / convex / heightfield 导出、`.bin` side-car 与 cache cook |
 | 14.4 | chunk / border query | 大地图 streaming、Cell 边界 ghost region 查询 |
 
 Jolt 只提供查询事实，不使用 Jolt CharacterController。
@@ -316,7 +318,7 @@ Offload 消息需要携带：
   已落地，allow_full 仍为保留值；C# `ClearMovementCommand`
   可由技能取消、死亡等脚本事件清除 active command 并广播 cancelled end；
   command 正常结束、碰撞截停和非法终止也会带 reason；MVP `Avatar.Dash` 已作为
-  脚本写入 command 的首个 playable action。完整技能 timeline 仍在 14.3+ 接入
+  脚本写入 command 的首个 playable action。完整技能 timeline 后续接入
 - position history 的最近窗口，14.1 已随 `OffloadEntity` 迁移并在 reject /
   timeout 回滚时恢复；服务端 lag-compensation 原型（favor-the-shooter 边界
   容差）已作为该窗口的首个消费者落地
@@ -368,6 +370,10 @@ movement/step_time_us_p95
 ```
 
 ## 验收
+
+以下是 Phase 14 验收目标。当前 14.1-14.3 主体实现和单元 / 客户端覆盖已落地；
+stress、parity 和 live-style 场景需要在 `phase14_status.md` 留存带日期的 PASS
+记录后，才能把 Phase 14 标为完全闭环。
 
 Phase 14.1 完成条件：
 

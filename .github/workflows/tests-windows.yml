@@ -52,14 +52,6 @@ jobs:
           restore-keys: |
             nuget-windows-
 
-      - name: Cache FetchContent _deps
-        uses: actions/cache@v5
-        with:
-          path: build/debug/_deps
-          key: deps-windows-debug-${{ hashFiles('cmake/Dependencies.cmake') }}
-          restore-keys: |
-            deps-windows-debug-
-
       - name: Restore .NET packages
         shell: bash
         run: |
