@@ -1,6 +1,9 @@
 # Phase 15: DBAppMgr — 多 DBApp 分片管理 + HA
 
-**Status:** 📐 设计 RFC(未实现)
+**Status:** 🚧 P15.1 核心中 — DBAppMgr 进程骨架、DBApp 注册、range shard
+table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元测试
+已起步；BaseApp / LoginApp shard cache、DBApp request version / retry
+idempotency 与 P15.2 HA 未完成。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
 
@@ -36,7 +39,7 @@ worker 重建恢复框架。
   multi-target 框架和 verify 脚本。镜像 Phase 13 的 CellAppMgr /
   BaseAppMgr 模式,不引入 manager snapshot。
 
-本文档定义 P15.1 + P15.2 的目标设计,不包含实现。
+本文档定义 P15.1 + P15.2 的目标设计,并记录当前实现状态。
 
 ## 2. 数据流变化(对比当前)
 
@@ -152,21 +155,18 @@ Reviver 扩 multi-target(已就位的 `ManagedTarget` 框架,加一个
 
 ## 5. 消息协议草案
 
-新增 message_id 段(占用 DBApp::4000-4999 已有 + 加 DBAppMgr 段
-5000-5099 暂未占,实际看 message_ids.h 找空段):
+新增 message_id 段。Login 已占 5000-5999,DBAppMgr 使用 8000-8099:
 
 ```cpp
-// 暂定 DBAppMgr 段(待与 message_ids.h 已有段对齐)
 enum class DBAppMgr : uint16_t {
-  kRegisterDbApp = 5000,
-  kRegisterDbAppAck = 5001,
-  kInformLoad = 5002,
-  kGetShardTable = 5010,
-  kShardTableResponse = 5011,
-  kShardTableUpdate = 5012,
-  kInformLeaseRenew = 5020,
-  kHealthProbe = 5030,
-  kHealthProbeAck = 5031,
+  kRegisterDbApp = 8000,
+  kRegisterDbAppAck = 8001,
+  kInformLoad = 8002,
+  kGetShardTable = 8010,
+  kShardTableResponse = 8011,
+  kShardTableUpdate = 8012,
+  kHealthProbe = 8020,
+  kHealthProbeAck = 8021,
 };
 ```
 
@@ -196,8 +196,8 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 
 | 阶段 | 内容 | 估计 |
 |---|---|---|
-| P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | ~600 行 |
-| P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | ~800 行 |
+| P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已起步，含 DBApp 注册接入 |
+| P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已起步 |
 | P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | ~400 行 |
 | P15.1-D4 | DBApp 端 idempotency cache + request retry on death | ~500 行 |
 | P15.2-S1..S4 | HA(镜像 BaseAppMgr B1-B4) | ~3000 行 |
@@ -216,13 +216,13 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 
 ## 9. 决策检查清单(实现前需要确认)
 
-- [ ] dbid 编码方案:`dbapp_id` 进高位还是用独立路由表? → 当前倾向
+- [x] dbid 编码方案:`dbapp_id` 进高位还是用独立路由表? → 当前倾向
       独立路由表(留出 dbid 全 64 位空间)。
-- [ ] machined 是否要新增 ProcessType::kDBAppMgr,还是复用 kDBApp? →
+- [x] machined 是否要新增 ProcessType::kDBAppMgr,还是复用 kDBApp? →
       新增 kDBAppMgr 与其他 mgr 一致。
 - [ ] Reviver 是否同时启动 DBAppMgr cold start? → 是,加
       `--revive-dbappmgr-on-start` 与 cellappmgr / baseappmgr 对齐。
-- [ ] Shard table 是否在 watcher 中暴露(便于 ops debug)? → 是,
+- [x] Shard table 是否在 watcher 中暴露(便于 ops debug)? → 是,
       `dbappmgr/shards/table` 摘要 + `shards/version`。
 - [ ] verify_dbappmgr_ha.py 是否复用 verify_baseappmgr_ha 的 90% 代码,
       还是抽 verify-common 模块? → 先复用 + copy,等第三个 mgr verify

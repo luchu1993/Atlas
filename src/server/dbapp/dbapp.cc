@@ -1,5 +1,7 @@
 #include "dbapp.h"
 
+#include <algorithm>
+#include <chrono>
 #include <format>
 
 #include "foundation/clock.h"
@@ -11,6 +13,12 @@
 #include "server/watcher.h"
 
 namespace atlas {
+
+namespace {
+
+constexpr Duration kDbAppMgrLoadReportInterval = std::chrono::seconds(1);
+
+}
 
 auto DBApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
@@ -24,11 +32,8 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
 
   const auto& cfg = Config();
 
-  // ATDF binary container produced by Atlas.Tools.DefDump from a built
-  // C# server assembly. DBApp doesn't host CoreCLR, so it can't run the
-  // codegen-emitted [ModuleInitializer] PInvoke registrations - the
-  // offline DefDump mirrors that path and writes a wire-compatible blob
-  // for RegisterFromBinaryFile to ingest.
+  // DBApp cannot host CoreCLR, so it consumes the DefDump ATDF blob
+  // that mirrors generated registration metadata.
   if (cfg.entitydef_bin_path.empty()) {
     ATLAS_LOG_INFO("DBApp: no --entitydef-bin-path configured; entity_defs will be empty");
     entity_defs_.emplace();
@@ -107,11 +112,25 @@ auto DBApp::Init(int argc, char* argv[]) -> bool {
         OnPutEntityIds(src, ch, msg);
       });
 
+  (void)table.RegisterTypedHandler<dbappmgr::RegisterDbAppAck>(
+      [this](const Address& src, Channel* ch, const dbappmgr::RegisterDbAppAck& msg) {
+        OnRegisterDbAppAck(src, ch, msg);
+      });
+
+  (void)table.RegisterTypedHandler<dbappmgr::ShardTableUpdate>(
+      [this](const Address& src, Channel* ch, const dbappmgr::ShardTableUpdate& msg) {
+        OnShardTableUpdate(src, ch, msg);
+      });
+
   GetMachinedClient().Subscribe(machined::ListenerType::kDeath, ProcessType::kBaseApp,
                                 nullptr,  // no birth callback needed
                                 [this](const machined::DeathNotification& notif) {
                                   OnBaseappDeath(notif.internal_addr, notif.name, notif.reason);
                                 });
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kDbAppMgr,
+      [this](const machined::BirthNotification& notif) { OnDbAppMgrBirth(notif); },
+      [this](const machined::DeathNotification& notif) { OnDbAppMgrDeath(notif); });
 
   auto_create_accounts_ = cfg.auto_create_accounts;
   account_type_id_ = cfg.account_type_id;
@@ -157,6 +176,7 @@ void DBApp::OnTickComplete() {
     database_->BeginBatch();      // Open batch for next tick
   }
   if (id_allocator_) id_allocator_->PersistIfNeeded([](bool) {});
+  ReportLoadToDbAppMgr();
 }
 
 void DBApp::RegisterWatchers() {
@@ -190,11 +210,14 @@ void DBApp::RegisterWatchers() {
   reg.Add<std::string>("dbapp/next_entity_id", std::function<std::string()>{[this]() {
                          return std::to_string(id_allocator_ ? id_allocator_->next_id() : 0u);
                        }});
+  reg.Add<uint32_t>("dbapp/dbapp_id", std::function<uint32_t()>([this] { return dbapp_id_; }));
+  reg.Add<uint32_t>("dbapp/shard_table_version",
+                    std::function<uint32_t()>([this] { return shard_table_version_; }));
+  reg.Add<std::size_t>("dbapp/shard_count",
+                       std::function<std::size_t()>([this] { return shard_table_.size(); }));
   RegisterLatencyWatchers(reg, "dbapp/checkout_reply_latency", checkout_reply_latency_);
   RegisterLatencyWatchers(reg, "dbapp/write_reply_latency", write_reply_latency_);
 }
-
-// build_db_config
 
 auto DBApp::BuildDbConfig() const -> DatabaseConfig {
   const auto& cfg = Config();
@@ -228,7 +251,115 @@ auto DBApp::ResolveReplyChannel(const Address& addr) -> Channel* {
   return static_cast<Channel*>(*result);
 }
 
-// on_write_entity
+void DBApp::OnDbAppMgrBirth(const machined::BirthNotification& msg) {
+  if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() == msg.internal_addr &&
+      !dbappmgr_channel_->IsCondemned()) {
+    RegisterWithDbAppMgr();
+    return;
+  }
+
+  ATLAS_LOG_INFO("DBApp: DBAppMgr born at {}, registering", msg.internal_addr.ToString());
+  auto ch = Network().ConnectRudpNocwnd(msg.internal_addr);
+  if (!ch) {
+    ATLAS_LOG_WARNING("DBApp: failed to connect to DBAppMgr at {}", msg.internal_addr.ToString());
+    return;
+  }
+  dbappmgr_channel_ = static_cast<Channel*>(*ch);
+  RegisterWithDbAppMgr();
+}
+
+void DBApp::OnDbAppMgrDeath(const machined::DeathNotification& msg) {
+  if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() != msg.internal_addr) {
+    return;
+  }
+  if (msg.reason == 0) {
+    ATLAS_LOG_INFO("DBApp: DBAppMgr deregistered");
+  } else {
+    ATLAS_LOG_WARNING("DBApp: DBAppMgr died");
+  }
+  dbappmgr_channel_ = nullptr;
+}
+
+void DBApp::OnRegisterDbAppAck(const Address& src, Channel* ch,
+                               const dbappmgr::RegisterDbAppAck& msg) {
+  if (dbappmgr_channel_ != nullptr && ch != nullptr && ch != dbappmgr_channel_) {
+    ATLAS_LOG_WARNING("DBApp: ignoring RegisterDbAppAck from unexpected channel {}",
+                      src.ToString());
+    return;
+  }
+  if (!msg.success || msg.dbapp_id == 0) {
+    ATLAS_LOG_ERROR("DBApp: DBAppMgr rejected registration from {}", src.ToString());
+    return;
+  }
+
+  dbapp_id_ = msg.dbapp_id;
+  shard_table_version_ = msg.shard_table_version;
+  shard_table_ = msg.entries;
+  last_dbappmgr_load_report_at_ = {};
+  ReportLoadToDbAppMgr();
+  ATLAS_LOG_INFO("DBApp: registered with DBAppMgr as id={} shard_version={} shards={}", dbapp_id_,
+                 shard_table_version_, shard_table_.size());
+}
+
+void DBApp::OnShardTableUpdate(const Address& src, Channel* ch,
+                               const dbappmgr::ShardTableUpdate& msg) {
+  if (dbappmgr_channel_ != nullptr && ch != nullptr && ch != dbappmgr_channel_) {
+    ATLAS_LOG_WARNING("DBApp: ignoring ShardTableUpdate from unexpected channel {}",
+                      src.ToString());
+    return;
+  }
+  if (msg.version == 0 || msg.version == shard_table_version_) return;
+
+  shard_table_version_ = msg.version;
+  shard_table_ = msg.entries;
+  ATLAS_LOG_INFO("DBApp: shard table updated version={} shards={}", shard_table_version_,
+                 shard_table_.size());
+}
+
+void DBApp::RegisterWithDbAppMgr() {
+  if (dbappmgr_channel_ == nullptr) return;
+  if (Config().internal_port == 0) {
+    ATLAS_LOG_WARNING("DBApp: cannot register with DBAppMgr without --internal-port");
+    return;
+  }
+
+  dbappmgr::RegisterDbApp msg;
+  msg.internal_addr = Address(0, Config().internal_port);
+  msg.known_app_id = dbapp_id_;
+  msg.known_shard_table_version = shard_table_version_;
+  if (auto r = dbappmgr_channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("DBApp: failed to send RegisterDbApp: {}", r.Error().Message());
+  }
+}
+
+void DBApp::ReportLoadToDbAppMgr() {
+  if (dbappmgr_channel_ == nullptr || dbapp_id_ == 0) return;
+  const auto now = Clock::now();
+  if (last_dbappmgr_load_report_at_ != TimePoint{} &&
+      now - last_dbappmgr_load_report_at_ < kDbAppMgrLoadReportInterval) {
+    return;
+  }
+
+  dbappmgr::InformLoad msg;
+  msg.dbapp_id = dbapp_id_;
+  msg.load = CurrentLoadFraction();
+  msg.entity_count = static_cast<uint32_t>(checkout_mgr_.size());
+  msg.pending_checkout_count = static_cast<uint32_t>(pending_checkout_requests_.size());
+  msg.write_queue_depth = 0;
+  if (auto r = dbappmgr_channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("DBApp: failed to send InformLoad: {}", r.Error().Message());
+    return;
+  }
+  last_dbappmgr_load_report_at_ = now;
+}
+
+auto DBApp::CurrentLoadFraction() const -> float {
+  const auto expected = ExpectedTickPeriod();
+  if (expected <= Duration{}) return 0.0f;
+  const double load =
+      static_cast<double>(LastTickWorkDuration().count()) / static_cast<double>(expected.count());
+  return static_cast<float>(std::clamp(load, 0.0, 1.0));
+}
 
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {
   if (ch == nullptr) return;
@@ -243,9 +374,8 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
     write_reply_latency_.Record(Clock::now() - t0);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
       if (auto r = reply_ch->SendMessage(ack); !r) {
-        // BaseApp's pending-write entry never resolves - Proxy keeps
-        // thinking the save is in flight; for kLogOff writes the entity
-        // may already be freed before learning the DB rejected it.
+        // BaseApp's pending write stays unresolved; for kLogOff the entity
+        // may be freed before learning the DB rejected it.
         ATLAS_LOG_ERROR(
             "DBApp: WriteEntityAck dropped, dbid={} request_id={} success={} to {}: {} "
             "— durability boundary desync",
@@ -260,8 +390,6 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
   database_->PutEntity(msg.dbid, msg.type_id, msg.flags, msg.blob, msg.identifier,
                        std::move(send_ack));
 }
-
-// on_checkout_entity
 
 void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::CheckoutEntity& msg) {
   if (ch == nullptr) return;
@@ -294,10 +422,8 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     checkout_reply_latency_.Record(Clock::now() - t0);
     if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
       if (auto r = reply_ch->SendMessage(ack); !r) {
-        // checkout_mgr_ has already committed; if BaseApp never sees the
-        // ack, login times out but the DBID stays checked out until
-        // BaseApp death detection clears it - login retries from any
-        // BaseApp will fail in the meantime.
+        // checkout_mgr_ has already committed; if the ack is lost, BaseApp
+        // death detection is the remaining cleanup path.
         ATLAS_LOG_ERROR(
             "DBApp: CheckoutEntityAck dropped, dbid={} request_id={} status={} to {}: {} "
             "— DBID stays checked out, login wedge",
@@ -307,7 +433,6 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     }
   };
 
-  // Claim the slot in memory first
   auto co_result = checkout_mgr_.TryCheckout(
       msg.mode == dbapp::LoadMode::kByDbid ? msg.dbid : kInvalidDBID, msg.type_id, owner);
 
@@ -333,8 +458,6 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     return;
   }
 
-  // Success path: delegate to DB backend
-  // After DB confirms, promote checkout to Confirmed; on failure, roll back.
   auto dbid = msg.dbid;
   auto type_id = msg.type_id;
   pending_checkout_requests_[msg.request_id] =
@@ -414,16 +537,12 @@ void DBApp::OnAbortCheckout(const Address& src, Channel* ch, const dbapp::AbortC
   }
 }
 
-// on_checkin_entity
-
 void DBApp::OnCheckinEntity(const Address& /*src*/, Channel* /*ch*/,
                             const dbapp::CheckinEntity& msg) {
   ATLAS_LOG_DEBUG("DBApp: checkin dbid={} type_id={}", msg.dbid, msg.type_id);
   checkout_mgr_.Checkin(msg.dbid, msg.type_id);
   database_->MarkCheckoutCleared(msg.dbid, msg.type_id);
 }
-
-// on_delete_entity
 
 void DBApp::OnDeleteEntity(const Address& src, Channel* ch, const dbapp::DeleteEntity& msg) {
   if (ch == nullptr) return;
@@ -439,8 +558,6 @@ void DBApp::OnDeleteEntity(const Address& src, Channel* ch, const dbapp::DeleteE
                          }
                        });
 }
-
-// on_lookup_entity
 
 void DBApp::OnLookupEntity(const Address& src, Channel* ch, const dbapp::LookupEntity& msg) {
   if (ch == nullptr) return;
@@ -492,8 +609,6 @@ void DBApp::OnPutEntityIds(const Address& src, Channel* ch, const dbapp::PutEnti
   }
 }
 
-// on_baseapp_death
-
 void DBApp::OnBaseappDeath(const Address& internal_addr, std::string_view name, uint8_t reason) {
   int cleared_memory = checkout_mgr_.ClearAllFor(internal_addr);
   const bool normal = reason == 0;
@@ -501,20 +616,20 @@ void DBApp::OnBaseappDeath(const Address& internal_addr, std::string_view name, 
     ATLAS_LOG_INFO("DBApp: BaseApp '{}' deregistered — cleared {} memory checkouts",
                    std::string(name), cleared_memory);
   } else {
-    ATLAS_LOG_WARNING("DBApp: BaseApp '{}' died — cleared {} memory checkouts",
-                      std::string(name), cleared_memory);
+    ATLAS_LOG_WARNING("DBApp: BaseApp '{}' died — cleared {} memory checkouts", std::string(name),
+                      cleared_memory);
   }
 
-  database_->ClearCheckoutsForAddress(internal_addr, [name_str = std::string(name),
-                                                      normal](int cleared_db) {
-    if (normal) {
-      ATLAS_LOG_INFO("DBApp: cleared {} DB checkouts for deregistered BaseApp '{}'", cleared_db,
-                     name_str);
-    } else {
-      ATLAS_LOG_WARNING("DBApp: cleared {} DB checkouts for dead BaseApp '{}'", cleared_db,
-                        name_str);
-    }
-  });
+  database_->ClearCheckoutsForAddress(
+      internal_addr, [name_str = std::string(name), normal](int cleared_db) {
+        if (normal) {
+          ATLAS_LOG_INFO("DBApp: cleared {} DB checkouts for deregistered BaseApp '{}'", cleared_db,
+                         name_str);
+        } else {
+          ATLAS_LOG_WARNING("DBApp: cleared {} DB checkouts for dead BaseApp '{}'", cleared_db,
+                            name_str);
+        }
+      });
 }
 
 void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin& msg) {
@@ -531,7 +646,6 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
     return;
   }
 
-  // Look up the account by username (identifier column)
   database_->LookupByName(
       account_type_id_, msg.username,
       [this, request_id = msg.request_id, password_hash = msg.password_hash,
@@ -554,11 +668,9 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
 
         if (!result.found) {
           if (auto_create && auto_create_accounts_) {
-            // Create new account entity with the credential hash stored in the DB row.
             EntityData data;
             data.type_id = account_type_id_;
             data.identifier = username;
-            // Empty blob for now - the entity will be populated by C# on first login.
             data.blob = {};
             database_->PutEntityWithPassword(
                 kInvalidDBID, account_type_id_, WriteFlags::kCreateNew, data.blob, data.identifier,
@@ -584,7 +696,6 @@ void DBApp::OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin&
           reply.success = false;
           reply.status = login::LoginStatus::kInvalidCredentials;
         } else {
-          // Simple hash comparison: compare provided hash to stored one
           bool pw_match = true;
           if (!password_hash.empty() && !result.password_hash.empty())
             pw_match = (result.password_hash == password_hash);

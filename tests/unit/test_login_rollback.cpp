@@ -8,6 +8,7 @@
 #include "coro/cancellation.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp.h"
+#include "dbappmgr/dbappmgr_messages.h"
 #include "loginapp/loginapp.h"
 #include "test_null_channel.h"
 
@@ -161,8 +162,8 @@ class BaseAppRollbackTest : public ::testing::Test {
   auto pending_death_restore_count() const -> std::size_t {
     return app_.pending_cellapp_death_restores_.size();
   }
-  void seed_death_restore_counters(uint64_t notifications, uint64_t scheduled,
-                                   uint64_t restored, uint64_t lost, uint64_t timeouts) {
+  void seed_death_restore_counters(uint64_t notifications, uint64_t scheduled, uint64_t restored,
+                                   uint64_t lost, uint64_t timeouts) {
     app_.cellapp_death_notifications_total_ = notifications;
     app_.cellapp_death_restore_scheduled_total_ = scheduled;
     app_.cellapp_death_restore_payload_scheduled_total_ = scheduled;
@@ -216,10 +217,10 @@ TEST_F(BaseAppRollbackTest, CellAppRoutesWatcherSummarizesBoundEntities) {
   ASSERT_NE(create_cell_bound_entity(42, addr_b, /*has_cell_backup=*/false), nullptr);
 
   const auto summary = watcher("baseapp/cellapp_routes").value_or("");
-  const auto addr_a_entry = "addr=" + addr_a.ToString() +
-                            " entities=2 payload_candidates=1 ghost_backup_candidates=1";
-  const auto addr_b_entry = "addr=" + addr_b.ToString() +
-                            " entities=1 payload_candidates=0 ghost_backup_candidates=1";
+  const auto addr_a_entry =
+      "addr=" + addr_a.ToString() + " entities=2 payload_candidates=1 ghost_backup_candidates=1";
+  const auto addr_b_entry =
+      "addr=" + addr_b.ToString() + " entities=1 payload_candidates=0 ghost_backup_candidates=1";
   EXPECT_NE(summary.find("routes=2"), std::string::npos);
   EXPECT_NE(summary.find(addr_a_entry), std::string::npos);
   EXPECT_NE(summary.find(addr_b_entry), std::string::npos);
@@ -243,11 +244,9 @@ TEST_F(BaseAppRollbackTest, CellAppDeathLostMetricsExposeWatcherCounters) {
   EXPECT_EQ(death_lost_total(), 1u);
   EXPECT_EQ(watcher("baseapp/cellapp_death_notifications_total").value_or(""), "1");
   EXPECT_EQ(watcher("baseapp/cellapp_death_restore_scheduled_total").value_or(""), "0");
-  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_payload_scheduled_total").value_or(""),
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_payload_scheduled_total").value_or(""), "0");
+  EXPECT_EQ(watcher("baseapp/cellapp_death_restore_ghost_backup_scheduled_total").value_or(""),
             "0");
-  EXPECT_EQ(
-      watcher("baseapp/cellapp_death_restore_ghost_backup_scheduled_total").value_or(""),
-      "0");
   EXPECT_EQ(watcher("baseapp/cellapp_death_restored_total").value_or(""), "0");
   EXPECT_EQ(watcher("baseapp/cellapp_death_lost_total").value_or(""), "1");
   EXPECT_EQ(watcher("baseapp/cellapp_death_restore_last_elapsed_ms").value_or(""), "0");
@@ -455,6 +454,18 @@ class DBAppRollbackTest : public ::testing::Test {
   auto abort_total() const -> uint64_t { return app_.abort_checkout_total_; }
   auto abort_pending_total() const -> uint64_t { return app_.abort_checkout_pending_hit_total_; }
   auto abort_late_total() const -> uint64_t { return app_.abort_checkout_late_hit_total_; }
+  auto dbapp_id() const -> uint32_t { return app_.dbapp_id_; }
+  auto shard_table_version() const -> uint32_t { return app_.shard_table_version_; }
+  auto shard_count() const -> std::size_t { return app_.shard_table_.size(); }
+  auto shard_app_id(std::size_t index) const -> uint32_t {
+    return app_.shard_table_.at(index).dbapp_id;
+  }
+  void handle_register_dbapp_ack(const dbappmgr::RegisterDbAppAck& ack) {
+    app_.OnRegisterDbAppAck(Address(0x7F000001u, 28001), nullptr, ack);
+  }
+  void handle_shard_table_update(const dbappmgr::ShardTableUpdate& update) {
+    app_.OnShardTableUpdate(Address(0x7F000001u, 28001), nullptr, update);
+  }
   auto watcher(std::string_view path) -> std::optional<std::string> {
     return app_.GetWatcherRegistry().Get(path);
   }
@@ -487,6 +498,44 @@ TEST_F(DBAppRollbackTest, AbortCheckoutIsIdempotentWhileRequestIsPending) {
   EXPECT_EQ(abort_pending_total(), 2u);
   EXPECT_EQ(abort_late_total(), 0u);
   EXPECT_EQ(watcher("dbapp/abort_checkout_total").value_or(""), "2");
+}
+
+TEST_F(DBAppRollbackTest, RegisterDbAppAckStoresShardState) {
+  register_watchers();
+
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 3;
+  ack.entries.push_back(dbappmgr::ShardEntry{1, 1000, 7, Address(0x7F000001u, 24001), false});
+
+  handle_register_dbapp_ack(ack);
+
+  EXPECT_EQ(dbapp_id(), 7u);
+  EXPECT_EQ(shard_table_version(), 3u);
+  EXPECT_EQ(shard_count(), 1u);
+  EXPECT_EQ(watcher("dbapp/dbapp_id").value_or(""), "7");
+  EXPECT_EQ(watcher("dbapp/shard_table_version").value_or(""), "3");
+}
+
+TEST_F(DBAppRollbackTest, ShardTableUpdateReplacesCachedTable) {
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 3;
+  ack.entries.push_back(dbappmgr::ShardEntry{1, 1000, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  dbappmgr::ShardTableUpdate update;
+  update.version = 4;
+  update.entries.push_back(dbappmgr::ShardEntry{1, 500, 7, Address(0x7F000001u, 24001), false});
+  update.entries.push_back(dbappmgr::ShardEntry{500, 1000, 8, Address(0x7F000001u, 24002), false});
+
+  handle_shard_table_update(update);
+
+  EXPECT_EQ(shard_table_version(), 4u);
+  ASSERT_EQ(shard_count(), 2u);
+  EXPECT_EQ(shard_app_id(1), 8u);
 }
 
 }  // namespace atlas

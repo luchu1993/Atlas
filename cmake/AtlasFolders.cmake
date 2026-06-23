@@ -91,7 +91,8 @@ set(_atlas_app_base_targets     atlas_baseapp     atlas_baseapp_lib
 set(_atlas_app_cell_targets     atlas_cellapp     atlas_cellapp_lib
                                 atlas_cellappmgr  atlas_cellappmgr_lib
                                 atlas_cellappmgr_bsp)
-set(_atlas_app_db_targets       atlas_dbapp       atlas_dbapp_lib)
+set(_atlas_app_db_targets       atlas_dbapp       atlas_dbapp_lib
+                                atlas_dbappmgr    atlas_dbappmgr_lib)
 set(_atlas_app_login_targets    atlas_loginapp    atlas_loginapp_lib)
 set(_atlas_app_machined_targets machined          atlas_machined_lib)
 set(_atlas_app_reviver_targets  atlas_reviver     atlas_reviver_lib)
@@ -187,7 +188,7 @@ atlas_set_output_dir(""
   # Server executables
   atlas_baseapp atlas_baseappmgr
   atlas_cellapp atlas_cellappmgr
-  atlas_dbapp atlas_loginapp atlas_reviver machined
+  atlas_dbapp atlas_dbappmgr atlas_loginapp atlas_reviver machined
   # Client executable
   atlas_client
   # Tools
@@ -197,7 +198,7 @@ atlas_set_output_dir(""
   atlas_db_iface atlas_db_sqlite atlas_db_xml
   atlas_baseapp_lib atlas_baseappmgr_lib
   atlas_cellapp_lib atlas_cellappmgr_lib atlas_cellappmgr_bsp
-  atlas_dbapp_lib atlas_loginapp_lib
+  atlas_dbapp_lib atlas_dbappmgr_lib atlas_loginapp_lib
   atlas_machined_lib atlas_reviver_lib atlas_client_lib
   atlas_platform_config atlas_server_types
   gtest gtest_main

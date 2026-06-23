@@ -168,6 +168,17 @@ enum class DBApp : uint16_t {
   kPutEntityIdsAck = 4023,
 };
 
+enum class DBAppMgr : uint16_t {
+  kRegisterDbApp = 8000,
+  kRegisterDbAppAck = 8001,
+  kInformLoad = 8002,
+  kGetShardTable = 8010,
+  kShardTableResponse = 8011,
+  kShardTableUpdate = 8012,
+  kHealthProbe = 8020,
+  kHealthProbeAck = 8021,
+};
+
 enum class Login : uint16_t {
   kLoginRequest = 5000,
   kLoginResult = 5001,
@@ -303,6 +314,15 @@ ATLAS_ASSERT_ID_RANGE(DBApp::kGetEntityIds, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kGetEntityIdsAck, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kPutEntityIds, 4000, 4999);
 ATLAS_ASSERT_ID_RANGE(DBApp::kPutEntityIdsAck, 4000, 4999);
+
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kRegisterDbApp, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kRegisterDbAppAck, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kInformLoad, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kGetShardTable, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kShardTableResponse, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kShardTableUpdate, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kHealthProbe, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kHealthProbeAck, 8000, 8099);
 
 ATLAS_ASSERT_ID_RANGE(Login::kLoginRequest, 5000, 5999);
 ATLAS_ASSERT_ID_RANGE(Login::kLoginResult, 5000, 5999);

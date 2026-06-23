@@ -6,14 +6,17 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "checkout_manager.h"
 #include "db/database_factory.h"
 #include "db/idatabase.h"
 #include "dbapp_messages.h"
+#include "dbappmgr/dbappmgr_messages.h"
 #include "entity_id_allocator.h"
 #include "entitydef/entity_def_registry.h"
 #include "foundation/latency_histogram.h"
+#include "network/machined_types.h"
 #include "server/manager_app.h"
 
 namespace atlas {
@@ -50,10 +53,17 @@ class DBApp : public ManagerApp {
 
   void OnAuthLogin(const Address& src, Channel* ch, const login::AuthLogin& msg);
 
+  void OnDbAppMgrBirth(const machined::BirthNotification& msg);
+  void OnDbAppMgrDeath(const machined::DeathNotification& msg);
+  void OnRegisterDbAppAck(const Address& src, Channel* ch, const dbappmgr::RegisterDbAppAck& msg);
+  void OnShardTableUpdate(const Address& src, Channel* ch, const dbappmgr::ShardTableUpdate& msg);
   void OnBaseappDeath(const Address& internal_addr, std::string_view name, uint8_t reason);
 
   [[nodiscard]] auto BuildDbConfig() const -> DatabaseConfig;
   auto ResolveReplyChannel(const Address& addr) -> Channel*;
+  void RegisterWithDbAppMgr();
+  void ReportLoadToDbAppMgr();
+  [[nodiscard]] auto CurrentLoadFraction() const -> float;
 
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;
@@ -72,6 +82,11 @@ class DBApp : public ManagerApp {
   uint64_t abort_checkout_total_{0};
   uint64_t abort_checkout_pending_hit_total_{0};
   uint64_t abort_checkout_late_hit_total_{0};
+  Channel* dbappmgr_channel_{nullptr};
+  uint32_t dbapp_id_{0};
+  uint32_t shard_table_version_{0};
+  std::vector<dbappmgr::ShardEntry> shard_table_;
+  TimePoint last_dbappmgr_load_report_at_{};
 
   LatencyHistogram checkout_reply_latency_;
   LatencyHistogram write_reply_latency_;
