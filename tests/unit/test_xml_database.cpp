@@ -165,11 +165,50 @@ TEST_F(XmlDatabaseTest, PutNewEntityWithExplicitDbidAndGet) {
   ASSERT_TRUE(get_result.success);
   EXPECT_EQ(get_result.data.blob, blob);
 
+  PutResult duplicate;
+  db_.PutEntity(kDbid, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid,
+                make_blob("replacement"), "explicit_hero_2",
+                [&](PutResult r) { duplicate = std::move(r); });
+  EXPECT_FALSE(duplicate.success);
+  EXPECT_EQ(duplicate.dbid, kDbid);
+
+  GetResult after_duplicate;
+  db_.GetEntity(kDbid, 1, [&](GetResult r) { after_duplicate = std::move(r); });
+  ASSERT_TRUE(after_duplicate.success);
+  EXPECT_EQ(after_duplicate.data.blob, blob);
+
   PutResult auto_result;
   db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew, make_blob("auto"), "",
                 [&](PutResult r) { auto_result = r; });
   ASSERT_TRUE(auto_result.success);
   EXPECT_GT(auto_result.dbid, kDbid);
+}
+
+TEST_F(XmlDatabaseTest, GetMaxDbidInRangeReturnsExistingMaximum) {
+  PutResult low;
+  db_.PutEntity(1500, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("low"),
+                "low", [&](PutResult r) { low = std::move(r); });
+  ASSERT_TRUE(low.success) << low.error;
+
+  PutResult high;
+  db_.PutEntity(1750, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("high"),
+                "high", [&](PutResult r) { high = std::move(r); });
+  ASSERT_TRUE(high.success) << high.error;
+
+  PutResult outside;
+  db_.PutEntity(2500, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("outside"),
+                "outside", [&](PutResult r) { outside = std::move(r); });
+  ASSERT_TRUE(outside.success) << outside.error;
+
+  DbidRangeResult range;
+  db_.GetMaxDbidInRange(1000, 2000, [&](DbidRangeResult r) { range = std::move(r); });
+  ASSERT_TRUE(range.success) << range.error;
+  EXPECT_EQ(range.max_dbid, 1750);
+
+  DbidRangeResult empty;
+  db_.GetMaxDbidInRange(3000, 4000, [&](DbidRangeResult r) { empty = std::move(r); });
+  ASSERT_TRUE(empty.success) << empty.error;
+  EXPECT_EQ(empty.max_dbid, kInvalidDBID);
 }
 
 // ============================================================================

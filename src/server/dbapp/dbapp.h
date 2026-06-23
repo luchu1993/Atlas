@@ -89,6 +89,8 @@ class DBApp : public ManagerApp {
   [[nodiscard]] auto AllocateCreateDbidForRoute(DatabaseID route_dbid) -> DatabaseID;
   [[nodiscard]] auto AllocateCreateDbidFromOwnedShard() -> DatabaseID;
   void PruneCreateDbidAllocators();
+  void RecoverCreateDbidAllocators();
+  void RecoverCreateDbidAllocator(const dbappmgr::ShardEntry& shard);
 
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;
@@ -119,6 +121,7 @@ class DBApp : public ManagerApp {
   uint32_t shard_table_version_{0};
   std::vector<dbappmgr::ShardEntry> shard_table_;
   std::unordered_map<DatabaseID, DatabaseID> next_create_dbids_;
+  std::unordered_set<DatabaseID> create_dbid_recovery_pending_;
   TimePoint last_dbappmgr_load_report_at_{};
 
   LatencyHistogram checkout_reply_latency_;

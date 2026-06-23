@@ -634,6 +634,19 @@ class FakeDatabase final : public IDatabase {
   }
 
   void SetAutoLoad(DatabaseID, uint16_t, bool) override {}
+  void GetMaxDbidInRange(DatabaseID low, DatabaseID high,
+                         std::function<void(DbidRangeResult)> callback) override {
+    max_dbid_range_requests.push_back({low, high});
+    if (!complete_range_query_immediately) {
+      range_query_callback = std::move(callback);
+      return;
+    }
+    DbidRangeResult result;
+    result.success = range_query_success;
+    result.max_dbid = range_max_dbid;
+    result.error = range_query_error;
+    callback(std::move(result));
+  }
   void LoadEntityIdCounter(std::function<void(EntityID)> callback) override { callback(1); }
   void SaveEntityIdCounter(EntityID, std::function<void(bool)> callback) override {
     callback(true);
@@ -660,6 +673,12 @@ class FakeDatabase final : public IDatabase {
   DatabaseID lookup_dbid{kInvalidDBID};
   std::string lookup_password_hash;
   std::string lookup_error;
+  std::vector<std::pair<DatabaseID, DatabaseID>> max_dbid_range_requests;
+  bool complete_range_query_immediately{true};
+  bool range_query_success{true};
+  DatabaseID range_max_dbid{kInvalidDBID};
+  std::string range_query_error;
+  std::function<void(DbidRangeResult)> range_query_callback;
   int clear_checkout_calls{0};
   int mark_checkout_cleared_calls{0};
   std::optional<std::pair<DatabaseID, uint16_t>> last_cleared;
@@ -860,6 +879,34 @@ TEST_F(DBAppRollbackTest, WriteEntityCreateAllocatesExplicitDbidFromOwnedShard) 
 
   EXPECT_EQ(db().put_entity_calls, 1);
   EXPECT_EQ(db().last_put_dbid, 1000);
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));
+  EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
+}
+
+TEST_F(DBAppRollbackTest, WriteEntityCreateResumesAfterStoredShardMaxDbid) {
+  db().complete_put_immediately = false;
+  db().range_max_dbid = 1234;
+
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 1;
+  ack.entries.push_back(dbappmgr::ShardEntry{1000, 2000, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  ASSERT_EQ(db().max_dbid_range_requests.size(), 1u);
+  EXPECT_EQ(db().max_dbid_range_requests[0].first, 1000);
+  EXPECT_EQ(db().max_dbid_range_requests[0].second, 2000);
+
+  dbapp::WriteEntity write;
+  write.request_id = 78;
+  write.type_id = 9;
+  write.flags = WriteFlags::kCreateNew;
+  write.shard_table_version = 1;
+  write_entity(test_support::FakeChannel(0x1505), write);
+
+  EXPECT_EQ(db().put_entity_calls, 1);
+  EXPECT_EQ(db().last_put_dbid, 1235);
   EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kCreateNew));
   EXPECT_TRUE(HasFlag(db().last_put_flags, WriteFlags::kExplicitDbid));
 }

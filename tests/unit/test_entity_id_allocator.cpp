@@ -56,6 +56,10 @@ class StubDatabase : public IDatabase {
   void ClearCheckoutsForAddress(const Address&, std::function<void(int)>) override {}
   void GetAutoLoadEntities(std::function<void(std::vector<EntityData>)>) override {}
   void SetAutoLoad(DatabaseID, uint16_t, bool) override {}
+  void GetMaxDbidInRange(DatabaseID, DatabaseID,
+                         std::function<void(DbidRangeResult)> callback) override {
+    callback(DbidRangeResult{true, kInvalidDBID, {}});
+  }
   void ProcessResults() override {}
 };
 

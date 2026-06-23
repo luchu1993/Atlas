@@ -95,6 +95,12 @@ struct LookupResult {
   std::string error;          // non-empty on backend failure (distinct from not-found)
 };
 
+struct DbidRangeResult {
+  bool success{false};
+  DatabaseID max_dbid{kInvalidDBID};
+  std::string error;
+};
+
 class IDatabase {
  public:
   virtual ~IDatabase() = default;
@@ -147,6 +153,9 @@ class IDatabase {
   virtual void GetAutoLoadEntities(std::function<void(std::vector<EntityData>)> callback) = 0;
 
   virtual void SetAutoLoad(DatabaseID dbid, uint16_t type_id, bool auto_load) = 0;
+
+  virtual void GetMaxDbidInRange(DatabaseID low, DatabaseID high,
+                                 std::function<void(DbidRangeResult)> callback) = 0;
 
   virtual void LoadEntityIdCounter(std::function<void(EntityID next_id)> callback) = 0;
 

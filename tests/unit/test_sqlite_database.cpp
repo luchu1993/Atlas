@@ -139,6 +139,33 @@ TEST_F(SqliteDatabaseTest, PutNewEntityWithExplicitDbidAndGet) {
   EXPECT_GT(auto_put.dbid, kDbid);
 }
 
+TEST_F(SqliteDatabaseTest, GetMaxDbidInRangeReturnsExistingMaximum) {
+  PutResult low;
+  db_.PutEntity(1500, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("low"),
+                "low", [&](PutResult r) { low = std::move(r); });
+  ASSERT_TRUE(low.success) << low.error;
+
+  PutResult high;
+  db_.PutEntity(1750, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("high"),
+                "high", [&](PutResult r) { high = std::move(r); });
+  ASSERT_TRUE(high.success) << high.error;
+
+  PutResult outside;
+  db_.PutEntity(2500, 1, WriteFlags::kCreateNew | WriteFlags::kExplicitDbid, make_blob("outside"),
+                "outside", [&](PutResult r) { outside = std::move(r); });
+  ASSERT_TRUE(outside.success) << outside.error;
+
+  DbidRangeResult range;
+  db_.GetMaxDbidInRange(1000, 2000, [&](DbidRangeResult r) { range = std::move(r); });
+  ASSERT_TRUE(range.success) << range.error;
+  EXPECT_EQ(range.max_dbid, 1750);
+
+  DbidRangeResult empty;
+  db_.GetMaxDbidInRange(3000, 4000, [&](DbidRangeResult r) { empty = std::move(r); });
+  ASSERT_TRUE(empty.success) << empty.error;
+  EXPECT_EQ(empty.max_dbid, kInvalidDBID);
+}
+
 TEST_F(SqliteDatabaseTest, CheckoutAndClear) {
   PutResult put;
   db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew, make_blob("data"), "bob",

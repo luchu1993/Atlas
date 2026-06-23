@@ -72,6 +72,9 @@ class XmlDatabase : public IDatabase {
 
   void SetAutoLoad(DatabaseID dbid, uint16_t type_id, bool auto_load) override;
 
+  void GetMaxDbidInRange(DatabaseID low, DatabaseID high,
+                         std::function<void(DbidRangeResult)> callback) override;
+
   void LoadEntityIdCounter(std::function<void(EntityID next_id)> callback) override;
   void SaveEntityIdCounter(EntityID next_id, std::function<void(bool success)> callback) override;
 

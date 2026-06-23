@@ -360,6 +360,7 @@ void DBApp::OnRegisterDbAppAck(const Address& src, Channel* ch,
   shard_table_version_ = msg.shard_table_version;
   shard_table_ = msg.entries;
   PruneCreateDbidAllocators();
+  RecoverCreateDbidAllocators();
   last_dbappmgr_load_report_at_ = {};
   ReportLoadToDbAppMgr();
   ATLAS_LOG_INFO("DBApp: registered with DBAppMgr as id={} shard_version={} shards={}", dbapp_id_,
@@ -378,6 +379,7 @@ void DBApp::OnShardTableUpdate(const Address& src, Channel* ch,
   shard_table_version_ = msg.version;
   shard_table_ = msg.entries;
   PruneCreateDbidAllocators();
+  RecoverCreateDbidAllocators();
   ATLAS_LOG_INFO("DBApp: shard table updated version={} shards={}", shard_table_version_,
                  shard_table_.size());
 }
@@ -444,7 +446,10 @@ auto DBApp::FindShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry* {
 
 auto DBApp::AllocateCreateDbid(const dbappmgr::ShardEntry& shard) -> DatabaseID {
   if (shard.dbapp_id != dbapp_id_ || shard.is_retiring) return kInvalidDBID;
-  auto& next = next_create_dbids_[shard.low_dbid];
+  if (create_dbid_recovery_pending_.contains(shard.low_dbid)) return kInvalidDBID;
+  auto next_it = next_create_dbids_.find(shard.low_dbid);
+  if (next_it == next_create_dbids_.end()) return kInvalidDBID;
+  auto& next = next_it->second;
   if (next < shard.low_dbid) next = shard.low_dbid;
   if (next >= shard.high_dbid) return kInvalidDBID;
   return next++;
@@ -478,6 +483,65 @@ void DBApp::PruneCreateDbidAllocators() {
     if (it->second < shard_it->low_dbid) it->second = shard_it->low_dbid;
     ++it;
   }
+
+  for (auto it = create_dbid_recovery_pending_.begin();
+       it != create_dbid_recovery_pending_.end();) {
+    const DatabaseID low = *it;
+    const auto shard_it =
+        std::find_if(shard_table_.begin(), shard_table_.end(), [this, low](const auto& entry) {
+          return entry.low_dbid == low && entry.dbapp_id == dbapp_id_ && !entry.is_retiring;
+        });
+    if (shard_it == shard_table_.end()) {
+      it = create_dbid_recovery_pending_.erase(it);
+      continue;
+    }
+    ++it;
+  }
+}
+
+void DBApp::RecoverCreateDbidAllocators() {
+  if (!database_) return;
+  for (const auto& entry : shard_table_) {
+    if (entry.dbapp_id != dbapp_id_ || entry.is_retiring) continue;
+    if (next_create_dbids_.contains(entry.low_dbid)) continue;
+    if (create_dbid_recovery_pending_.contains(entry.low_dbid)) continue;
+    RecoverCreateDbidAllocator(entry);
+  }
+}
+
+void DBApp::RecoverCreateDbidAllocator(const dbappmgr::ShardEntry& shard) {
+  if (!database_) return;
+  create_dbid_recovery_pending_.insert(shard.low_dbid);
+  database_->GetMaxDbidInRange(
+      shard.low_dbid, shard.high_dbid,
+      [this, low = shard.low_dbid, high = shard.high_dbid](DbidRangeResult result) {
+        if (!result.success) {
+          create_dbid_recovery_pending_.erase(low);
+          ATLAS_LOG_ERROR("DBApp: failed to recover create DBID allocator for [{}, {}): {}", low,
+                          high, result.error);
+          return;
+        }
+
+        const auto shard_it = std::find_if(shard_table_.begin(), shard_table_.end(),
+                                           [this, low, high](const auto& e) {
+                                             return e.low_dbid == low && e.high_dbid == high &&
+                                                    e.dbapp_id == dbapp_id_ && !e.is_retiring;
+                                           });
+        if (shard_it == shard_table_.end()) {
+          create_dbid_recovery_pending_.erase(low);
+          RecoverCreateDbidAllocators();
+          return;
+        }
+
+        DatabaseID next = low;
+        if (low <= result.max_dbid && result.max_dbid < high) {
+          next = result.max_dbid + 1;
+        }
+        next_create_dbids_[low] = next;
+        create_dbid_recovery_pending_.erase(low);
+        ATLAS_LOG_INFO("DBApp: recovered create DBID allocator for [{}, {}) next={}", low, high,
+                       next);
+      });
 }
 
 void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEntity& msg) {

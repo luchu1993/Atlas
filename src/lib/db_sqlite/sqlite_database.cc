@@ -832,6 +832,51 @@ void SqliteDatabase::SetAutoLoad(DatabaseID dbid, uint16_t type_id, bool auto_lo
   }
 }
 
+void SqliteDatabase::GetMaxDbidInRange(DatabaseID low, DatabaseID high,
+                                       std::function<void(DbidRangeResult)> callback) {
+  DbidRangeResult result;
+
+  if (!started_ || db_ == nullptr) {
+    result.error = "sqlite backend not started";
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  if (high <= low) {
+    result.success = true;
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  auto stmt_result = Prepare("SELECT MAX(dbid) FROM entities WHERE dbid >= ? AND dbid < ?");
+  if (!stmt_result) {
+    result.error = std::string(stmt_result.Error().Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  auto stmt = std::move(*stmt_result);
+  auto rc = sqlite3_bind_int64(stmt.Get(), 1, low);
+  if (rc == SQLITE_OK) rc = sqlite3_bind_int64(stmt.Get(), 2, high);
+  if (rc != SQLITE_OK) {
+    result.error = std::string(SqliteError("SqliteDatabase: max dbid bind failed", rc).Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  rc = sqlite3_step(stmt.Get());
+  if (rc == SQLITE_ROW) {
+    result.success = true;
+    if (sqlite3_column_type(stmt.Get(), 0) != SQLITE_NULL) {
+      result.max_dbid = static_cast<DatabaseID>(sqlite3_column_int64(stmt.Get(), 0));
+    }
+  } else {
+    result.error = std::string(SqliteError("SqliteDatabase: max dbid query failed", rc).Message());
+  }
+
+  FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+}
+
 void SqliteDatabase::LoadEntityIdCounter(std::function<void(EntityID next_id)> callback) {
   EntityID next_id = 1;
 

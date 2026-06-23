@@ -1,5 +1,6 @@
 #include "db_xml/xml_database.h"
 
+#include <charconv>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -37,6 +38,15 @@ auto EscapeJsonString(std::string_view value) -> std::string {
     }
   }
   return escaped;
+}
+
+auto ParsePositiveInt64(std::string_view value) -> std::optional<int64_t> {
+  int64_t parsed = 0;
+  const auto* first = value.data();
+  const auto* last = first + value.size();
+  auto [ptr, ec] = std::from_chars(first, last, parsed);
+  if (ec != std::errc{} || ptr != last || parsed <= 0) return std::nullopt;
+  return parsed;
 }
 
 }  // namespace
@@ -116,6 +126,12 @@ void XmlDatabase::PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
 
   if (HasFlag(flags, WriteFlags::kCreateNew) || dbid == kInvalidDBID) {
     if (HasFlag(flags, WriteFlags::kExplicitDbid) && dbid != kInvalidDBID) {
+      if (ReadBlob(type_id, dbid).has_value()) {
+        result.dbid = dbid;
+        result.error = std::format("entity ({},{}) already exists", type_id, dbid);
+        FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+        return;
+      }
       if (dbid >= next_dbid_ && dbid < std::numeric_limits<DatabaseID>::max()) {
         next_dbid_ = dbid + 1;
       }
@@ -166,6 +182,12 @@ void XmlDatabase::PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, Write
 
   if (HasFlag(flags, WriteFlags::kCreateNew) || dbid == kInvalidDBID) {
     if (HasFlag(flags, WriteFlags::kExplicitDbid) && dbid != kInvalidDBID) {
+      if (ReadBlob(type_id, dbid).has_value()) {
+        result.dbid = dbid;
+        result.error = std::format("entity ({},{}) already exists", type_id, dbid);
+        FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+        return;
+      }
       if (dbid >= next_dbid_ && dbid < std::numeric_limits<DatabaseID>::max()) {
         next_dbid_ = dbid + 1;
       }
@@ -395,6 +417,79 @@ void XmlDatabase::SetAutoLoad(DatabaseID dbid, uint16_t type_id, bool auto_load)
     auto_load_set_.erase(key);
   MarkAutoLoadDirty();
   FlushAfterMutation();
+}
+
+void XmlDatabase::GetMaxDbidInRange(DatabaseID low, DatabaseID high,
+                                    std::function<void(DbidRangeResult)> callback) {
+  DbidRangeResult result;
+  result.success = true;
+
+  if (high <= low) {
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  std::unordered_set<uint64_t> pending_deletes;
+  for (const auto& [key, pending] : pending_blob_writes_) {
+    if (pending.deleted) {
+      pending_deletes.insert(key);
+      continue;
+    }
+    if (low <= pending.dbid && pending.dbid < high && pending.dbid > result.max_dbid) {
+      result.max_dbid = pending.dbid;
+    }
+  }
+
+  auto type_id_for_dir = [this](std::string_view name) -> std::optional<uint16_t> {
+    for (const auto& [type_id, type_name] : type_names_) {
+      if (std::string_view(type_name) == name) return type_id;
+    }
+    constexpr std::string_view kPrefix = "type_";
+    if (!name.starts_with(kPrefix)) return std::nullopt;
+    auto parsed = ParsePositiveInt64(name.substr(kPrefix.size()));
+    if (!parsed || *parsed > std::numeric_limits<uint16_t>::max()) return std::nullopt;
+    return static_cast<uint16_t>(*parsed);
+  };
+
+  std::error_code ec;
+  for (const auto& type_entry : std::filesystem::directory_iterator(base_dir_, ec)) {
+    if (ec) {
+      result.success = false;
+      result.error =
+          std::format("XmlDatabase: cannot scan '{}': {}", base_dir_.string(), ec.message());
+      break;
+    }
+    if (!type_entry.is_directory(ec) || ec) {
+      ec.clear();
+      continue;
+    }
+    auto type_id = type_id_for_dir(type_entry.path().filename().string());
+    if (!type_id) continue;
+
+    std::error_code blob_ec;
+    for (const auto& blob_entry : std::filesystem::directory_iterator(type_entry.path(), blob_ec)) {
+      if (blob_ec) {
+        result.success = false;
+        result.error = std::format("XmlDatabase: cannot scan '{}': {}", type_entry.path().string(),
+                                   blob_ec.message());
+        break;
+      }
+      if (!blob_entry.is_regular_file(blob_ec) || blob_ec ||
+          blob_entry.path().extension() != ".bin") {
+        blob_ec.clear();
+        continue;
+      }
+      auto parsed = ParsePositiveInt64(blob_entry.path().stem().string());
+      if (!parsed) continue;
+      DatabaseID dbid = *parsed;
+      if (dbid < low || high <= dbid) continue;
+      if (pending_deletes.contains(CheckoutKey(*type_id, dbid))) continue;
+      if (dbid > result.max_dbid) result.max_dbid = dbid;
+    }
+    if (!result.success) break;
+  }
+
+  FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
 void XmlDatabase::ProcessResults() {
