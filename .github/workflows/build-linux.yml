@@ -94,7 +94,26 @@ jobs:
       - name: Build
         env:
           SCCACHE_DIR: ${{ github.workspace }}/.sccache
-        run: cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }}
+        shell: bash
+        run: |
+          set +e
+          cmake --build build/${{ matrix.preset }} --config ${{ matrix.config }} 2>&1 \
+            | tee build-${{ matrix.preset }}.log
+          status=${PIPESTATUS[0]}
+          if [[ "$status" -ne 0 ]]; then
+            {
+              echo "### Linux ${{ matrix.preset }} build failure"
+              echo '```text'
+              tail -n 200 build-${{ matrix.preset }}.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail_output="$(tail -n 120 build-${{ matrix.preset }}.log)"
+            tail_output="${tail_output//'%'/'%25'}"
+            tail_output="${tail_output//$'\r'/'%0D'}"
+            tail_output="${tail_output//$'\n'/'%0A'}"
+            echo "::error title=Linux ${{ matrix.preset }} build failed::$tail_output"
+            exit "$status"
+          fi
 
       - name: sccache stats
         env:
