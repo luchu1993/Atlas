@@ -17,23 +17,9 @@
 #include "server/machined_client.h"
 #include "server/watcher.h"
 
-#if defined(_WIN32)
-#include <process.h>
-#else
-#include <unistd.h>
-#endif
-
 namespace atlas {
 
 namespace {
-
-auto CurrentPid() -> uint32_t {
-#if defined(_WIN32)
-  return static_cast<uint32_t>(::_getpid());
-#else
-  return static_cast<uint32_t>(::getpid());
-#endif
-}
 
 auto IsLoopbackAddress(const Address& addr) -> bool {
   const uint32_t ip = addr.Ip();

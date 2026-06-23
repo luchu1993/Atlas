@@ -84,11 +84,6 @@ auto DurationMs(Duration duration) -> int64_t {
   return std::chrono::duration_cast<Milliseconds>(duration).count();
 }
 
-auto AgeMsSince(TimePoint t) -> int64_t {
-  if (t.time_since_epoch() == Duration::zero()) return -1;
-  return std::max<int64_t>(0, DurationMs(Clock::now() - t));
-}
-
 auto RetireDrainWatchdogWindow() -> Duration {
   return Milliseconds{s_lb_retire_drain_watchdog_ms.Value()};
 }
