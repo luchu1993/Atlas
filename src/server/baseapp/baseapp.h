@@ -9,19 +9,20 @@
 #include <unordered_set>
 #include <vector>
 
-#include "baseapp_native_provider.h"
 #include "baseapp_messages.h"
+#include "baseapp_native_provider.h"
 #include "cellapp/cellapp_messages.h"
-#include "foundation/intrusive_ptr.h"
-#include "network/channel.h"
 #include "coro/pending_rpc_registry.h"
 #include "db/idatabase.h"
 #include "dbapp/dbapp_messages.h"
+#include "dbappmgr/dbappmgr_messages.h"
 #include "delta_forwarder.h"
 #include "entity_manager.h"
 #include "foundation/clock.h"
+#include "foundation/intrusive_ptr.h"
 #include "foundation/latency_histogram.h"
 #include "math/vector3.h"
+#include "network/channel.h"
 #include "server/cellapp_peer_registry.h"
 #include "server/entity_app.h"
 #include "server/entity_types.h"
@@ -220,6 +221,17 @@ class BaseApp : public EntityApp {
   [[nodiscard]] auto CaptureLoadSnapshot() const -> LoadSnapshot;
   void DrainFinishedLoginFlows(std::vector<DatabaseID> dbids);
   void MaybeRequestMoreIds();
+  void OnDbAppBirth(const machined::BirthNotification& msg);
+  void OnDbAppDeath(const machined::DeathNotification& msg);
+  void OnDbAppMgrBirth(const machined::BirthNotification& msg);
+  void OnDbAppMgrDeath(const machined::DeathNotification& msg);
+  void OnShardTableResponse(const dbappmgr::ShardTableResponse& msg);
+  void OnShardTableUpdate(const dbappmgr::ShardTableUpdate& msg);
+  void RequestDbAppShardTable();
+  void ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries);
+  [[nodiscard]] auto ResolveDbAppChannel(DatabaseID dbid) -> Channel*;
+  [[nodiscard]] auto ConnectDbAppChannel(const Address& addr) -> Channel*;
+  [[nodiscard]] auto FindDbAppShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry*;
 
   NetworkInterface& external_network_;
   IDClient id_client_;
@@ -227,6 +239,11 @@ class BaseApp : public EntityApp {
   PendingRpcRegistry rpc_registry_;
   BaseAppNativeProvider* native_provider_{nullptr};  // owned by ScriptApp
   Channel* dbapp_channel_{nullptr};
+  Channel* dbappmgr_channel_{nullptr};
+  std::unordered_map<Address, Channel*> dbapp_channels_;
+  std::vector<dbappmgr::ShardEntry> dbapp_shard_table_;
+  uint32_t dbapp_shard_table_version_{0};
+  uint32_t next_dbapp_shard_table_request_id_{1};
   Channel* baseappmgr_channel_{nullptr};
   // Per-entity routing (which CellApp owns its Real) lives on
   // BaseEntity.cell_addr_; registry handles Birth/Death + self-filter.

@@ -2,8 +2,8 @@
 
 **Status:** 🚧 P15.1 核心中 — DBAppMgr 进程骨架、DBApp 注册、range shard
 table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元测试
-已起步；BaseApp / LoginApp shard cache、DBApp request version / retry
-idempotency 与 P15.2 HA 未完成。
+已起步；BaseApp shard cache 与 dbid 路由已接入，LoginApp shard cache、
+DBApp request version / retry idempotency 与 P15.2 HA 未完成。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
 
@@ -198,7 +198,7 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 |---|---|---|
 | P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已起步，含 DBApp 注册接入 |
 | P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已起步 |
-| P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | ~400 行 |
+| P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | BaseApp dbid 路由已接入；LoginApp username auth 仍走旧路径 |
 | P15.1-D4 | DBApp 端 idempotency cache + request retry on death | ~500 行 |
 | P15.2-S1..S4 | HA(镜像 BaseAppMgr B1-B4) | ~3000 行 |
 | 单测 + 集成测试 | | ~1500 行 |

@@ -219,10 +219,24 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
     rpc_registry_.CancelByChannel(&ch);
     // RUDP dead link condemns + queues the channel for delete before
     // machined's DeathNotification fires; clear cached pointers to avoid UAF.
+    bool dbapp_channel_down = false;
     if (&ch == dbapp_channel_) {
       ATLAS_LOG_WARNING("BaseApp: dbapp channel down (RUDP dead link), clearing");
       dbapp_channel_ = nullptr;
-      FailAllDbappPendingRequests("dbapp_channel_down");
+      dbapp_channel_down = true;
+    }
+    for (auto it = dbapp_channels_.begin(); it != dbapp_channels_.end();) {
+      if (it->second == &ch) {
+        it = dbapp_channels_.erase(it);
+        dbapp_channel_down = true;
+      } else {
+        ++it;
+      }
+    }
+    if (dbapp_channel_down) FailAllDbappPendingRequests("dbapp_channel_down");
+    if (&ch == dbappmgr_channel_) {
+      ATLAS_LOG_WARNING("BaseApp: dbappmgr channel down (RUDP dead link), clearing");
+      dbappmgr_channel_ = nullptr;
     }
     if (&ch == baseappmgr_channel_) {
       ATLAS_LOG_WARNING("BaseApp: baseappmgr channel down (RUDP dead link), clearing");
@@ -240,23 +254,13 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
 
   GetMachinedClient().Subscribe(
       machined::ListenerType::kBoth, ProcessType::kDbApp,
-      [this](const machined::BirthNotification& n) {
-        if (dbapp_channel_ == nullptr) {
-          ATLAS_LOG_INFO("BaseApp: DBApp born at {}:{}, connecting via RUDP...",
-                         n.internal_addr.Ip(), n.internal_addr.Port());
-          auto ch = Network().ConnectRudpNocwnd(n.internal_addr);
-          if (ch) dbapp_channel_ = static_cast<Channel*>(*ch);
-        }
-      },
-      [this](const machined::DeathNotification& n) {
-        if (n.reason == 0) {
-          ATLAS_LOG_INFO("BaseApp: DBApp deregistered, clearing dbapp channel");
-        } else {
-          ATLAS_LOG_WARNING("BaseApp: DBApp died, clearing dbapp channel");
-        }
-        dbapp_channel_ = nullptr;
-        FailAllDbappPendingRequests("dbapp_disconnected");
-      });
+      [this](const machined::BirthNotification& n) { OnDbAppBirth(n); },
+      [this](const machined::DeathNotification& n) { OnDbAppDeath(n); });
+
+  GetMachinedClient().Subscribe(
+      machined::ListenerType::kBoth, ProcessType::kDbAppMgr,
+      [this](const machined::BirthNotification& n) { OnDbAppMgrBirth(n); },
+      [this](const machined::DeathNotification& n) { OnDbAppMgrDeath(n); });
 
   // Delegated to CellAppPeerRegistry for Birth/Death and self-filtering.
   // BaseApp never self-registers as a CellApp.
@@ -563,6 +567,12 @@ void BaseApp::RegisterWatchers() {
                    std::function<uint64_t()>([this] { return prepared_login_timeout_total_; }));
   wr.Add<bool>("baseapp/dbapp_connected",
                std::function<bool()>([this] { return dbapp_channel_ != nullptr; }));
+  wr.Add<bool>("baseapp/dbappmgr_connected",
+               std::function<bool()>([this] { return dbappmgr_channel_ != nullptr; }));
+  wr.Add<uint32_t>("baseapp/dbapp_shard_table_version",
+                   std::function<uint32_t()>([this] { return dbapp_shard_table_version_; }));
+  wr.Add<std::size_t>("baseapp/dbapp_shard_count",
+                      std::function<std::size_t()>([this] { return dbapp_shard_table_.size(); }));
   wr.Add<uint64_t>("baseapp/delta_bytes_sent_total",
                    std::function<uint64_t()>([this] { return delta_bytes_sent_total_; }));
   wr.Add<uint64_t>("baseapp/delta_bytes_deferred_total", std::function<uint64_t()>([this] {
@@ -796,6 +806,16 @@ void BaseApp::RegisterInternalHandlers() {
         }
       });
 
+  (void)table.RegisterTypedHandler<dbappmgr::ShardTableResponse>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const dbappmgr::ShardTableResponse& msg) {
+        OnShardTableResponse(msg);
+      });
+
+  (void)table.RegisterTypedHandler<dbappmgr::ShardTableUpdate>(
+      [this](const Address& /*src*/, Channel* /*ch*/, const dbappmgr::ShardTableUpdate& msg) {
+        OnShardTableUpdate(msg);
+      });
+
   (void)table.RegisterTypedHandler<dbapp::CheckoutEntityAck>(
       [this](const Address& /*src*/, Channel* /*ch*/, const dbapp::CheckoutEntityAck& msg) {
         if (auto canceled_it = canceled_login_checkouts_.find(msg.request_id);
@@ -895,7 +915,8 @@ void BaseApp::OnCreateBase(Channel& /*ch*/, const baseapp::CreateBase& msg) {
 }
 
 void BaseApp::OnCreateBaseFromDb(Channel& /*ch*/, const baseapp::CreateBaseFromDB& msg) {
-  if (!dbapp_channel_) {
+  auto* db_ch = ResolveDbAppChannel(msg.dbid);
+  if (db_ch == nullptr) {
     ATLAS_LOG_ERROR("BaseApp: CreateBaseFromDB: no DBApp connection");
     return;
   }
@@ -915,7 +936,7 @@ void BaseApp::OnCreateBaseFromDb(Channel& /*ch*/, const baseapp::CreateBaseFromD
   req.dbid = msg.dbid;
   req.identifier = msg.identifier;
   req.entity_id = ent->EntityId();
-  (void)dbapp_channel_->SendMessage(req);
+  (void)db_ch->SendMessage(req);
 }
 
 void BaseApp::OnAcceptClient(Channel& /*ch*/, const baseapp::AcceptClient& msg) {
@@ -1433,12 +1454,14 @@ void BaseApp::EmitBaselineSnapshots() {
 }
 
 void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len) {
-  if (!dbapp_channel_) {
+  auto* ent = entity_mgr_.Find(entity_id);
+  if (!ent) return;
+
+  auto* db_ch = ResolveDbAppChannel(ent->Dbid());
+  if (db_ch == nullptr) {
     ATLAS_LOG_ERROR("BaseApp: write_to_db: no DBApp connection (entity={})", entity_id);
     return;
   }
-  auto* ent = entity_mgr_.Find(entity_id);
-  if (!ent) return;
 
   dbapp::WriteEntity msg;
   msg.flags = (ent->Dbid() == kInvalidDBID) ? WriteFlags::kCreateNew : WriteFlags::kExplicitDbid;
@@ -1447,7 +1470,7 @@ void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len
   msg.entity_id = entity_id;
   msg.request_id = entity_id;  // echoed in WriteEntityAck
   msg.blob.assign(data, data + len);
-  (void)dbapp_channel_->SendMessage(msg);
+  (void)db_ch->SendMessage(msg);
 }
 
 auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool {
@@ -1848,7 +1871,8 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
   const uint16_t kTypeId = pending.type_id;
   pending_logins_[kRid] = std::move(pending);
 
-  if (!dbapp_channel_) {
+  auto* db_ch = ResolveDbAppChannel(kDbid);
+  if (db_ch == nullptr) {
     ATLAS_LOG_ERROR("BaseApp: PrepareLogin: no DBApp connection");
     FailPendingPrepareLogin(kRid, "no_dbapp");
     FinishLoginFlow(kDbid);
@@ -1859,7 +1883,7 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
   co.request_id = kRid;
   co.dbid = kDbid;
   co.type_id = kTypeId;
-  auto send_result = dbapp_channel_->SendMessage(co);
+  auto send_result = db_ch->SendMessage(co);
   if (!send_result) {
     FailPendingPrepareLogin(kRid, "checkout_send_failed");
     FinishLoginFlow(kDbid);
@@ -1974,8 +1998,8 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
   // proceed without waiting for the write to complete.
   ReleaseCheckout(dbid, type_id);
 
-  // Fire-and-forget - checkout already released, ack will be ignored.
-  if (dbapp_channel_) {
+  auto* db_ch = ResolveDbAppChannel(dbid);
+  if (db_ch != nullptr) {
     dbapp::WriteEntity msg;
     msg.flags = WriteFlags::kExplicitDbid;
     msg.type_id = type_id;
@@ -1983,7 +2007,7 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
     msg.entity_id = entity_id;
     msg.request_id = next_prepare_request_id_++;
     msg.blob = std::move(blob);
-    if (auto r = dbapp_channel_->SendMessage(msg); !r) {
+    if (auto r = db_ch->SendMessage(msg); !r) {
       // Destroy follows immediately; a dropped WriteEntity = silent data loss.
       ATLAS_LOG_ERROR(
           "BaseApp: logoff WriteEntity dropped, dbid={} entity_id={} request_id={}: {} "
@@ -2080,7 +2104,8 @@ void BaseApp::ContinueLoginAfterForceLogoff(uint32_t force_request_id) {
     return;
   }
 
-  if (!dbapp_channel_) {
+  auto* db_ch = ResolveDbAppChannel(pending.dbid);
+  if (db_ch == nullptr) {
     FailPendingPrepareLogin(pending, "no_dbapp");
     FinishLoginFlow(pending.dbid);
     return;
@@ -2093,7 +2118,7 @@ void BaseApp::ContinueLoginAfterForceLogoff(uint32_t force_request_id) {
   co.request_id = new_rid;
   co.dbid = pending.dbid;
   co.type_id = pending.type_id;
-  auto send_result = dbapp_channel_->SendMessage(co);
+  auto send_result = db_ch->SendMessage(co);
   if (!send_result) {
     pending_logins_.erase(new_rid);
     FailPendingPrepareLogin(pending, "checkout_send_failed");
@@ -2669,6 +2694,120 @@ void BaseApp::OnGetEntityIdsAck(Channel& /*ch*/, const dbapp::GetEntityIdsAck& m
                  msg.start, msg.end, id_client_.Available());
 }
 
+void BaseApp::OnDbAppBirth(const machined::BirthNotification& msg) {
+  Channel* ch = ConnectDbAppChannel(msg.internal_addr);
+  if (dbapp_channel_ == nullptr) dbapp_channel_ = ch;
+}
+
+void BaseApp::OnDbAppDeath(const machined::DeathNotification& msg) {
+  const bool removed = dbapp_channels_.erase(msg.internal_addr) > 0;
+  bool removed_legacy = false;
+  if (dbapp_channel_ != nullptr && dbapp_channel_->RemoteAddress() == msg.internal_addr) {
+    dbapp_channel_ = nullptr;
+    removed_legacy = true;
+  }
+  if (msg.reason == 0) {
+    ATLAS_LOG_INFO("BaseApp: DBApp deregistered at {}", msg.internal_addr.ToString());
+  } else {
+    ATLAS_LOG_WARNING("BaseApp: DBApp died at {}", msg.internal_addr.ToString());
+  }
+  if (removed || removed_legacy) FailAllDbappPendingRequests("dbapp_disconnected");
+}
+
+void BaseApp::OnDbAppMgrBirth(const machined::BirthNotification& msg) {
+  if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() == msg.internal_addr &&
+      !dbappmgr_channel_->IsCondemned()) {
+    RequestDbAppShardTable();
+    return;
+  }
+
+  auto ch = Network().ConnectRudpNocwnd(msg.internal_addr);
+  if (!ch) {
+    ATLAS_LOG_WARNING("BaseApp: failed to connect to DBAppMgr at {}", msg.internal_addr.ToString());
+    return;
+  }
+  dbappmgr_channel_ = static_cast<Channel*>(*ch);
+  ATLAS_LOG_INFO("BaseApp: DBAppMgr connected at {}", msg.internal_addr.ToString());
+  RequestDbAppShardTable();
+}
+
+void BaseApp::OnDbAppMgrDeath(const machined::DeathNotification& msg) {
+  if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() != msg.internal_addr) {
+    return;
+  }
+  if (msg.reason == 0) {
+    ATLAS_LOG_INFO("BaseApp: DBAppMgr deregistered");
+  } else {
+    ATLAS_LOG_WARNING("BaseApp: DBAppMgr died");
+  }
+  dbappmgr_channel_ = nullptr;
+}
+
+void BaseApp::OnShardTableResponse(const dbappmgr::ShardTableResponse& msg) {
+  if (msg.version == dbapp_shard_table_version_ && msg.entries.empty()) return;
+  ApplyDbAppShardTable(msg.version, msg.entries);
+}
+
+void BaseApp::OnShardTableUpdate(const dbappmgr::ShardTableUpdate& msg) {
+  ApplyDbAppShardTable(msg.version, msg.entries);
+}
+
+void BaseApp::RequestDbAppShardTable() {
+  if (dbappmgr_channel_ == nullptr) return;
+  dbappmgr::GetShardTable msg;
+  msg.request_id = next_dbapp_shard_table_request_id_++;
+  msg.known_version = dbapp_shard_table_version_;
+  if (auto r = dbappmgr_channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("BaseApp: GetShardTable send failed: {}", r.Error().Message());
+  }
+}
+
+void BaseApp::ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries) {
+  if (version == 0 || version <= dbapp_shard_table_version_) return;
+  dbapp_shard_table_version_ = version;
+  dbapp_shard_table_ = std::move(entries);
+  for (const auto& entry : dbapp_shard_table_) (void)ConnectDbAppChannel(entry.dbapp_addr);
+  ATLAS_LOG_INFO("BaseApp: DBApp shard table version={} shards={}", dbapp_shard_table_version_,
+                 dbapp_shard_table_.size());
+}
+
+auto BaseApp::ResolveDbAppChannel(DatabaseID dbid) -> Channel* {
+  if (dbid != kInvalidDBID) {
+    if (const auto* shard = FindDbAppShard(dbid)) {
+      return ConnectDbAppChannel(shard->dbapp_addr);
+    }
+    if (!dbapp_shard_table_.empty()) return nullptr;
+  }
+  return dbapp_channel_;
+}
+
+auto BaseApp::ConnectDbAppChannel(const Address& addr) -> Channel* {
+  if (addr.Port() == 0) return nullptr;
+  if (auto it = dbapp_channels_.find(addr);
+      it != dbapp_channels_.end() && it->second != nullptr && !it->second->IsCondemned()) {
+    return it->second;
+  }
+  if (auto* existing = Network().FindChannel(addr); existing != nullptr) {
+    dbapp_channels_[addr] = existing;
+    return existing;
+  }
+  auto result = Network().ConnectRudpNocwnd(addr);
+  if (!result) {
+    ATLAS_LOG_WARNING("BaseApp: failed to connect DBApp shard at {}", addr.ToString());
+    return nullptr;
+  }
+  auto* ch = static_cast<Channel*>(*result);
+  dbapp_channels_[addr] = ch;
+  return ch;
+}
+
+auto BaseApp::FindDbAppShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry* {
+  for (const auto& entry : dbapp_shard_table_) {
+    if (entry.low_dbid <= dbid && dbid < entry.high_dbid) return &entry;
+  }
+  return nullptr;
+}
+
 auto BaseApp::ResolveInternalChannel(const Address& addr) -> Channel* {
   if (auto* existing = Network().FindChannel(addr)) {
     return existing;
@@ -3163,14 +3302,15 @@ void BaseApp::RetryStalledForceLogoff(uint32_t request_id) {
 }
 
 void BaseApp::ReleaseCheckout(DatabaseID dbid, uint16_t type_id) {
-  if (!dbapp_channel_ || dbid == kInvalidDBID) {
+  auto* db_ch = ResolveDbAppChannel(dbid);
+  if (db_ch == nullptr || dbid == kInvalidDBID) {
     return;
   }
 
   dbapp::CheckinEntity checkin;
   checkin.type_id = type_id;
   checkin.dbid = dbid;
-  (void)dbapp_channel_->SendMessage(checkin);
+  (void)db_ch->SendMessage(checkin);
 }
 
 void BaseApp::CancelInflightCheckout(uint32_t request_id, const PendingLogin& pending) {
@@ -3181,7 +3321,8 @@ void BaseApp::CancelInflightCheckout(uint32_t request_id, const PendingLogin& pe
 }
 
 void BaseApp::SendAbortCheckout(uint32_t request_id, DatabaseID dbid, uint16_t type_id) {
-  if (!dbapp_channel_) {
+  auto* db_ch = ResolveDbAppChannel(dbid);
+  if (db_ch == nullptr) {
     ATLAS_LOG_WARNING(
         "BaseApp: cannot abort checkout request_id={} dbid={} without DBApp "
         "channel",
@@ -3193,7 +3334,7 @@ void BaseApp::SendAbortCheckout(uint32_t request_id, DatabaseID dbid, uint16_t t
   abort.request_id = request_id;
   abort.type_id = type_id;
   abort.dbid = dbid;
-  if (auto r = dbapp_channel_->SendMessage(abort); !r) {
+  if (auto r = db_ch->SendMessage(abort); !r) {
     // DBApp wedges the slot until BaseApp-death detection clears it;
     // re-login returns kAlreadyCheckedOut against a discarded holder.
     ATLAS_LOG_ERROR(

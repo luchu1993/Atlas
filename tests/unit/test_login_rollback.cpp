@@ -1,6 +1,9 @@
+#include <array>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -13,6 +16,27 @@
 #include "test_null_channel.h"
 
 namespace atlas {
+
+namespace {
+
+class CapturingChannel final : public Channel {
+ public:
+  using Channel::Channel;
+
+  [[nodiscard]] auto Fd() const -> FdHandle override { return kInvalidFd; }
+  [[nodiscard]] auto send_count() const -> std::size_t { return sends_.size(); }
+
+ protected:
+  [[nodiscard]] auto DoSend(std::span<const std::byte> data) -> Result<std::size_t> override {
+    sends_.emplace_back(data.begin(), data.end());
+    return data.size();
+  }
+
+ private:
+  std::vector<std::vector<std::byte>> sends_;
+};
+
+}  // namespace
 
 class LoginRollbackTest : public ::testing::Test {
  protected:
@@ -120,6 +144,14 @@ class BaseAppRollbackTest : public ::testing::Test {
   auto watcher(std::string_view path) -> std::optional<std::string> {
     return app_.GetWatcherRegistry().Get(path);
   }
+  void set_legacy_dbapp_channel(Channel* ch) { app_.dbapp_channel_ = ch; }
+  void cache_dbapp_channel(const Address& addr, Channel* ch) { app_.dbapp_channels_[addr] = ch; }
+  void apply_dbapp_shards(uint32_t version, std::vector<dbappmgr::ShardEntry> entries) {
+    app_.ApplyDbAppShardTable(version, std::move(entries));
+  }
+  auto resolve_dbapp(DatabaseID dbid) -> Channel* { return app_.ResolveDbAppChannel(dbid); }
+  auto dbapp_shard_version() const -> uint32_t { return app_.dbapp_shard_table_version_; }
+  auto dbapp_shard_count() const -> std::size_t { return app_.dbapp_shard_table_.size(); }
 
   auto create_cell_bound_entity(SpaceID space_id, const Address& cell_addr,
                                 bool has_cell_backup = true) -> BaseEntity* {
@@ -134,6 +166,17 @@ class BaseAppRollbackTest : public ::testing::Test {
     ent->SetCell(cell_addr);
     if (has_cell_backup) ent->SetCellBackupData({std::byte{0x01}});
     return ent;
+  }
+  auto create_db_entity(DatabaseID dbid, uint16_t type_id = 7) -> BaseEntity* {
+    app_.entity_mgr_.SetIdClient(&app_.id_client_);
+    if (!ids_seeded_) {
+      app_.id_client_.AddIds(1000, 1100);
+      ids_seeded_ = true;
+    }
+    return app_.entity_mgr_.Create(type_id, false, dbid);
+  }
+  void write_to_db(EntityID entity_id, std::span<const std::byte> data) {
+    app_.DoWriteToDb(entity_id, data.data(), static_cast<int32_t>(data.size()));
   }
 
   auto death_notifications_total() const -> uint64_t {
@@ -333,6 +376,45 @@ TEST_F(BaseAppRollbackTest, CellAppDeathRestoreTimeoutCompletesPendingAsLost) {
             std::to_string(death_restore_last_elapsed_ms()));
   EXPECT_EQ(watcher("baseapp/cellapp_death_restore_max_elapsed_ms").value_or(""),
             std::to_string(death_restore_max_elapsed_ms()));
+}
+
+TEST_F(BaseAppRollbackTest, DbAppShardTableRoutesDbidAndKeepsLegacyFallback) {
+  register_watchers();
+  InterfaceTable channel_table;
+  CapturingChannel legacy(dispatcher_, channel_table, Address(0x7F000001u, 24001));
+  CapturingChannel shard(dispatcher_, channel_table, Address(0x7F000001u, 24002));
+  const Address shard_addr(0x7F000001u, 24002);
+
+  set_legacy_dbapp_channel(&legacy);
+  cache_dbapp_channel(shard_addr, &shard);
+  apply_dbapp_shards(5, {dbappmgr::ShardEntry{1, 1000, 8, shard_addr, false}});
+
+  EXPECT_EQ(resolve_dbapp(42), &shard);
+  EXPECT_EQ(resolve_dbapp(1000), nullptr);
+  EXPECT_EQ(resolve_dbapp(kInvalidDBID), &legacy);
+  EXPECT_EQ(dbapp_shard_version(), 5u);
+  EXPECT_EQ(dbapp_shard_count(), 1u);
+  EXPECT_EQ(watcher("baseapp/dbapp_shard_table_version").value_or(""), "5");
+  EXPECT_EQ(watcher("baseapp/dbapp_shard_count").value_or(""), "1");
+}
+
+TEST_F(BaseAppRollbackTest, WriteToDbUsesShardChannelForKnownDbid) {
+  InterfaceTable channel_table;
+  CapturingChannel legacy(dispatcher_, channel_table, Address(0x7F000001u, 24001));
+  CapturingChannel shard(dispatcher_, channel_table, Address(0x7F000001u, 24002));
+  const Address shard_addr(0x7F000001u, 24002);
+
+  set_legacy_dbapp_channel(&legacy);
+  cache_dbapp_channel(shard_addr, &shard);
+  apply_dbapp_shards(7, {dbappmgr::ShardEntry{1, 1000, 8, shard_addr, false}});
+  auto* ent = create_db_entity(42);
+  ASSERT_NE(ent, nullptr);
+
+  const std::array<std::byte, 3> blob{std::byte{0x01}, std::byte{0x02}, std::byte{0x03}};
+  write_to_db(ent->EntityId(), blob);
+
+  EXPECT_EQ(shard.send_count(), 1u);
+  EXPECT_EQ(legacy.send_count(), 0u);
 }
 
 class FakeDatabase final : public IDatabase {
