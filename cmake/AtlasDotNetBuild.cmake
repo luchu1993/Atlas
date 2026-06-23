@@ -1,22 +1,11 @@
-# AtlasDotNetBuild.cmake
-#
-# Helper function to build C# projects via `dotnet build` (non-VS generators)
-# or include them as native .csproj projects (Visual Studio generators).
-
-# atlas_dotnet_project(
-#   NAME            <target_name>
-#   PROJECT_FILE    <path_to_csproj>
-#   ASSEMBLY_NAME   <output.dll>
-#   CONFIGURATION   <Debug|Release>  (default: Release)
-#   TARGET_FRAMEWORK <framework>     (default: ${DOTNET_RUNTIME_TFM} from FindDotNet)
-#   DEPENDS         <target ...>     (other dotnet targets this depends on)
-#   DEPLOY                            (copy the built assembly into
-#                                      ${ATLAS_BIN_ROOT} alongside every
-#                                      EXE; omit for build-time-only
-#                                      assemblies like Roslyn analyzers)
-# )
 function(atlas_dotnet_project)
-  cmake_parse_arguments(ARG "DEPLOY;BUILD_ALL_TFMS" "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK" "DEPENDS" ${ARGN})
+  cmake_parse_arguments(
+    ARG
+    "DEPLOY;BUILD_ALL_TFMS"
+    "NAME;PROJECT_FILE;ASSEMBLY_NAME;CONFIGURATION;TARGET_FRAMEWORK"
+    "DEPENDS"
+    ${ARGN}
+  )
 
   if(NOT ARG_CONFIGURATION)
     set(ARG_CONFIGURATION "Release")
@@ -26,24 +15,16 @@ function(atlas_dotnet_project)
     if(NOT DOTNET_RUNTIME_TFM)
       message(FATAL_ERROR
         "atlas_dotnet_project(${ARG_NAME}): TARGET_FRAMEWORK not set and "
-        "DOTNET_RUNTIME_TFM not detected — include FindDotNet first.")
+        "DOTNET_RUNTIME_TFM not detected; include FindDotNet first.")
     endif()
     set(ARG_TARGET_FRAMEWORK "${DOTNET_RUNTIME_TFM}")
   endif()
 
-  # Resolve the .csproj file path relative to current source dir
   set(_proj_path "${CMAKE_CURRENT_SOURCE_DIR}/${ARG_PROJECT_FILE}")
 
   if(CMAKE_GENERATOR MATCHES "Visual Studio")
-    # ── Visual Studio: include the .csproj natively ──────────────────────
-    #
-    # `include_external_msproject` does NOT invoke `dotnet restore`. If the
-    # project has no `obj/project.assets.json`, MSBuild silently skips the
-    # C# project during a solution build, which in turn skips any native
-    # target that depends on it via `add_dependencies` — the dependent
-    # .exe is never produced and `ctest` reports it as "Not Run". Run
-    # restore at configure time to guarantee the restore artefacts exist
-    # before VS builds this project.
+    # VS generators include the .csproj natively; restore first so MSBuild
+    # has assets before native targets depend on the C# project.
     if(DOTNET_EXECUTABLE)
       message(STATUS "Restoring NuGet packages for ${ARG_NAME}")
       execute_process(
@@ -59,7 +40,7 @@ function(atlas_dotnet_project)
       endif()
     else()
       message(WARNING
-        "DOTNET_EXECUTABLE not found — cannot restore ${_proj_path}. "
+        "DOTNET_EXECUTABLE not found; cannot restore ${_proj_path}. "
         "VS solution build may skip this C# project and its dependents.")
     endif()
 
@@ -69,13 +50,13 @@ function(atlas_dotnet_project)
       add_dependencies(${ARG_NAME} ${ARG_DEPENDS})
     endif()
 
-    # Compute the VS output path so tests/consumers can locate the DLL
     get_filename_component(_proj_dir "${ARG_PROJECT_FILE}" DIRECTORY)
     set(_platform "${CMAKE_GENERATOR_PLATFORM}")
     if(NOT _platform)
       set(_platform "x64")
     endif()
-    set(_output_dir "${CMAKE_CURRENT_SOURCE_DIR}/${_proj_dir}/bin/${_platform}/$<CONFIG>/${ARG_TARGET_FRAMEWORK}")
+    set(_vs_bin_dir "${CMAKE_CURRENT_SOURCE_DIR}/${_proj_dir}/bin/${_platform}")
+    set(_output_dir "${_vs_bin_dir}/$<CONFIG>/${ARG_TARGET_FRAMEWORK}")
     set(_output_dll "${_output_dir}/${ARG_ASSEMBLY_NAME}")
 
     set_target_properties(${ARG_NAME} PROPERTIES
@@ -83,12 +64,8 @@ function(atlas_dotnet_project)
       DOTNET_ASSEMBLY "${_output_dll}"
     )
 
-    # Deploy assembly to ${ATLAS_BIN_ROOT} (flat layout — see
-    # cmake/AtlasFolders.cmake). include_external_msproject targets
-    # don't support POST_BUILD, so we create a separate custom target
-    # that copies the DLL after the build.
     if(ARG_DEPLOY)
-      set(_src_dll "${CMAKE_CURRENT_SOURCE_DIR}/${_proj_dir}/bin/${_platform}/$<CONFIG>/${ARG_TARGET_FRAMEWORK}/${ARG_ASSEMBLY_NAME}")
+      set(_src_dll "${_output_dir}/${ARG_ASSEMBLY_NAME}")
       add_custom_target(${ARG_NAME}_deploy ALL
         COMMAND ${CMAKE_COMMAND} -E make_directory "${ATLAS_BIN_ROOT}"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_src_dll}" "${ATLAS_BIN_ROOT}/"
@@ -98,30 +75,32 @@ function(atlas_dotnet_project)
       add_dependencies(${ARG_NAME}_deploy ${ARG_NAME})
     endif()
   else()
-    # ── Non-VS (Ninja, Make, etc.): build via dotnet CLI ─────────────────
-    # Shared output dir: dotnet --output propagates OutputPath to every ProjectReference,
-    # so per-target dirs would break cross-project lookup (Atlas.Client → Atlas.Shared.dll).
+    # dotnet --output propagates OutputPath through ProjectReference targets.
+    # Keep one CMake output dir so shared dependencies resolve consistently.
     set(_output_dir "${CMAKE_BINARY_DIR}/csharp")
     set(_output_dll "${_output_dir}/${ARG_ASSEMBLY_NAME}")
 
-    # Glob C# sources for change detection
     file(GLOB_RECURSE _cs_sources
       "${CMAKE_CURRENT_SOURCE_DIR}/*.cs"
     )
     list(FILTER _cs_sources EXCLUDE REGEX ".*/obj/.*")
     list(FILTER _cs_sources EXCLUDE REGEX ".*/bin/.*")
 
-    # --framework pins one TFM so multi-TFM projects don't clobber --output.
-    # BUILD_ALL_TFMS: multi-TFM projects also build the non-deployed TFM
-    # into the per-project obj cache so downstream tests resolving via
-    # ProjectReference (which picks the consumer's TFM) get fresh ref dlls.
-    # The deploy step still copies only the TARGET_FRAMEWORK output.
+    set(_dotnet_dep_outputs)
+    foreach(_dep IN LISTS ARG_DEPENDS)
+      get_target_property(_dep_assembly "${_dep}" DOTNET_ASSEMBLY)
+      if(_dep_assembly)
+        list(APPEND _dotnet_dep_outputs "${_dep_assembly}")
+      endif()
+    endforeach()
+
+    # BUILD_ALL_TFMS also seeds per-project ref outputs for ProjectReference users.
+    # The deploy build stays pinned to TARGET_FRAMEWORK and the CMake output dir.
     if(ARG_BUILD_ALL_TFMS)
       add_custom_command(
         OUTPUT "${_output_dll}"
         COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
                 --configuration "${ARG_CONFIGURATION}"
-                --no-dependencies
                 -p:Platform=AnyCPU
                 --nologo -v quiet
         COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
@@ -131,13 +110,14 @@ function(atlas_dotnet_project)
                 --no-dependencies
                 -p:Platform=AnyCPU
                 --nologo -v quiet
-        DEPENDS ${_cs_sources} "${_proj_path}"
+        DEPENDS ${_cs_sources} "${_proj_path}" ${_dotnet_dep_outputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Building C# project (all TFMs): ${ARG_NAME}"
         VERBATIM
       )
     else()
-      # --no-dependencies + -p:Platform=AnyCPU: CMake DEPENDS orders builds; parallel recursive ProjectReference builds race on obj/, and vcvars64 leaks Platform=x64 into env which MSBuild adopts.
+      # CMake orders dependencies; --no-dependencies avoids recursive obj races.
+      # AnyCPU prevents vcvars64 Platform=x64 from leaking into MSBuild.
       add_custom_command(
         OUTPUT "${_output_dll}"
         COMMAND "${DOTNET_EXECUTABLE}" build "${_proj_path}"
@@ -147,7 +127,7 @@ function(atlas_dotnet_project)
                 --no-dependencies
                 -p:Platform=AnyCPU
                 --nologo -v quiet
-        DEPENDS ${_cs_sources} "${_proj_path}"
+        DEPENDS ${_cs_sources} "${_proj_path}" ${_dotnet_dep_outputs}
         WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
         COMMENT "Building C# project: ${ARG_NAME}"
         VERBATIM
@@ -160,14 +140,11 @@ function(atlas_dotnet_project)
       add_dependencies(${ARG_NAME} ${ARG_DEPENDS})
     endif()
 
-    # Export the output directory as a target property for dependent targets
     set_target_properties(${ARG_NAME} PROPERTIES
       DOTNET_OUTPUT_DIR "${_output_dir}"
       DOTNET_ASSEMBLY "${_output_dll}"
     )
 
-    # Deploy assembly to ${ATLAS_BIN_ROOT} (flat layout).
-    # Single-config generators: deploy for CMAKE_BUILD_TYPE only.
     if(ARG_DEPLOY AND CMAKE_BUILD_TYPE)
       add_custom_command(TARGET ${ARG_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "${ATLAS_BIN_ROOT}"
