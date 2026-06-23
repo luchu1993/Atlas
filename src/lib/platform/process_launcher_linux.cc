@@ -1,5 +1,3 @@
-#include "process_launcher.h"
-
 #include <fcntl.h>
 #include <signal.h>
 #include <sys/stat.h>
@@ -10,8 +8,8 @@
 #include <array>
 #include <cerrno>
 #include <cstddef>
-#include <cstdio>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +18,8 @@
 #include <system_error>
 #include <utility>
 #include <vector>
+
+#include "process_launcher.h"
 
 namespace atlas {
 namespace {
