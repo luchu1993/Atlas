@@ -50,7 +50,7 @@ jobs:
           fi
           output="$(git clang-format --diff "$base" "${{ github.sha }}" -- src tests)"
           echo "$output"
-          if ! echo "$output" | grep -Eq "clang-format did not modify any files|no modified files to format"; then
+          if [ -n "$output" ] && ! echo "$output" | grep -Eq "clang-format did not modify any files|no modified files to format"; then
             echo "::error::clang-format would modify changed lines"
             exit 1
           fi
