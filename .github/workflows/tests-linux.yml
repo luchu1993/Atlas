@@ -116,13 +116,53 @@ jobs:
 
       - name: Unit Tests
         working-directory: build/debug
-        run: ctest --build-config Debug --label-regex unit --output-on-failure
+        shell: bash
+        run: |
+          set +e
+          ctest --build-config Debug --label-regex unit --output-on-failure 2>&1 | tee unit-tests.log
+          status=${PIPESTATUS[0]}
+          if [[ "$status" -ne 0 ]]; then
+            {
+              echo "### Linux unit test failure"
+              echo '```text'
+              tail -n 200 unit-tests.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
 
       - name: Integration Tests
         working-directory: build/debug
-        run: ctest --build-config Debug --label-regex integration --output-on-failure
+        shell: bash
+        run: |
+          set +e
+          ctest --build-config Debug --label-regex integration --output-on-failure 2>&1 | tee integration-tests.log
+          status=${PIPESTATUS[0]}
+          if [[ "$status" -ne 0 ]]; then
+            {
+              echo "### Linux integration test failure"
+              echo '```text'
+              tail -n 200 integration-tests.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
 
       - name: C# IntegrationTests
         env:
           ATLAS_BIN_DIR: ${{ github.workspace }}/bin/debug
-        run: dotnet test tests/csharp/Atlas.Client.IntegrationTests --filter "Category!=Nightly" --nologo
+        shell: bash
+        run: |
+          set +e
+          dotnet test tests/csharp/Atlas.Client.IntegrationTests --filter "Category!=Nightly" --nologo \
+            2>&1 | tee csharp-integration-tests.log
+          status=${PIPESTATUS[0]}
+          if [[ "$status" -ne 0 ]]; then
+            {
+              echo "### Linux C# integration test failure"
+              echo '```text'
+              tail -n 200 csharp-integration-tests.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$status"
+          fi
