@@ -9,6 +9,8 @@
 
 #include <array>
 #include <cerrno>
+#include <cstddef>
+#include <cstdio>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -22,10 +24,8 @@
 namespace atlas {
 namespace {
 
-// /proc/$pid/stat field 22 (1-indexed): process start time in clock
-// ticks since boot. Read at launch to bind LaunchedProcess identity to
-// THIS incarnation of pid — a recycled pid will show a different value.
-// Returns 0 on parse failure (treat as "no identity guard").
+// /proc/$pid/stat field 22 is process start time in clock ticks.
+// It distinguishes this process from a later pid reuse.
 auto ReadStartTicks(pid_t pid) -> uint64_t {
   std::array<char, 64> path_buf{};
   std::snprintf(path_buf.data(), path_buf.size(), "/proc/%d/stat", static_cast<int>(pid));
@@ -33,9 +33,8 @@ auto ReadStartTicks(pid_t pid) -> uint64_t {
   if (!stat.is_open()) return 0;
   std::string line;
   if (!std::getline(stat, line)) return 0;
-  // comm field is in parens and may contain spaces — skip past final ')'
-  // then split the remainder on spaces. start_time is index 19 from there
-  // (field 22 - the pid, comm, state fields we already consumed).
+  // comm is parenthesized and may contain spaces.
+  // start_time is 19 fields after state.
   const auto rparen = line.rfind(')');
   if (rparen == std::string::npos || rparen + 2 >= line.size()) return 0;
   std::string_view tail(line.data() + rparen + 2, line.size() - rparen - 2);
@@ -52,6 +51,18 @@ auto ReadStartTicks(pid_t pid) -> uint64_t {
     ticks = ticks * 10 + static_cast<uint64_t>(c - '0');
   }
   return ticks;
+}
+
+auto WriteAll(int fd, const void* data, std::size_t size) -> bool {
+  auto* bytes = static_cast<const char*>(data);
+  std::size_t total = 0;
+  while (total < size) {
+    const ssize_t written = write(fd, bytes + total, size - total);
+    if (written < 0 && errno == EINTR) continue;
+    if (written <= 0) return false;
+    total += static_cast<std::size_t>(written);
+  }
+  return true;
 }
 
 }  // namespace
@@ -83,7 +94,7 @@ auto LaunchedProcess::IsAlive() const -> bool {
   if (pid_ == 0) return false;
   const auto ticks_now = ReadStartTicks(static_cast<pid_t>(pid_));
   if (ticks_now == 0) {
-    // /proc/$pid/stat gone — process either exited or never existed.
+    // /proc/$pid/stat missing: exited, absent, or not readable.
     if (kill(static_cast<pid_t>(pid_), 0) != 0) return false;
     return errno == EPERM;  // EPERM means a process exists; we just can't read
   }
@@ -140,12 +151,18 @@ auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<LaunchedProcess>
     const pid_t child_pid = fork();
     if (child_pid < 0) {
       const pid_t error_pid = -1;
-      (void)write(pipe_fds[1], &error_pid, sizeof(error_pid));
+      if (!WriteAll(pipe_fds[1], &error_pid, sizeof(error_pid))) {
+        if (output_fd >= 0) close(output_fd);
+        _exit(127);
+      }
       if (output_fd >= 0) close(output_fd);
       _exit(127);
     }
     if (child_pid > 0) {
-      (void)write(pipe_fds[1], &child_pid, sizeof(child_pid));
+      if (!WriteAll(pipe_fds[1], &child_pid, sizeof(child_pid))) {
+        if (output_fd >= 0) close(output_fd);
+        _exit(127);
+      }
       if (output_fd >= 0) close(output_fd);
       _exit(0);
     }
@@ -157,7 +174,9 @@ auto LaunchDetachedProcess(ProcessLaunchOptions opts) -> Result<LaunchedProcess>
       if (output_fd > STDERR_FILENO) close(output_fd);
     }
     if (!opts.working_directory.empty()) {
-      (void)chdir(opts.working_directory.string().c_str());
+      if (chdir(opts.working_directory.string().c_str()) != 0) {
+        _exit(127);
+      }
     }
 
     std::vector<std::string> storage;
