@@ -43,6 +43,7 @@ inline constexpr double kRpcBurstCapacity = 100.0;
 inline constexpr uint32_t kRpcRateViolationDisconnectThreshold = 250;
 inline constexpr double kMovementRefillTokensPerSec = 90.0;
 inline constexpr double kMovementBurstCapacity = 180.0;
+inline constexpr uint8_t kDbappWriteRetryLimit = 3;
 inline constexpr uint32_t kMovementLargeCorrectionSuspiciousStreak = 3;
 inline constexpr float kMovementCorrectionReportMaxDistanceM = 1000.0f;
 
@@ -234,7 +235,11 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
         ++it;
       }
     }
-    if (dbapp_channel_down) FailAllDbappPendingRequests("dbapp_channel_down");
+    if (dbapp_channel_down) {
+      RequestDbAppShardTable();
+      MarkDbappWriteRequestsDisconnected(ch.RemoteAddress());
+      FailAllDbappPendingRequests("dbapp_channel_down", false);
+    }
     if (&ch == dbappmgr_channel_) {
       ATLAS_LOG_WARNING("BaseApp: dbappmgr channel down (RUDP dead link), clearing");
       dbappmgr_channel_ = nullptr;
@@ -1487,11 +1492,20 @@ void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len
   msg.request_id = next_prepare_request_id_++;
   msg.shard_table_version = dbapp_shard_table_version_;
   msg.blob.assign(data, data + len);
-  pending_write_to_db_[msg.request_id] = PendingWriteToDb{entity_id, ent->Dbid(), Clock::now()};
-  if (auto r = db_ch->SendMessage(msg); !r) {
-    pending_write_to_db_.erase(msg.request_id);
-    ATLAS_LOG_ERROR("BaseApp: write_to_db request_id={} entity_id={} dropped: {}", msg.request_id,
-                    entity_id, r.Error().Message());
+  const uint32_t kRequestId = msg.request_id;
+
+  PendingWriteToDb pending;
+  pending.entity_id = entity_id;
+  pending.dbid = ent->Dbid();
+  pending.message = std::move(msg);
+  pending.target_addr = db_ch->RemoteAddress();
+  pending.created_at = Clock::now();
+
+  auto [it, inserted] = pending_write_to_db_.emplace(kRequestId, std::move(pending));
+  if (!inserted || !SendPendingWriteToDb(kRequestId, it->second)) {
+    pending_write_to_db_.erase(kRequestId);
+    ATLAS_LOG_ERROR("BaseApp: write_to_db request_id={} entity_id={} dropped", kRequestId,
+                    entity_id);
     ent->OnWriteAck(ent->Dbid(), false);
   }
 }
@@ -2737,7 +2751,11 @@ void BaseApp::OnDbAppDeath(const machined::DeathNotification& msg) {
   } else {
     ATLAS_LOG_WARNING("BaseApp: DBApp died at {}", msg.internal_addr.ToString());
   }
-  if (removed || removed_legacy) FailAllDbappPendingRequests("dbapp_disconnected");
+  if (removed || removed_legacy) {
+    RequestDbAppShardTable();
+    MarkDbappWriteRequestsDisconnected(msg.internal_addr);
+    FailAllDbappPendingRequests("dbapp_disconnected", false);
+  }
 }
 
 void BaseApp::OnDbAppMgrBirth(const machined::BirthNotification& msg) {
@@ -2793,8 +2811,66 @@ void BaseApp::ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::Shard
   dbapp_shard_table_version_ = version;
   dbapp_shard_table_ = std::move(entries);
   for (const auto& entry : dbapp_shard_table_) (void)ConnectDbAppChannel(entry.dbapp_addr);
+  RetryDisconnectedDbappWriteRequests();
   ATLAS_LOG_INFO("BaseApp: DBApp shard table version={} shards={}", dbapp_shard_table_version_,
                  dbapp_shard_table_.size());
+}
+
+void BaseApp::MarkDbappWriteRequestsDisconnected(const Address& dbapp_addr) {
+  for (auto& [request_id, pending] : pending_write_to_db_) {
+    (void)request_id;
+    if (pending.awaiting_ack && pending.target_addr == dbapp_addr) {
+      pending.awaiting_ack = false;
+      pending.target_addr = Address{};
+    }
+  }
+}
+
+void BaseApp::RetryDisconnectedDbappWriteRequests() {
+  for (auto it = pending_write_to_db_.begin(); it != pending_write_to_db_.end();) {
+    auto& pending = it->second;
+    if (pending.awaiting_ack) {
+      ++it;
+      continue;
+    }
+    if (pending.retry_count >= kDbappWriteRetryLimit) {
+      ATLAS_LOG_ERROR("BaseApp: write_to_db request_id={} entity_id={} retry limit exceeded",
+                      it->first, pending.entity_id);
+      if (auto* ent = entity_mgr_.Find(pending.entity_id)) {
+        ent->OnWriteAck(pending.dbid, false);
+      }
+      it = pending_write_to_db_.erase(it);
+      continue;
+    }
+    if (SendPendingWriteToDb(it->first, pending)) {
+      ++pending.retry_count;
+    }
+    ++it;
+  }
+}
+
+auto BaseApp::SendPendingWriteToDb(uint32_t request_id, PendingWriteToDb& pending) -> bool {
+  auto* db_ch = ResolveDbAppChannel(pending.message.dbid);
+  if (db_ch == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: write_to_db request_id={} entity_id={} has no DBApp route",
+                      request_id, pending.entity_id);
+    pending.awaiting_ack = false;
+    pending.target_addr = Address{};
+    return false;
+  }
+
+  pending.message.shard_table_version = dbapp_shard_table_version_;
+  pending.target_addr = db_ch->RemoteAddress();
+  auto result = db_ch->SendMessage(pending.message);
+  if (!result) {
+    ATLAS_LOG_WARNING("BaseApp: write_to_db request_id={} entity_id={} send failed: {}", request_id,
+                      pending.entity_id, result.Error().Message());
+    pending.awaiting_ack = false;
+    pending.target_addr = Address{};
+    return false;
+  }
+  pending.awaiting_ack = true;
+  return true;
 }
 
 auto BaseApp::ResolveDbAppChannel(DatabaseID dbid) -> Channel* {
@@ -3229,7 +3305,7 @@ void BaseApp::CleanupExpiredPendingRequests() {
   DrainFinishedLoginFlows(std::move(finished_login_dbids));
 }
 
-void BaseApp::FailAllDbappPendingRequests(std::string_view reason) {
+void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db) {
   for (auto& [request_id, pending] : pending_logins_) {
     (void)request_id;
     FailPendingPrepareLogin(pending, reason);
@@ -3242,13 +3318,15 @@ void BaseApp::FailAllDbappPendingRequests(std::string_view reason) {
   }
   pending_force_logoffs_.clear();
   pending_logoff_writes_.clear();
-  for (auto& [request_id, pending] : pending_write_to_db_) {
-    (void)request_id;
-    if (auto* ent = entity_mgr_.Find(pending.entity_id)) {
-      ent->OnWriteAck(pending.dbid, false);
+  if (fail_write_to_db) {
+    for (auto& [request_id, pending] : pending_write_to_db_) {
+      (void)request_id;
+      if (auto* ent = entity_mgr_.Find(pending.entity_id)) {
+        ent->OnWriteAck(pending.dbid, false);
+      }
     }
+    pending_write_to_db_.clear();
   }
-  pending_write_to_db_.clear();
   canceled_login_checkouts_.clear();
   FlushAllRemoteForceLogoffAcks(false);
   for (auto& [entity_id, deferred] : deferred_login_checkouts_) {

@@ -242,6 +242,12 @@ class BaseAppRollbackTest : public ::testing::Test {
   }
   void set_legacy_dbapp_channel(Channel* ch) { app_.dbapp_channel_ = ch; }
   void cache_dbapp_channel(const Address& addr, Channel* ch) { app_.dbapp_channels_[addr] = ch; }
+  void handle_dbapp_death(const Address& addr) {
+    machined::DeathNotification death;
+    death.internal_addr = addr;
+    death.reason = 1;
+    app_.OnDbAppDeath(death);
+  }
   void apply_dbapp_shards(uint32_t version, std::vector<dbappmgr::ShardEntry> entries) {
     app_.ApplyDbAppShardTable(version, std::move(entries));
   }
@@ -536,6 +542,47 @@ TEST_F(BaseAppRollbackTest, WriteToDbUsesShardChannelForKnownDbid) {
   ack.dbid = 42;
   handle_write_ack(ack);
   EXPECT_FALSE(pending_write_to_db_contains(writes[0].request_id));
+}
+
+TEST_F(BaseAppRollbackTest, WriteToDbRetriesPendingWriteAfterDbAppDeathAndShardUpdate) {
+  InterfaceTable channel_table;
+  CapturingChannel old_shard(dispatcher_, channel_table, Address(0x7F000001u, 24002));
+  CapturingChannel new_shard(dispatcher_, channel_table, Address(0x7F000001u, 24003));
+  const Address old_addr(0x7F000001u, 24002);
+  const Address new_addr(0x7F000001u, 24003);
+
+  cache_dbapp_channel(old_addr, &old_shard);
+  apply_dbapp_shards(7, {dbappmgr::ShardEntry{1, 1000, 8, old_addr, false}});
+  auto* ent = create_db_entity(42);
+  ASSERT_NE(ent, nullptr);
+
+  const std::array<std::byte, 3> blob{std::byte{0x04}, std::byte{0x05}, std::byte{0x06}};
+  write_to_db(ent->EntityId(), blob);
+
+  const auto first_writes = DecodeSentMessages<dbapp::WriteEntity>(old_shard);
+  ASSERT_EQ(first_writes.size(), 1u);
+  const uint32_t request_id = first_writes[0].request_id;
+  EXPECT_TRUE(pending_write_to_db_contains(request_id));
+
+  handle_dbapp_death(old_addr);
+  EXPECT_TRUE(pending_write_to_db_contains(request_id));
+
+  cache_dbapp_channel(new_addr, &new_shard);
+  apply_dbapp_shards(8, {dbappmgr::ShardEntry{1, 1000, 9, new_addr, false}});
+
+  const auto retried_writes = DecodeSentMessages<dbapp::WriteEntity>(new_shard);
+  ASSERT_EQ(retried_writes.size(), 1u);
+  EXPECT_EQ(retried_writes[0].request_id, request_id);
+  EXPECT_EQ(retried_writes[0].shard_table_version, 8u);
+  EXPECT_EQ(retried_writes[0].dbid, 42);
+  EXPECT_EQ(retried_writes[0].blob, std::vector<std::byte>(blob.begin(), blob.end()));
+
+  dbapp::WriteEntityAck ack;
+  ack.request_id = request_id;
+  ack.success = true;
+  ack.dbid = 42;
+  handle_write_ack(ack);
+  EXPECT_FALSE(pending_write_to_db_contains(request_id));
 }
 
 class FakeDatabase final : public IDatabase {

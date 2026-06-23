@@ -229,6 +229,10 @@ class BaseApp : public EntityApp {
   void OnShardTableUpdate(const dbappmgr::ShardTableUpdate& msg);
   void RequestDbAppShardTable();
   void ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries);
+  struct PendingWriteToDb;
+  void MarkDbappWriteRequestsDisconnected(const Address& dbapp_addr);
+  void RetryDisconnectedDbappWriteRequests();
+  [[nodiscard]] auto SendPendingWriteToDb(uint32_t request_id, PendingWriteToDb& pending) -> bool;
   [[nodiscard]] auto ResolveDbAppChannel(DatabaseID dbid) -> Channel*;
   [[nodiscard]] auto ConnectDbAppChannel(const Address& addr) -> Channel*;
   [[nodiscard]] auto FindDbAppShard(DatabaseID dbid) const -> const dbappmgr::ShardEntry*;
@@ -294,7 +298,11 @@ class BaseApp : public EntityApp {
   struct PendingWriteToDb {
     EntityID entity_id{kInvalidEntityID};
     DatabaseID dbid{kInvalidDBID};
+    dbapp::WriteEntity message;
+    Address target_addr;
     TimePoint created_at{};
+    uint8_t retry_count{0};
+    bool awaiting_ack{false};
   };
   struct PendingLogoffWrite {
     uint32_t continuation_request_id{0};
@@ -502,7 +510,7 @@ class BaseApp : public EntityApp {
   static constexpr float kLoadSmoothingBias = 0.25f;
 
   void CleanupExpiredPendingRequests();
-  void FailAllDbappPendingRequests(std::string_view reason);
+  void FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db = true);
   void FailPendingPrepareLogin(PendingLogin& pending, std::string_view reason);
   void FailPendingPrepareLogin(uint32_t request_id, std::string_view reason);
   void FailPendingForceLogoff(PendingLogin& pending, std::string_view reason);
