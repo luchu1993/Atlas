@@ -2,10 +2,12 @@
 #define ATLAS_SERVER_DBAPP_DBAPP_H_
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "checkout_manager.h"
@@ -65,6 +67,22 @@ class DBApp : public ManagerApp {
   void ReportLoadToDbAppMgr();
   [[nodiscard]] auto CurrentLoadFraction() const -> float;
   [[nodiscard]] auto AcceptsShardTableVersion(uint32_t version) const -> bool;
+  struct RequestCacheKey {
+    Address reply_addr;
+    uint32_t request_id{0};
+
+    [[nodiscard]] auto operator==(const RequestCacheKey& other) const -> bool = default;
+  };
+  struct RequestCacheKeyHash {
+    [[nodiscard]] auto operator()(const RequestCacheKey& key) const noexcept -> std::size_t;
+  };
+  [[nodiscard]] auto SendWriteAck(const RequestCacheKey& key, const dbapp::WriteEntityAck& ack,
+                                  Channel* fallback_ch) -> bool;
+  [[nodiscard]] auto SendCheckoutAck(const RequestCacheKey& key,
+                                     const dbapp::CheckoutEntityAck& ack, Channel* fallback_ch)
+      -> bool;
+  void RememberWriteAck(const RequestCacheKey& key, const dbapp::WriteEntityAck& ack);
+  void RememberCheckoutAck(const RequestCacheKey& key, const dbapp::CheckoutEntityAck& ack);
 
   std::unique_ptr<IDatabase> database_;
   std::unique_ptr<EntityIdAllocator> id_allocator_;
@@ -76,7 +94,14 @@ class DBApp : public ManagerApp {
     bool canceled{false};
     DatabaseID cleared_dbid{kInvalidDBID};
   };
-  std::unordered_map<uint32_t, PendingCheckoutRequest> pending_checkout_requests_;
+  std::unordered_map<RequestCacheKey, PendingCheckoutRequest, RequestCacheKeyHash>
+      pending_checkout_requests_;
+  std::unordered_set<RequestCacheKey, RequestCacheKeyHash> pending_write_requests_;
+  std::unordered_map<RequestCacheKey, dbapp::WriteEntityAck, RequestCacheKeyHash> write_ack_cache_;
+  std::deque<RequestCacheKey> write_ack_order_;
+  std::unordered_map<RequestCacheKey, dbapp::CheckoutEntityAck, RequestCacheKeyHash>
+      checkout_ack_cache_;
+  std::deque<RequestCacheKey> checkout_ack_order_;
   std::optional<EntityDefRegistry> entity_defs_;  // nullopt until loaded
   bool auto_create_accounts_{false};
   uint16_t account_type_id_{0};
@@ -91,6 +116,7 @@ class DBApp : public ManagerApp {
 
   LatencyHistogram checkout_reply_latency_;
   LatencyHistogram write_reply_latency_;
+  static constexpr std::size_t kRequestAckCacheLimit = 4096;
 };
 
 }  // namespace atlas

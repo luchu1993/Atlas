@@ -291,6 +291,11 @@ class BaseApp : public EntityApp {
   uint32_t next_prepare_request_id_{1};
 
   std::unordered_map<uint32_t, PendingLogin> pending_force_logoffs_;
+  struct PendingWriteToDb {
+    EntityID entity_id{kInvalidEntityID};
+    DatabaseID dbid{kInvalidDBID};
+    TimePoint created_at{};
+  };
   struct PendingLogoffWrite {
     uint32_t continuation_request_id{0};
     EntityID entity_id{kInvalidEntityID};
@@ -346,6 +351,7 @@ class BaseApp : public EntityApp {
     TimePoint tick_started_{};
   };
   std::unordered_map<uint32_t, PendingLogoffWrite> pending_logoff_writes_;
+  std::unordered_map<uint32_t, PendingWriteToDb> pending_write_to_db_;
   std::unordered_map<EntityID, std::vector<PendingRemoteForceLogoffAck>>
       pending_remote_force_logoff_acks_;
   std::unordered_map<EntityID, std::vector<DeferredLoginCheckout>> deferred_login_checkouts_;

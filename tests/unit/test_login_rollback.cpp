@@ -146,7 +146,9 @@ class BaseAppRollbackTest : public ::testing::Test {
       : dispatcher_("baseapp_rollback"),
         internal_network_(dispatcher_),
         external_network_(dispatcher_),
-        app_(dispatcher_, internal_network_, external_network_) {}
+        app_(dispatcher_, internal_network_, external_network_) {
+    app_.RegisterInternalHandlers();
+  }
 
   void register_watchers() { app_.RegisterWatchers(); }
 
@@ -179,6 +181,18 @@ class BaseAppRollbackTest : public ::testing::Test {
   auto resolve_dbapp(DatabaseID dbid) -> Channel* { return app_.ResolveDbAppChannel(dbid); }
   auto dbapp_shard_version() const -> uint32_t { return app_.dbapp_shard_table_version_; }
   auto dbapp_shard_count() const -> std::size_t { return app_.dbapp_shard_table_.size(); }
+  auto pending_write_to_db_count() const -> std::size_t { return app_.pending_write_to_db_.size(); }
+  auto pending_write_to_db_contains(uint32_t request_id) const -> bool {
+    return app_.pending_write_to_db_.contains(request_id);
+  }
+  void handle_write_ack(const dbapp::WriteEntityAck& ack) {
+    BinaryWriter writer;
+    ack.Serialize(writer);
+    BinaryReader reader(writer.Data());
+    ASSERT_TRUE(internal_network_.InterfaceTable()
+                    .Dispatch(Address{}, nullptr, dbapp::WriteEntityAck::Descriptor().id, reader)
+                    .HasValue());
+  }
 
   auto create_cell_bound_entity(SpaceID space_id, const Address& cell_addr,
                                 bool has_cell_backup = true) -> BaseEntity* {
@@ -445,6 +459,16 @@ TEST_F(BaseAppRollbackTest, WriteToDbUsesShardChannelForKnownDbid) {
   const auto writes = DecodeSentMessages<dbapp::WriteEntity>(shard);
   ASSERT_EQ(writes.size(), 1u);
   EXPECT_EQ(writes[0].shard_table_version, 7u);
+  EXPECT_NE(writes[0].request_id, ent->EntityId());
+  EXPECT_EQ(pending_write_to_db_count(), 1u);
+  EXPECT_TRUE(pending_write_to_db_contains(writes[0].request_id));
+
+  dbapp::WriteEntityAck ack;
+  ack.request_id = writes[0].request_id;
+  ack.success = true;
+  ack.dbid = 42;
+  handle_write_ack(ack);
+  EXPECT_FALSE(pending_write_to_db_contains(writes[0].request_id));
 }
 
 class FakeDatabase final : public IDatabase {
@@ -556,15 +580,15 @@ class DBAppRollbackTest : public ::testing::Test {
   }
 
   auto pending_request_contains(uint32_t request_id) const -> bool {
-    return app_.pending_checkout_requests_.contains(request_id);
+    return app_.pending_checkout_requests_.contains(request_key(request_id));
   }
 
   auto pending_request_canceled(uint32_t request_id) const -> bool {
-    return app_.pending_checkout_requests_.at(request_id).canceled;
+    return app_.pending_checkout_requests_.at(request_key(request_id)).canceled;
   }
 
   auto pending_request_cleared_dbid(uint32_t request_id) const -> DatabaseID {
-    return app_.pending_checkout_requests_.at(request_id).cleared_dbid;
+    return app_.pending_checkout_requests_.at(request_key(request_id)).cleared_dbid;
   }
 
   auto checkout_owner(DatabaseID dbid, uint16_t type_id) const -> std::optional<CheckoutInfo> {
@@ -589,6 +613,10 @@ class DBAppRollbackTest : public ::testing::Test {
   }
   auto watcher(std::string_view path) -> std::optional<std::string> {
     return app_.GetWatcherRegistry().Get(path);
+  }
+
+  auto request_key(uint32_t request_id) const -> DBApp::RequestCacheKey {
+    return DBApp::RequestCacheKey{Address("127.0.0.1", 30001), request_id};
   }
 
   EventDispatcher dispatcher_;

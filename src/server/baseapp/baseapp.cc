@@ -801,7 +801,14 @@ void BaseApp::RegisterInternalHandlers() {
           return;
         }
 
-        auto* ent = entity_mgr_.Find(msg.request_id);
+        auto write_it = pending_write_to_db_.find(msg.request_id);
+        if (write_it == pending_write_to_db_.end()) {
+          return;
+        }
+        const PendingWriteToDb kPendingWrite = write_it->second;
+        pending_write_to_db_.erase(write_it);
+
+        auto* ent = entity_mgr_.Find(kPendingWrite.entity_id);
         if (ent) {
           if (msg.success && msg.dbid != kInvalidDBID) {
             (void)entity_mgr_.AssignDbid(ent->EntityId(), msg.dbid);
@@ -1477,10 +1484,16 @@ void BaseApp::DoWriteToDb(EntityID entity_id, const std::byte* data, int32_t len
   msg.type_id = ent->TypeId();
   msg.dbid = ent->Dbid();
   msg.entity_id = entity_id;
-  msg.request_id = entity_id;  // echoed in WriteEntityAck
+  msg.request_id = next_prepare_request_id_++;
   msg.shard_table_version = dbapp_shard_table_version_;
   msg.blob.assign(data, data + len);
-  (void)db_ch->SendMessage(msg);
+  pending_write_to_db_[msg.request_id] = PendingWriteToDb{entity_id, ent->Dbid(), Clock::now()};
+  if (auto r = db_ch->SendMessage(msg); !r) {
+    pending_write_to_db_.erase(msg.request_id);
+    ATLAS_LOG_ERROR("BaseApp: write_to_db request_id={} entity_id={} dropped: {}", msg.request_id,
+                    entity_id, r.Error().Message());
+    ent->OnWriteAck(ent->Dbid(), false);
+  }
 }
 
 auto BaseApp::CaptureEntitySnapshot(EntityID entity_id, std::vector<std::byte>& out) -> bool {
@@ -3142,6 +3155,19 @@ void BaseApp::CleanupExpiredPendingRequests() {
     }
   }
 
+  for (auto it = pending_write_to_db_.begin(); it != pending_write_to_db_.end();) {
+    if (kNow - it->second.created_at > kPendingTimeout) {
+      ATLAS_LOG_WARNING("BaseApp: write_to_db request_id={} entity_id={} timed out", it->first,
+                        it->second.entity_id);
+      if (auto* ent = entity_mgr_.Find(it->second.entity_id)) {
+        ent->OnWriteAck(it->second.dbid, false);
+      }
+      it = pending_write_to_db_.erase(it);
+    } else {
+      ++it;
+    }
+  }
+
   for (auto it = deferred_login_checkouts_.begin(); it != deferred_login_checkouts_.end();) {
     auto& deferred = it->second;
     for (auto entry_it = deferred.begin(); entry_it != deferred.end();) {
@@ -3216,6 +3242,13 @@ void BaseApp::FailAllDbappPendingRequests(std::string_view reason) {
   }
   pending_force_logoffs_.clear();
   pending_logoff_writes_.clear();
+  for (auto& [request_id, pending] : pending_write_to_db_) {
+    (void)request_id;
+    if (auto* ent = entity_mgr_.Find(pending.entity_id)) {
+      ent->OnWriteAck(pending.dbid, false);
+    }
+  }
+  pending_write_to_db_.clear();
   canceled_login_checkouts_.clear();
   FlushAllRemoteForceLogoffAcks(false);
   for (auto& [entity_id, deferred] : deferred_login_checkouts_) {

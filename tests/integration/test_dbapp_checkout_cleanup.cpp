@@ -200,6 +200,13 @@ TEST(DBAppIntegration, BaseAppDeathNotificationClearsCheckoutOwnership) {
   const auto dbid = baseapp1.write_ack.dbid;
   ASSERT_GT(dbid, 0);
 
+  baseapp1.reset_write();
+  ASSERT_TRUE((*ch1)->SendMessage(write).HasValue());
+  ASSERT_TRUE(poll_until(baseapp1.dispatcher,
+                         [&] { return baseapp1.write_received.load(std::memory_order_acquire); }));
+  EXPECT_TRUE(baseapp1.write_ack.success);
+  EXPECT_EQ(baseapp1.write_ack.dbid, dbid);
+
   CheckoutEntity co1;
   co1.mode = LoadMode::kByDbid;
   co1.type_id = 1;
@@ -212,6 +219,15 @@ TEST(DBAppIntegration, BaseAppDeathNotificationClearsCheckoutOwnership) {
     return baseapp1.checkout_received.load(std::memory_order_acquire);
   }));
   ASSERT_EQ(baseapp1.checkout_ack.status, CheckoutStatus::kSuccess);
+  EXPECT_EQ(baseapp1.checkout_ack.dbid, dbid);
+
+  baseapp1.reset_checkout();
+  ASSERT_TRUE((*ch1)->SendMessage(co1).HasValue());
+  ASSERT_TRUE(poll_until(baseapp1.dispatcher, [&] {
+    return baseapp1.checkout_received.load(std::memory_order_acquire);
+  }));
+  EXPECT_EQ(baseapp1.checkout_ack.status, CheckoutStatus::kSuccess);
+  EXPECT_EQ(baseapp1.checkout_ack.dbid, dbid);
 
   machined::DeathNotification death;
   death.process_type = ProcessType::kBaseApp;

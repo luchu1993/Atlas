@@ -251,6 +251,69 @@ auto DBApp::ResolveReplyChannel(const Address& addr) -> Channel* {
   return static_cast<Channel*>(*result);
 }
 
+auto DBApp::RequestCacheKeyHash::operator()(const RequestCacheKey& key) const noexcept
+    -> std::size_t {
+  auto h = std::hash<Address>{}(key.reply_addr);
+  h ^= static_cast<std::size_t>(key.request_id) + std::size_t{0x9E3779B97F4A7C15ULL} + (h << 6) +
+       (h >> 2);
+  return h;
+}
+
+auto DBApp::SendWriteAck(const RequestCacheKey& key, const dbapp::WriteEntityAck& ack,
+                         Channel* fallback_ch) -> bool {
+  auto* reply_ch = fallback_ch != nullptr ? fallback_ch : ResolveReplyChannel(key.reply_addr);
+  if (reply_ch == nullptr) return false;
+  if (auto r = reply_ch->SendMessage(ack); !r) {
+    ATLAS_LOG_ERROR(
+        "DBApp: WriteEntityAck dropped, dbid={} request_id={} success={} to {}: {} "
+        "— durability boundary desync",
+        ack.dbid, ack.request_id, ack.success, key.reply_addr.ToString(), r.Error().Message());
+    return false;
+  }
+  return true;
+}
+
+auto DBApp::SendCheckoutAck(const RequestCacheKey& key, const dbapp::CheckoutEntityAck& ack,
+                            Channel* fallback_ch) -> bool {
+  auto* reply_ch = fallback_ch != nullptr ? fallback_ch : ResolveReplyChannel(key.reply_addr);
+  if (reply_ch == nullptr) return false;
+  if (auto r = reply_ch->SendMessage(ack); !r) {
+    ATLAS_LOG_ERROR(
+        "DBApp: CheckoutEntityAck dropped, dbid={} request_id={} status={} to {}: {} "
+        "— DBID stays checked out, login wedge",
+        ack.dbid, ack.request_id, static_cast<int>(ack.status), key.reply_addr.ToString(),
+        r.Error().Message());
+    return false;
+  }
+  return true;
+}
+
+void DBApp::RememberWriteAck(const RequestCacheKey& key, const dbapp::WriteEntityAck& ack) {
+  auto [it, inserted] = write_ack_cache_.try_emplace(key, ack);
+  if (!inserted) {
+    it->second = ack;
+    return;
+  }
+  write_ack_order_.push_back(key);
+  while (write_ack_cache_.size() > kRequestAckCacheLimit && !write_ack_order_.empty()) {
+    write_ack_cache_.erase(write_ack_order_.front());
+    write_ack_order_.pop_front();
+  }
+}
+
+void DBApp::RememberCheckoutAck(const RequestCacheKey& key, const dbapp::CheckoutEntityAck& ack) {
+  auto [it, inserted] = checkout_ack_cache_.try_emplace(key, ack);
+  if (!inserted) {
+    it->second = ack;
+    return;
+  }
+  checkout_ack_order_.push_back(key);
+  while (checkout_ack_cache_.size() > kRequestAckCacheLimit && !checkout_ack_order_.empty()) {
+    checkout_ack_cache_.erase(checkout_ack_order_.front());
+    checkout_ack_order_.pop_front();
+  }
+}
+
 void DBApp::OnDbAppMgrBirth(const machined::BirthNotification& msg) {
   if (dbappmgr_channel_ != nullptr && dbappmgr_channel_->RemoteAddress() == msg.internal_addr &&
       !dbappmgr_channel_->IsCondemned()) {
@@ -369,24 +432,29 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
   if (ch == nullptr) return;
 
   TimePoint t0 = Clock::now();
-  auto send_ack = [this, reply_addr = src, request_id = msg.request_id, t0](PutResult result) {
+  const RequestCacheKey key{src, msg.request_id};
+  if (auto cached = write_ack_cache_.find(key); cached != write_ack_cache_.end()) {
+    write_reply_latency_.Record(Clock::now() - t0);
+    (void)SendWriteAck(key, cached->second, ch);
+    return;
+  }
+  if (pending_write_requests_.contains(key)) {
+    ATLAS_LOG_DEBUG("DBApp: duplicate in-flight WriteEntity request_id={} from {}", msg.request_id,
+                    src.ToString());
+    return;
+  }
+
+  auto send_ack = [this, key, t0](PutResult result) {
     dbapp::WriteEntityAck ack;
-    ack.request_id = request_id;
+    ack.request_id = key.request_id;
     ack.success = result.success;
     ack.dbid = result.dbid;
     ack.current_shard_table_version = shard_table_version_;
     ack.error = std::move(result.error);
+    pending_write_requests_.erase(key);
+    RememberWriteAck(key, ack);
     write_reply_latency_.Record(Clock::now() - t0);
-    if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
-      if (auto r = reply_ch->SendMessage(ack); !r) {
-        // BaseApp's pending write stays unresolved; for kLogOff the entity
-        // may be freed before learning the DB rejected it.
-        ATLAS_LOG_ERROR(
-            "DBApp: WriteEntityAck dropped, dbid={} request_id={} success={} to {}: {} "
-            "— durability boundary desync",
-            ack.dbid, ack.request_id, ack.success, reply_addr.ToString(), r.Error().Message());
-      }
-    }
+    (void)SendWriteAck(key, ack, nullptr);
   };
 
   if (!AcceptsShardTableVersion(msg.shard_table_version)) {
@@ -397,13 +465,14 @@ void DBApp::OnWriteEntity(const Address& src, Channel* ch, const dbapp::WriteEnt
     ack.current_shard_table_version = shard_table_version_;
     ack.error = std::string(dbapp::kInvalidShardTableError);
     write_reply_latency_.Record(Clock::now() - t0);
-    (void)ch->SendMessage(ack);
+    (void)SendWriteAck(key, ack, ch);
     return;
   }
 
   // Checkin path: LogOff flag means entity is going offline - clear checkout
   if (HasFlag(msg.flags, WriteFlags::kLogOff)) checkout_mgr_.Checkin(msg.dbid, msg.type_id);
 
+  pending_write_requests_.insert(key);
   database_->PutEntity(msg.dbid, msg.type_id, msg.flags, msg.blob, msg.identifier,
                        std::move(send_ack));
 }
@@ -415,13 +484,20 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
                   msg.dbid, msg.type_id, src.Ip(), src.Port());
 
   TimePoint t0 = Clock::now();
+  const RequestCacheKey key{src, msg.request_id};
+  if (auto cached = checkout_ack_cache_.find(key); cached != checkout_ack_cache_.end()) {
+    checkout_reply_latency_.Record(Clock::now() - t0);
+    (void)SendCheckoutAck(key, cached->second, ch);
+    return;
+  }
+
   CheckoutInfo owner;
   owner.base_addr = (msg.owner_addr.Port() != 0) ? msg.owner_addr : src;
   owner.entity_id = msg.entity_id;
 
-  auto send_ack = [this, reply_addr = src, request_id = msg.request_id, t0](GetResult result) {
+  auto send_ack = [this, key, t0](GetResult result) {
     dbapp::CheckoutEntityAck ack;
-    ack.request_id = request_id;
+    ack.request_id = key.request_id;
     ack.dbid = result.data.dbid;
     ack.current_shard_table_version = shard_table_version_;
 
@@ -437,18 +513,9 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
       ack.status = dbapp::CheckoutStatus::kSuccess;
       ack.blob = std::move(result.data.blob);
     }
+    RememberCheckoutAck(key, ack);
     checkout_reply_latency_.Record(Clock::now() - t0);
-    if (auto* reply_ch = this->ResolveReplyChannel(reply_addr)) {
-      if (auto r = reply_ch->SendMessage(ack); !r) {
-        // checkout_mgr_ has already committed; if the ack is lost, BaseApp
-        // death detection is the remaining cleanup path.
-        ATLAS_LOG_ERROR(
-            "DBApp: CheckoutEntityAck dropped, dbid={} request_id={} status={} to {}: {} "
-            "— DBID stays checked out, login wedge",
-            ack.dbid, ack.request_id, static_cast<int>(ack.status), reply_addr.ToString(),
-            r.Error().Message());
-      }
-    }
+    (void)SendCheckoutAck(key, ack, nullptr);
   };
 
   if (!AcceptsShardTableVersion(msg.shard_table_version)) {
@@ -459,7 +526,13 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     ack.current_shard_table_version = shard_table_version_;
     ack.error = std::string(dbapp::kInvalidShardTableError);
     checkout_reply_latency_.Record(Clock::now() - t0);
-    (void)ch->SendMessage(ack);
+    (void)SendCheckoutAck(key, ack, ch);
+    return;
+  }
+
+  if (pending_checkout_requests_.contains(key)) {
+    ATLAS_LOG_DEBUG("DBApp: duplicate in-flight CheckoutEntity request_id={} from {}",
+                    msg.request_id, src.ToString());
     return;
   }
 
@@ -484,22 +557,22 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
     ack.holder_addr = co_result.current_owner.base_addr;
     ack.holder_app_id = co_result.current_owner.app_id;
     ack.holder_entity_id = co_result.current_owner.entity_id;
+    RememberCheckoutAck(key, ack);
     checkout_reply_latency_.Record(Clock::now() - t0);
-    (void)ch->SendMessage(ack);
+    (void)SendCheckoutAck(key, ack, ch);
     return;
   }
 
   auto dbid = msg.dbid;
   auto type_id = msg.type_id;
-  pending_checkout_requests_[msg.request_id] =
-      PendingCheckoutRequest{dbid, type_id, src, false, kInvalidDBID};
+  pending_checkout_requests_[key] = PendingCheckoutRequest{dbid, type_id, src, false, kInvalidDBID};
 
-  auto on_db_done = [this, request_id = msg.request_id, dbid, type_id,
+  auto on_db_done = [this, key, dbid, type_id,
                      send_ack = std::move(send_ack)](GetResult result) mutable {
     bool canceled = false;
     DatabaseID cleanup_dbid = dbid;
     DatabaseID cleared_dbid = kInvalidDBID;
-    if (auto pending_it = pending_checkout_requests_.find(request_id);
+    if (auto pending_it = pending_checkout_requests_.find(key);
         pending_it != pending_checkout_requests_.end()) {
       canceled = pending_it->second.canceled;
       if (pending_it->second.dbid != kInvalidDBID) {
@@ -520,7 +593,7 @@ void DBApp::OnCheckoutEntity(const Address& src, Channel* ch, const dbapp::Check
           database_->MarkCheckoutCleared(cleanup_dbid, type_id);
         }
       }
-      ATLAS_LOG_DEBUG("DBApp: checkout request_id={} canceled before reply", request_id);
+      ATLAS_LOG_DEBUG("DBApp: checkout request_id={} canceled before reply", key.request_id);
       return;
     }
 
@@ -543,7 +616,8 @@ void DBApp::OnAbortCheckout(const Address& src, Channel* ch, const dbapp::AbortC
   if (ch == nullptr) return;
 
   ++abort_checkout_total_;
-  auto it = pending_checkout_requests_.find(msg.request_id);
+  const RequestCacheKey key{src, msg.request_id};
+  auto it = pending_checkout_requests_.find(key);
   if (it != pending_checkout_requests_.end()) {
     ++abort_checkout_pending_hit_total_;
     it->second.canceled = true;
