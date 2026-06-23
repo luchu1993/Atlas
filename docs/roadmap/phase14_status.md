@@ -42,9 +42,7 @@
 - `UnrealEditor-Cmd.exe` 跑 `Automation RunTests Atlas.NetClient`。
 
 这套命令只代表 Phase 14 最小回归，不等同于完整验收。完整闭环还需要记录
-50 / 100 / 400 `world_stress --move-mode input --movement-verify`、150ms RTT /
-2% loss 双客户端、Linux 服务端 parity，以及 Unity Player runtime native
-predictor parity 的 PASS 日期和命令输出。
+Linux 服务端 parity 的 PASS 日期和命令输出。
 
 ---
 
@@ -64,5 +62,7 @@ predictor parity 的 PASS 日期和命令输出。
 - `tools\bin\build.bat debug --build-only`：PASS，14.4 Static chunk / border query。
 - `tools\bin\build_mvp_ue.bat --config Debug --skip-defs --skip-codegen --skip-stage --skip-ue`：PASS。
 - `ctest --test-dir build\debug -C Debug -R "movement|baseapp_messages|baseapp_movement|cellapp_handlers|cell_movement_system|net_client_abi_layout|jolt_physics_query|collision_asset|collision_pipeline|test_space|lag_compensation|backend_parity" --output-on-failure`：PASS，19 / 19；包含 `chunk_boundary_cross` parity 场景。
+- `tools\bin\build_mvp_unity.bat --unity C:\Unity\Hub\Editor\6000.0.43f1-lilith-1\Editor\Unity.exe --skip-setup --clean-output --development`：PASS；生成 `out\mvp-unity\windows\AtlasMvp.exe`。
+- `out\mvp-unity\windows\AtlasMvp.exe -batchmode -nographics -atlas-predictor-self-test -logFile out\mvp-unity\predictor-self-test-wait.log`：PASS，exit code 0；日志包含 `[NativePredictorSelfTest] PASS ticks=10000`。
 
-仍未由本地命令证明：Linux 服务端 parity、Unity Player runtime native predictor parity。
+仍未由本地命令证明：Linux 服务端 parity。

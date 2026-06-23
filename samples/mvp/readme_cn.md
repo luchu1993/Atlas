@@ -70,6 +70,15 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
+不启动集群也可以运行打包 Player 的 native predictor 自检：
+
+```bash
+./out/mvp-unity/windows/AtlasMvp.exe -batchmode -nographics -atlas-predictor-self-test -logFile out/mvp-unity/predictor-self-test.log
+```
+
+Unity runtime 能加载 `atlas_net_client` 并跑完共享 native movement 序列时，
+进程以 0 退出，日志包含 `[NativePredictorSelfTest] PASS ticks=10000`。
+
 ## 服务端碰撞管线
 
 `Main.unity` 带一个 `AtlasServerColliders` 根，标记

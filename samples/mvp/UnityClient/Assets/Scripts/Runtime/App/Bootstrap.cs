@@ -38,6 +38,11 @@ namespace Atlas.Mvp.Unity
         {
             Application.runInBackground = true;
             Log.SetBackend(new UnityLogBackend());
+            if (NativePredictorSelfTest.TryRunFromCommandLine())
+            {
+                enabled = false;
+                return;
+            }
 
             // Force script-DLL [ModuleInitializer] before Login or the digest goes zero.
             _ = Atlas.Rpc.EntityDefDigest.Bytes.Length;

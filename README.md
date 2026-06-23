@@ -241,6 +241,13 @@ tools\bin\setup_mvp_unity.bat
 tools\bin\build_mvp_unity.bat
 ```
 
+Packaged MVP players can run the native movement predictor self-test without a
+cluster:
+
+```bash
+./out/mvp-unity/windows/AtlasMvp.exe -batchmode -nographics -atlas-predictor-self-test -logFile out/mvp-unity/predictor-self-test.log
+```
+
 ## Properties and RPC
 
 Entities are declared in `entity_defs/<Name>.def`. The generator turns each definition into a typed `partial` class on both server and client; gameplay code only fills in implementations.

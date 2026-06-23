@@ -237,6 +237,12 @@ tools\bin\setup_mvp_unity.bat
 tools\bin\build_mvp_unity.bat
 ```
 
+打包后的 MVP Player 可以不启动集群，直接运行 native movement predictor 自检：
+
+```bash
+./out/mvp-unity/windows/AtlasMvp.exe -batchmode -nographics -atlas-predictor-self-test -logFile out/mvp-unity/predictor-self-test.log
+```
+
 ## 属性同步与 RPC
 
 实体在 `entity_defs/<Name>.def` 中声明。生成器为服务端与客户端各产出一个强类型 `partial` 类，玩法代码只需要补实现。

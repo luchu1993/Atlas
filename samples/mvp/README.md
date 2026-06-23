@@ -94,6 +94,17 @@ editors and prints the selected executable. Default Windows output is
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
 
+Run the packaged Player's native predictor self-test without starting a
+cluster:
+
+```bash
+./out/mvp-unity/windows/AtlasMvp.exe -batchmode -nographics -atlas-predictor-self-test -logFile out/mvp-unity/predictor-self-test.log
+```
+
+The process exits with code 0 and logs `[NativePredictorSelfTest] PASS
+ticks=10000` when the Unity runtime can load `atlas_net_client` and complete the
+shared native movement sequence.
+
 ## Server collision pipeline
 
 `Main.unity` carries a `AtlasServerColliders` root tagged with
