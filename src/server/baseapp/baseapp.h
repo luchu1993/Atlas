@@ -230,13 +230,18 @@ class BaseApp : public EntityApp {
   void RequestDbAppShardTable();
   void ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries);
   struct PendingLogin;
+  struct PendingLogoffWrite;
   struct PendingWriteToDb;
   void MarkDbappLoginCheckoutsDisconnected(const Address& dbapp_addr);
+  void MarkDbappLogoffWritesDisconnected(const Address& dbapp_addr);
   void MarkDbappWriteRequestsDisconnected(const Address& dbapp_addr);
   void RetryDisconnectedDbappLoginCheckouts();
+  void RetryDisconnectedDbappLogoffWrites();
   void RetryDisconnectedDbappWriteRequests();
   [[nodiscard]] auto SendPendingLoginCheckout(uint32_t request_id, PendingLogin& pending,
                                               std::string_view* failure_reason = nullptr) -> bool;
+  [[nodiscard]] auto SendPendingLogoffWriteToDb(uint32_t request_id, PendingLogoffWrite& pending)
+      -> bool;
   [[nodiscard]] auto SendPendingWriteToDb(uint32_t request_id, PendingWriteToDb& pending) -> bool;
   [[nodiscard]] auto ResolveDbAppChannel(DatabaseID dbid) -> Channel*;
   [[nodiscard]] auto ConnectDbAppChannel(const Address& addr) -> Channel*;
@@ -318,7 +323,12 @@ class BaseApp : public EntityApp {
     EntityID entity_id{kInvalidEntityID};
     DatabaseID dbid{kInvalidDBID};
     uint16_t type_id{0};
+    dbapp::WriteEntity message;
+    Address target_addr;
     TimePoint created_at{};
+    uint8_t retry_count{0};
+    bool awaiting_ack{false};
+    bool retry_pending{false};
   };
   struct PendingRemoteForceLogoffAck {
     Address reply_addr;
@@ -520,7 +530,10 @@ class BaseApp : public EntityApp {
 
   void CleanupExpiredPendingRequests();
   void FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db = true,
-                                   bool preserve_disconnected_logins = false);
+                                   bool preserve_disconnected_logins = false,
+                                   bool preserve_disconnected_logoffs = false);
+  void CompletePendingLogoffWrite(uint32_t request_id, PendingLogoffWrite pending, bool success,
+                                  std::string_view error);
   void FailPendingPrepareLogin(PendingLogin& pending, std::string_view reason);
   void FailPendingPrepareLogin(uint32_t request_id, std::string_view reason);
   void FailPendingForceLogoff(PendingLogin& pending, std::string_view reason);

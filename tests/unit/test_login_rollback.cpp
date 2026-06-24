@@ -344,6 +344,16 @@ class BaseAppRollbackTest : public ::testing::Test {
   auto pending_write_to_db_contains(uint32_t request_id) const -> bool {
     return app_.pending_write_to_db_.contains(request_id);
   }
+  auto pending_logoff_write_contains(uint32_t request_id) const -> bool {
+    return app_.pending_logoff_writes_.contains(request_id);
+  }
+  auto pending_logoff_write_retry_pending(uint32_t request_id) const -> bool {
+    auto it = app_.pending_logoff_writes_.find(request_id);
+    return it != app_.pending_logoff_writes_.end() && it->second.retry_pending;
+  }
+  auto logoff_in_flight_contains(EntityID entity_id) const -> bool {
+    return app_.logoff_entities_in_flight_.contains(entity_id);
+  }
   void handle_write_ack(const dbapp::WriteEntityAck& ack) {
     BinaryWriter writer;
     ack.Serialize(writer);
@@ -378,6 +388,7 @@ class BaseAppRollbackTest : public ::testing::Test {
   void write_to_db(EntityID entity_id, std::span<const std::byte> data) {
     app_.DoWriteToDb(entity_id, data.data(), static_cast<int32_t>(data.size()));
   }
+  void start_disconnect_logoff(EntityID entity_id) { app_.StartDisconnectLogoff(entity_id); }
 
   auto death_notifications_total() const -> uint64_t {
     return app_.cellapp_death_notifications_total_;
@@ -669,6 +680,62 @@ TEST_F(BaseAppRollbackTest, WriteToDbRetriesPendingWriteAfterDbAppDeathAndShardU
   ack.dbid = 42;
   handle_write_ack(ack);
   EXPECT_FALSE(pending_write_to_db_contains(request_id));
+}
+
+TEST_F(BaseAppRollbackTest, LogoffPersistRetriesPendingWriteAfterDbAppDeathAndShardUpdate) {
+  InterfaceTable channel_table;
+  CapturingChannel old_shard(dispatcher_, channel_table, Address(0x7F000001u, 24002));
+  CapturingChannel new_shard(dispatcher_, channel_table, Address(0x7F000001u, 24003));
+  const Address old_addr(0x7F000001u, 24002);
+  const Address new_addr(0x7F000001u, 24003);
+
+  cache_dbapp_channel(old_addr, &old_shard);
+  apply_dbapp_shards(7, {dbappmgr::ShardEntry{1, 1000, 8, old_addr, false}});
+  auto* ent = create_db_entity(42);
+  ASSERT_NE(ent, nullptr);
+  ent->SetEntityData({std::byte{0x11}, std::byte{0x12}});
+  const EntityID entity_id = ent->EntityId();
+
+  start_disconnect_logoff(entity_id);
+
+  const auto first_writes = DecodeSentMessages<dbapp::WriteEntity>(old_shard);
+  ASSERT_EQ(first_writes.size(), 1u);
+  const uint32_t request_id = first_writes[0].request_id;
+  EXPECT_EQ(first_writes[0].entity_id, entity_id);
+  EXPECT_EQ(first_writes[0].dbid, 42);
+  EXPECT_EQ(first_writes[0].shard_table_version, 7u);
+  EXPECT_TRUE(pending_logoff_write_contains(request_id));
+  EXPECT_TRUE(logoff_in_flight_contains(entity_id));
+  EXPECT_FALSE(ent->IsPendingDestroy());
+
+  handle_dbapp_death(old_addr);
+  EXPECT_TRUE(pending_logoff_write_contains(request_id));
+  EXPECT_TRUE(pending_logoff_write_retry_pending(request_id));
+  EXPECT_TRUE(logoff_in_flight_contains(entity_id));
+  EXPECT_FALSE(ent->IsPendingDestroy());
+
+  cache_dbapp_channel(new_addr, &new_shard);
+  apply_dbapp_shards(8, {dbappmgr::ShardEntry{1, 1000, 9, new_addr, false}});
+
+  const auto retried_writes = DecodeSentMessages<dbapp::WriteEntity>(new_shard);
+  ASSERT_EQ(retried_writes.size(), 1u);
+  EXPECT_EQ(retried_writes[0].request_id, request_id);
+  EXPECT_EQ(retried_writes[0].entity_id, entity_id);
+  EXPECT_EQ(retried_writes[0].dbid, 42);
+  EXPECT_EQ(retried_writes[0].shard_table_version, 8u);
+  EXPECT_EQ(retried_writes[0].blob, first_writes[0].blob);
+  EXPECT_FALSE(pending_logoff_write_retry_pending(request_id));
+
+  dbapp::WriteEntityAck ack;
+  ack.request_id = request_id;
+  ack.success = true;
+  ack.dbid = 42;
+  handle_write_ack(ack);
+
+  EXPECT_FALSE(pending_logoff_write_contains(request_id));
+  EXPECT_FALSE(logoff_in_flight_contains(entity_id));
+  EXPECT_TRUE(ent->IsPendingDestroy());
+  EXPECT_EQ(ent->Dbid(), kInvalidDBID);
 }
 
 TEST_F(BaseAppRollbackTest, PrepareLoginCheckoutRetriesAfterDbAppDeathAndShardUpdate) {

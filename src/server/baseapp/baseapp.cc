@@ -44,6 +44,7 @@ inline constexpr uint32_t kRpcRateViolationDisconnectThreshold = 250;
 inline constexpr double kMovementRefillTokensPerSec = 90.0;
 inline constexpr double kMovementBurstCapacity = 180.0;
 inline constexpr uint8_t kDbappCheckoutRetryLimit = 3;
+inline constexpr uint8_t kDbappLogoffWriteRetryLimit = 3;
 inline constexpr uint8_t kDbappWriteRetryLimit = 3;
 inline constexpr uint32_t kMovementLargeCorrectionSuspiciousStreak = 3;
 inline constexpr float kMovementCorrectionReportMaxDistanceM = 1000.0f;
@@ -239,8 +240,9 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
     if (dbapp_channel_down) {
       RequestDbAppShardTable();
       MarkDbappLoginCheckoutsDisconnected(ch.RemoteAddress());
+      MarkDbappLogoffWritesDisconnected(ch.RemoteAddress());
       MarkDbappWriteRequestsDisconnected(ch.RemoteAddress());
-      FailAllDbappPendingRequests("dbapp_channel_down", false, true);
+      FailAllDbappPendingRequests("dbapp_channel_down", false, true, true);
     }
     if (&ch == dbappmgr_channel_) {
       ATLAS_LOG_WARNING("BaseApp: dbappmgr channel down (RUDP dead link), clearing");
@@ -740,71 +742,16 @@ void BaseApp::RegisterInternalHandlers() {
         }
         auto logoff_it = pending_logoff_writes_.find(msg.request_id);
         if (logoff_it != pending_logoff_writes_.end()) {
-          const PendingLogoffWrite kPendingWrite = logoff_it->second;
+          if (!msg.success && std::string_view(msg.error) == dbapp::kInvalidShardTableError) {
+            logoff_it->second.awaiting_ack = false;
+            logoff_it->second.retry_pending = true;
+            logoff_it->second.target_addr = Address{};
+            return;
+          }
+          PendingLogoffWrite pending_write = std::move(logoff_it->second);
           pending_logoff_writes_.erase(logoff_it);
-          logoff_entities_in_flight_.erase(kPendingWrite.entity_id);
-
-          if (!msg.success) {
-            ATLAS_LOG_ERROR(
-                "BaseApp: logoff persist failed request_id={} entity_id={} "
-                "dbid={} error={}",
-                msg.request_id, kPendingWrite.entity_id, kPendingWrite.dbid, msg.error);
-
-            if (kPendingWrite.continuation_request_id != 0) {
-              FailPendingForceLogoff(kPendingWrite.continuation_request_id,
-                                     "force_logoff_persist_failed");
-            }
-            if (auto waiter_it = pending_local_force_logoff_waiters_.find(kPendingWrite.entity_id);
-                waiter_it != pending_local_force_logoff_waiters_.end()) {
-              for (uint32_t waiter_request_id : waiter_it->second) {
-                FailPendingForceLogoff(waiter_request_id, "force_logoff_persist_failed");
-              }
-              pending_local_force_logoff_waiters_.erase(waiter_it);
-            }
-            FailDeferredPrepareLogins(kPendingWrite.entity_id, "force_logoff_persist_failed");
-            FlushRemoteForceLogoffAcks(kPendingWrite.entity_id, false);
-            FinishLoginFlow(kPendingWrite.dbid);
-            return;
-          }
-
-          if (!FinalizeForceLogoff(kPendingWrite.entity_id)) {
-            if (kPendingWrite.continuation_request_id != 0) {
-              FailPendingForceLogoff(kPendingWrite.continuation_request_id,
-                                     "force_logoff_destroy_failed");
-            }
-            if (auto waiter_it = pending_local_force_logoff_waiters_.find(kPendingWrite.entity_id);
-                waiter_it != pending_local_force_logoff_waiters_.end()) {
-              for (uint32_t waiter_request_id : waiter_it->second) {
-                FailPendingForceLogoff(waiter_request_id, "force_logoff_destroy_failed");
-              }
-              pending_local_force_logoff_waiters_.erase(waiter_it);
-            }
-            FailDeferredPrepareLogins(kPendingWrite.entity_id, "force_logoff_destroy_failed");
-            FlushRemoteForceLogoffAcks(kPendingWrite.entity_id, false);
-            FinishLoginFlow(kPendingWrite.dbid);
-            return;
-          }
-
-          const bool kResumedDeferred = ResumeDeferredPrepareLogins(kPendingWrite.entity_id);
-
-          if (auto waiter_it = pending_local_force_logoff_waiters_.find(kPendingWrite.entity_id);
-              waiter_it != pending_local_force_logoff_waiters_.end()) {
-            for (uint32_t waiter_request_id : waiter_it->second) {
-              if (pending_force_logoffs_.contains(waiter_request_id)) {
-                ContinueLoginAfterForceLogoff(waiter_request_id);
-              }
-            }
-            pending_local_force_logoff_waiters_.erase(waiter_it);
-          }
-
-          FlushRemoteForceLogoffAcks(kPendingWrite.entity_id, true);
-
-          if (kPendingWrite.continuation_request_id != 0 &&
-              pending_force_logoffs_.contains(kPendingWrite.continuation_request_id)) {
-            ContinueLoginAfterForceLogoff(kPendingWrite.continuation_request_id);
-          } else if (!kResumedDeferred) {
-            FinishLoginFlow(kPendingWrite.dbid);
-          }
+          CompletePendingLogoffWrite(msg.request_id, std::move(pending_write), msg.success,
+                                     msg.error);
           return;
         }
 
@@ -2024,58 +1971,35 @@ void BaseApp::BeginLogoffPersist(EntityID entity_id, DatabaseID dbid, uint16_t t
   // proceed without waiting for the write to complete.
   ReleaseCheckout(dbid, type_id);
 
-  auto* db_ch = ResolveDbAppChannel(dbid);
-  if (db_ch != nullptr) {
-    dbapp::WriteEntity msg;
-    msg.flags = WriteFlags::kExplicitDbid;
-    msg.type_id = type_id;
-    msg.dbid = dbid;
-    msg.entity_id = entity_id;
-    msg.request_id = next_prepare_request_id_++;
-    msg.shard_table_version = dbapp_shard_table_version_;
-    msg.blob = std::move(blob);
-    if (auto r = db_ch->SendMessage(msg); !r) {
-      // Destroy follows immediately; a dropped WriteEntity = silent data loss.
-      ATLAS_LOG_ERROR(
-          "BaseApp: logoff WriteEntity dropped, dbid={} entity_id={} request_id={}: {} "
-          "player progress lost",
-          dbid, entity_id, msg.request_id, r.Error().Message());
-    }
-  }
+  dbapp::WriteEntity msg;
+  msg.flags = WriteFlags::kExplicitDbid;
+  msg.type_id = type_id;
+  msg.dbid = dbid;
+  msg.entity_id = entity_id;
+  msg.request_id = next_prepare_request_id_++;
+  msg.shard_table_version = dbapp_shard_table_version_;
+  msg.blob = std::move(blob);
 
-  if (!FinalizeForceLogoff(entity_id)) {
-    if (continuation_request_id != 0)
-      FailPendingForceLogoff(continuation_request_id, "force_logoff_destroy_failed");
-    if (auto waiter_it = pending_local_force_logoff_waiters_.find(entity_id);
-        waiter_it != pending_local_force_logoff_waiters_.end()) {
-      for (uint32_t waiter_request_id : waiter_it->second)
-        FailPendingForceLogoff(waiter_request_id, "force_logoff_destroy_failed");
-      pending_local_force_logoff_waiters_.erase(waiter_it);
-    }
-    FailDeferredPrepareLogins(entity_id, "force_logoff_destroy_failed");
-    FlushRemoteForceLogoffAcks(entity_id, false);
-    FinishLoginFlow(dbid);
+  PendingLogoffWrite pending;
+  pending.continuation_request_id = continuation_request_id;
+  pending.entity_id = entity_id;
+  pending.dbid = dbid;
+  pending.type_id = type_id;
+  pending.message = std::move(msg);
+  pending.created_at = Clock::now();
+
+  const uint32_t kRequestId = pending.message.request_id;
+  logoff_entities_in_flight_.insert(entity_id);
+  auto [it, inserted] = pending_logoff_writes_.emplace(kRequestId, std::move(pending));
+  if (!inserted) {
+    logoff_entities_in_flight_.erase(entity_id);
+    ATLAS_LOG_ERROR("BaseApp: duplicate logoff write request_id={} entity_id={}", kRequestId,
+                    entity_id);
     return;
   }
 
-  // Continuations run synchronously; WriteEntityAck is not awaited.
-  const bool kResumedDeferred = ResumeDeferredPrepareLogins(entity_id);
-
-  if (auto waiter_it = pending_local_force_logoff_waiters_.find(entity_id);
-      waiter_it != pending_local_force_logoff_waiters_.end()) {
-    for (uint32_t waiter_request_id : waiter_it->second) {
-      if (pending_force_logoffs_.contains(waiter_request_id))
-        ContinueLoginAfterForceLogoff(waiter_request_id);
-    }
-    pending_local_force_logoff_waiters_.erase(waiter_it);
-  }
-
-  FlushRemoteForceLogoffAcks(entity_id, true);
-
-  if (continuation_request_id != 0 && pending_force_logoffs_.contains(continuation_request_id)) {
-    ContinueLoginAfterForceLogoff(continuation_request_id);
-  } else if (!kResumedDeferred) {
-    FinishLoginFlow(dbid);
+  if (!SendPendingLogoffWriteToDb(kRequestId, it->second)) {
+    RequestDbAppShardTable();
   }
 }
 
@@ -2730,8 +2654,9 @@ void BaseApp::OnDbAppDeath(const machined::DeathNotification& msg) {
   if (removed || removed_legacy) {
     RequestDbAppShardTable();
     MarkDbappLoginCheckoutsDisconnected(msg.internal_addr);
+    MarkDbappLogoffWritesDisconnected(msg.internal_addr);
     MarkDbappWriteRequestsDisconnected(msg.internal_addr);
-    FailAllDbappPendingRequests("dbapp_disconnected", false, true);
+    FailAllDbappPendingRequests("dbapp_disconnected", false, true, true);
   }
 }
 
@@ -2789,6 +2714,7 @@ void BaseApp::ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::Shard
   dbapp_shard_table_ = std::move(entries);
   for (const auto& entry : dbapp_shard_table_) (void)ConnectDbAppChannel(entry.dbapp_addr);
   RetryDisconnectedDbappLoginCheckouts();
+  RetryDisconnectedDbappLogoffWrites();
   RetryDisconnectedDbappWriteRequests();
   ATLAS_LOG_INFO("BaseApp: DBApp shard table version={} shards={}", dbapp_shard_table_version_,
                  dbapp_shard_table_.size());
@@ -2801,6 +2727,17 @@ void BaseApp::MarkDbappLoginCheckoutsDisconnected(const Address& dbapp_addr) {
       pending.checkout_awaiting_ack = false;
       pending.checkout_retry_pending = true;
       pending.checkout_target_addr = Address{};
+    }
+  }
+}
+
+void BaseApp::MarkDbappLogoffWritesDisconnected(const Address& dbapp_addr) {
+  for (auto& [request_id, pending] : pending_logoff_writes_) {
+    (void)request_id;
+    if (pending.awaiting_ack && pending.target_addr == dbapp_addr) {
+      pending.awaiting_ack = false;
+      pending.retry_pending = true;
+      pending.target_addr = Address{};
     }
   }
 }
@@ -2837,6 +2774,29 @@ void BaseApp::RetryDisconnectedDbappLoginCheckouts() {
     ++it;
   }
   DrainFinishedLoginFlows(std::move(failed_dbids));
+}
+
+void BaseApp::RetryDisconnectedDbappLogoffWrites() {
+  for (auto it = pending_logoff_writes_.begin(); it != pending_logoff_writes_.end();) {
+    auto& pending = it->second;
+    if (!pending.retry_pending) {
+      ++it;
+      continue;
+    }
+    if (pending.retry_count >= kDbappLogoffWriteRetryLimit) {
+      ATLAS_LOG_ERROR("BaseApp: logoff write request_id={} entity_id={} retry limit exceeded",
+                      it->first, pending.entity_id);
+      PendingLogoffWrite failed = std::move(pending);
+      const uint32_t request_id = it->first;
+      it = pending_logoff_writes_.erase(it);
+      CompletePendingLogoffWrite(request_id, std::move(failed), false, "retry_limit_exceeded");
+      continue;
+    }
+    if (SendPendingLogoffWriteToDb(it->first, pending)) {
+      ++pending.retry_count;
+    }
+    ++it;
+  }
 }
 
 void BaseApp::RetryDisconnectedDbappWriteRequests() {
@@ -2893,6 +2853,34 @@ auto BaseApp::SendPendingLoginCheckout(uint32_t request_id, PendingLogin& pendin
 
   pending.checkout_awaiting_ack = true;
   pending.checkout_retry_pending = false;
+  return true;
+}
+
+auto BaseApp::SendPendingLogoffWriteToDb(uint32_t request_id, PendingLogoffWrite& pending) -> bool {
+  auto* db_ch = ResolveDbAppChannel(pending.message.dbid);
+  if (db_ch == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: logoff write request_id={} entity_id={} has no DBApp route",
+                      request_id, pending.entity_id);
+    pending.awaiting_ack = false;
+    pending.retry_pending = true;
+    pending.target_addr = Address{};
+    return false;
+  }
+
+  pending.message.shard_table_version = dbapp_shard_table_version_;
+  pending.target_addr = db_ch->RemoteAddress();
+  auto result = db_ch->SendMessage(pending.message);
+  if (!result) {
+    ATLAS_LOG_WARNING("BaseApp: logoff write request_id={} entity_id={} send failed: {}",
+                      request_id, pending.entity_id, result.Error().Message());
+    pending.awaiting_ack = false;
+    pending.retry_pending = true;
+    pending.target_addr = Address{};
+    return false;
+  }
+
+  pending.awaiting_ack = true;
+  pending.retry_pending = false;
   return true;
 }
 
@@ -3352,14 +3340,82 @@ void BaseApp::CleanupExpiredPendingRequests() {
   DrainFinishedLoginFlows(std::move(finished_login_dbids));
 }
 
+void BaseApp::CompletePendingLogoffWrite(uint32_t request_id, PendingLogoffWrite pending,
+                                         bool success, std::string_view error) {
+  logoff_entities_in_flight_.erase(pending.entity_id);
+
+  if (!success) {
+    ATLAS_LOG_ERROR(
+        "BaseApp: logoff persist failed request_id={} entity_id={} "
+        "dbid={} error={}",
+        request_id, pending.entity_id, pending.dbid, error);
+
+    if (pending.continuation_request_id != 0) {
+      FailPendingForceLogoff(pending.continuation_request_id, "force_logoff_persist_failed");
+    }
+    if (auto waiter_it = pending_local_force_logoff_waiters_.find(pending.entity_id);
+        waiter_it != pending_local_force_logoff_waiters_.end()) {
+      for (uint32_t waiter_request_id : waiter_it->second) {
+        FailPendingForceLogoff(waiter_request_id, "force_logoff_persist_failed");
+      }
+      pending_local_force_logoff_waiters_.erase(waiter_it);
+    }
+    FailDeferredPrepareLogins(pending.entity_id, "force_logoff_persist_failed");
+    FlushRemoteForceLogoffAcks(pending.entity_id, false);
+    FinishLoginFlow(pending.dbid);
+    return;
+  }
+
+  if (!FinalizeForceLogoff(pending.entity_id)) {
+    if (pending.continuation_request_id != 0) {
+      FailPendingForceLogoff(pending.continuation_request_id, "force_logoff_destroy_failed");
+    }
+    if (auto waiter_it = pending_local_force_logoff_waiters_.find(pending.entity_id);
+        waiter_it != pending_local_force_logoff_waiters_.end()) {
+      for (uint32_t waiter_request_id : waiter_it->second) {
+        FailPendingForceLogoff(waiter_request_id, "force_logoff_destroy_failed");
+      }
+      pending_local_force_logoff_waiters_.erase(waiter_it);
+    }
+    FailDeferredPrepareLogins(pending.entity_id, "force_logoff_destroy_failed");
+    FlushRemoteForceLogoffAcks(pending.entity_id, false);
+    FinishLoginFlow(pending.dbid);
+    return;
+  }
+
+  const bool kResumedDeferred = ResumeDeferredPrepareLogins(pending.entity_id);
+
+  if (auto waiter_it = pending_local_force_logoff_waiters_.find(pending.entity_id);
+      waiter_it != pending_local_force_logoff_waiters_.end()) {
+    for (uint32_t waiter_request_id : waiter_it->second) {
+      if (pending_force_logoffs_.contains(waiter_request_id)) {
+        ContinueLoginAfterForceLogoff(waiter_request_id);
+      }
+    }
+    pending_local_force_logoff_waiters_.erase(waiter_it);
+  }
+
+  FlushRemoteForceLogoffAcks(pending.entity_id, true);
+
+  if (pending.continuation_request_id != 0 &&
+      pending_force_logoffs_.contains(pending.continuation_request_id)) {
+    ContinueLoginAfterForceLogoff(pending.continuation_request_id);
+  } else if (!kResumedDeferred) {
+    FinishLoginFlow(pending.dbid);
+  }
+}
+
 void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db,
-                                          bool preserve_disconnected_logins) {
-  std::vector<DatabaseID> preserved_login_dbids;
+                                          bool preserve_disconnected_logins,
+                                          bool preserve_disconnected_logoffs) {
+  std::vector<DatabaseID> preserved_dbids;
+  std::vector<EntityID> preserved_logoff_entities;
+  std::vector<uint32_t> preserved_force_logoff_requests;
 
   for (auto it = pending_logins_.begin(); it != pending_logins_.end();) {
     if (preserve_disconnected_logins && it->second.checkout_retry_pending) {
       if (it->second.dbid != kInvalidDBID) {
-        preserved_login_dbids.push_back(it->second.dbid);
+        preserved_dbids.push_back(it->second.dbid);
       }
       ++it;
       continue;
@@ -3368,17 +3424,45 @@ void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_wri
     it = pending_logins_.erase(it);
   }
 
-  const auto is_preserved_login_dbid = [&preserved_login_dbids](DatabaseID dbid) {
-    return std::find(preserved_login_dbids.begin(), preserved_login_dbids.end(), dbid) !=
-           preserved_login_dbids.end();
+  for (auto it = pending_logoff_writes_.begin(); it != pending_logoff_writes_.end();) {
+    if (preserve_disconnected_logoffs && it->second.retry_pending) {
+      if (it->second.dbid != kInvalidDBID) {
+        preserved_dbids.push_back(it->second.dbid);
+      }
+      if (it->second.entity_id != kInvalidEntityID) {
+        preserved_logoff_entities.push_back(it->second.entity_id);
+      }
+      if (it->second.continuation_request_id != 0) {
+        preserved_force_logoff_requests.push_back(it->second.continuation_request_id);
+      }
+      ++it;
+      continue;
+    }
+    logoff_entities_in_flight_.erase(it->second.entity_id);
+    it = pending_logoff_writes_.erase(it);
+  }
+
+  const auto is_preserved_dbid = [&preserved_dbids](DatabaseID dbid) {
+    return std::find(preserved_dbids.begin(), preserved_dbids.end(), dbid) != preserved_dbids.end();
+  };
+  const auto is_preserved_logoff_entity = [&preserved_logoff_entities](EntityID entity_id) {
+    return std::find(preserved_logoff_entities.begin(), preserved_logoff_entities.end(),
+                     entity_id) != preserved_logoff_entities.end();
+  };
+  const auto is_preserved_force_logoff_request = [&preserved_force_logoff_requests](
+                                                     uint32_t request_id) {
+    return std::find(preserved_force_logoff_requests.begin(), preserved_force_logoff_requests.end(),
+                     request_id) != preserved_force_logoff_requests.end();
   };
 
-  for (auto& [request_id, pending] : pending_force_logoffs_) {
-    (void)request_id;
-    FailPendingForceLogoff(pending, reason);
+  for (auto it = pending_force_logoffs_.begin(); it != pending_force_logoffs_.end();) {
+    if (is_preserved_force_logoff_request(it->first)) {
+      ++it;
+      continue;
+    }
+    FailPendingForceLogoff(it->second, reason);
+    it = pending_force_logoffs_.erase(it);
   }
-  pending_force_logoffs_.clear();
-  pending_logoff_writes_.clear();
   if (fail_write_to_db) {
     for (auto& [request_id, pending] : pending_write_to_db_) {
       (void)request_id;
@@ -3389,19 +3473,52 @@ void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_wri
     pending_write_to_db_.clear();
   }
   canceled_login_checkouts_.clear();
-  FlushAllRemoteForceLogoffAcks(false);
-  for (auto& [entity_id, deferred] : deferred_login_checkouts_) {
-    (void)entity_id;
+  if (preserve_disconnected_logoffs && !preserved_logoff_entities.empty()) {
+    std::vector<EntityID> force_flush_entities;
+    for (const auto& [entity_id, queued] : pending_remote_force_logoff_acks_) {
+      (void)queued;
+      if (!is_preserved_logoff_entity(entity_id)) {
+        force_flush_entities.push_back(entity_id);
+      }
+    }
+    for (EntityID entity_id : force_flush_entities) {
+      FlushRemoteForceLogoffAcks(entity_id, false);
+    }
+  } else {
+    FlushAllRemoteForceLogoffAcks(false);
+  }
+
+  for (auto it = deferred_login_checkouts_.begin(); it != deferred_login_checkouts_.end();) {
+    if (is_preserved_logoff_entity(it->first)) {
+      ++it;
+      continue;
+    }
+    auto deferred = std::move(it->second);
+    it = deferred_login_checkouts_.erase(it);
     for (auto& entry : deferred) {
       FailPendingPrepareLogin(entry.pending, reason);
     }
   }
-  deferred_login_checkouts_.clear();
-  pending_local_force_logoff_waiters_.clear();
-  logoff_entities_in_flight_.clear();
+
+  for (auto it = pending_local_force_logoff_waiters_.begin();
+       it != pending_local_force_logoff_waiters_.end();) {
+    if (is_preserved_logoff_entity(it->first)) {
+      ++it;
+    } else {
+      it = pending_local_force_logoff_waiters_.erase(it);
+    }
+  }
+
+  for (auto it = logoff_entities_in_flight_.begin(); it != logoff_entities_in_flight_.end();) {
+    if (is_preserved_logoff_entity(*it)) {
+      ++it;
+    } else {
+      it = logoff_entities_in_flight_.erase(it);
+    }
+  }
 
   for (auto it = queued_logins_.begin(); it != queued_logins_.end();) {
-    if (is_preserved_login_dbid(it->first)) {
+    if (is_preserved_dbid(it->first)) {
       ++it;
       continue;
     }
@@ -3410,7 +3527,7 @@ void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_wri
   }
 
   for (auto it = active_login_dbids_.begin(); it != active_login_dbids_.end();) {
-    if (is_preserved_login_dbid(*it)) {
+    if (is_preserved_dbid(*it)) {
       ++it;
     } else {
       it = active_login_dbids_.erase(it);

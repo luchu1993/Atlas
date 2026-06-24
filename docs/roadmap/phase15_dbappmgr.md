@@ -6,8 +6,8 @@ table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元
 auth shard 路由、DBApp request version 校验和 request idempotency cache 已接入，
 DBApp range-scoped explicit DBID create allocation 已接入；allocator recovery /
 XML duplicate guard、duplicate retry、BaseApp WriteToDB death retry、
-BaseApp login checkout death retry 和 LoginApp auth death retry 已接入；
-BaseApp logoff request retry 与 P15.2 HA 未完成。
+BaseApp login checkout death retry、LoginApp auth death retry 和 BaseApp
+logoff death retry 已接入；P15.2 HA 未完成。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
 
@@ -204,7 +204,7 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 | P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已起步，含 DBApp 注册接入；runtime new DBID range allocation、allocator recovery、XML duplicate guard 与 duplicate retry 已接入 |
 | P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已起步 |
 | P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | BaseApp dbid 路由与 LoginApp username auth 路由已接入；single-dbapp fast path 保留 |
-| P15.1-D4 | DBApp 端 request version 校验 + idempotency cache + request retry on death | version 校验、completed ack idempotency cache、BaseApp WriteToDB death retry、BaseApp login checkout death retry 与 LoginApp auth death retry 已接入；BaseApp logoff death retry 未完成 |
+| P15.1-D4 | DBApp 端 request version 校验 + idempotency cache + request retry on death | version 校验、completed ack idempotency cache、BaseApp WriteToDB death retry、BaseApp login checkout death retry、LoginApp auth death retry 与 BaseApp logoff death retry 已接入 |
 | P15.2-S1..S4 | HA(镜像 BaseAppMgr B1-B4) | ~3000 行 |
 | 单测 + 集成测试 | | ~1500 行 |
 | 文档 | phase15 主文档 + verify 脚本 + ops 指南 | ~800 行 |
