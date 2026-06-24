@@ -1,13 +1,15 @@
 # Phase 15: DBAppMgr — 多 DBApp 分片管理 + HA
 
-**Status:** 🚧 P15.1 核心中 — DBAppMgr 进程骨架、DBApp 注册、range shard
+**Status:** 🚧 P15.2 HA 中 — DBAppMgr 进程骨架、DBApp 注册、range shard
 table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元测试
 已起步；BaseApp shard cache 与 dbid 路由、LoginApp shard cache 与 username
 auth shard 路由、DBApp request version 校验和 request idempotency cache 已接入，
 DBApp range-scoped explicit DBID create allocation 已接入；allocator recovery /
 XML duplicate guard、duplicate retry、BaseApp WriteToDB death retry、
 BaseApp login checkout death retry、LoginApp auth death retry 和 BaseApp
-logoff death retry 已接入；P15.2 HA 未完成。
+logoff death retry 已接入；`RecoverDBAppState` worker shard 重报、
+DBAppMgr recovery window 冻结恢复注册 split、`known_app_id` echo 已接入；
+Reviver dbappmgr target 和 HA verify 脚本未完成。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
 
@@ -128,10 +130,10 @@ recovery 窗口内等存活 DBApp 重注册并重报权威状态,从 worker 报�
 
 | 步骤 | 内容 |
 |---|---|
-| P15.2-S1 | DBApp `RecoverDBAppState`(重报 shard ranges)+ recovery 窗口冻结 shard 迁移 |
-| P15.2-S2 | `RegisterDBApp.known_app_id` echo 保留 dbapp_id |
-| P15.2-S3 | Reviver 多 target 加 dbappmgr |
-| P15.2-S4 | verify_dbappmgr_ha.py + docs |
+| P15.2-S1 | ✅ DBApp `RecoverDBAppState` 重报 shard ranges；DBAppMgr recovery window 内冻结恢复注册 split |
+| P15.2-S2 | ✅ `RegisterDBApp.known_app_id` echo 保留 dbapp_id |
+| P15.2-S3 | ⏳ Reviver 多 target 加 dbappmgr |
+| P15.2-S4 | ⏳ verify_dbappmgr_ha.py + docs |
 
 worker 重报的权威状态:
 - DBApp 表(addr, dbapp_id, shard ranges, is_retiring, last_load_at)——由重注册
@@ -205,7 +207,9 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 | P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已起步 |
 | P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | BaseApp dbid 路由与 LoginApp username auth 路由已接入；single-dbapp fast path 保留 |
 | P15.1-D4 | DBApp 端 request version 校验 + idempotency cache + request retry on death | version 校验、completed ack idempotency cache、BaseApp WriteToDB death retry、BaseApp login checkout death retry、LoginApp auth death retry 与 BaseApp logoff death retry 已接入 |
-| P15.2-S1..S4 | HA(镜像 BaseAppMgr B1-B4) | ~3000 行 |
+| P15.2-S1 | DBApp worker shard 重报 + recovery window | 已接入 |
+| P15.2-S2 | `known_app_id` echo 保留 dbapp_id | 已接入 |
+| P15.2-S3..S4 | Reviver dbappmgr target + HA verify/docs | 未完成 |
 | 单测 + 集成测试 | | ~1500 行 |
 | 文档 | phase15 主文档 + verify 脚本 + ops 指南 | ~800 行 |
 | **总计** | | **~7600 行** |

@@ -357,11 +357,20 @@ void DBApp::OnRegisterDbAppAck(const Address& src, Channel* ch,
     return;
   }
 
+  const uint32_t kPreviousDbAppId = dbapp_id_;
+  const uint32_t kPreviousShardTableVersion = shard_table_version_;
   dbapp_id_ = msg.dbapp_id;
-  shard_table_version_ = msg.shard_table_version;
-  shard_table_ = msg.entries;
-  PruneCreateDbidAllocators();
-  RecoverCreateDbidAllocators();
+  const bool kDbAppIdChanged = kPreviousDbAppId != 0 && kPreviousDbAppId != msg.dbapp_id;
+  const bool kApplyShardTable =
+      kDbAppIdChanged || kPreviousShardTableVersion == 0 ||
+      msg.shard_table_version > kPreviousShardTableVersion ||
+      (msg.shard_table_version == kPreviousShardTableVersion && !msg.entries.empty());
+  if (kApplyShardTable) {
+    shard_table_version_ = msg.shard_table_version;
+    shard_table_ = msg.entries;
+    PruneCreateDbidAllocators();
+    RecoverCreateDbidAllocators();
+  }
   last_dbappmgr_load_report_at_ = {};
   ReportLoadToDbAppMgr();
   ATLAS_LOG_INFO("DBApp: registered with DBAppMgr as id={} shard_version={} shards={}", dbapp_id_,
@@ -398,6 +407,27 @@ void DBApp::RegisterWithDbAppMgr() {
   msg.known_shard_table_version = shard_table_version_;
   if (auto r = dbappmgr_channel_->SendMessage(msg); !r) {
     ATLAS_LOG_WARNING("DBApp: failed to send RegisterDbApp: {}", r.Error().Message());
+    return;
+  }
+  ReportRecoverStateToDbAppMgr();
+}
+
+void DBApp::ReportRecoverStateToDbAppMgr() {
+  if (dbappmgr_channel_ == nullptr || dbapp_id_ == 0 || shard_table_version_ == 0) return;
+
+  dbappmgr::RecoverDBAppState msg;
+  msg.dbapp_id = dbapp_id_;
+  msg.shard_table_version = shard_table_version_;
+  for (const auto& shard : shard_table_) {
+    if (shard.dbapp_id != dbapp_id_) continue;
+    auto entry = shard;
+    entry.dbapp_addr = Address(0, Config().internal_port);
+    msg.shards.push_back(entry);
+  }
+  if (msg.shards.empty()) return;
+
+  if (auto r = dbappmgr_channel_->SendMessage(msg); !r) {
+    ATLAS_LOG_WARNING("DBApp: failed to send RecoverDBAppState: {}", r.Error().Message());
   }
 }
 

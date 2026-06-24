@@ -1,6 +1,7 @@
 #ifndef ATLAS_SERVER_DBAPPMGR_DBAPPMGR_H_
 #define ATLAS_SERVER_DBAPPMGR_DBAPPMGR_H_
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -26,10 +27,12 @@ class DBAppMgr : public ManagerApp {
   void OnRegisterDbApp(const Address& src, Channel* ch, const dbappmgr::RegisterDbApp& msg);
   void OnInformLoad(const Address& src, Channel* ch, const dbappmgr::InformLoad& msg);
   void OnGetShardTable(const Address& src, Channel* ch, const dbappmgr::GetShardTable& msg);
+  void OnRecoverDBAppState(const Address& src, Channel* ch, const dbappmgr::RecoverDBAppState& msg);
   void OnHealthProbe(const Address& src, Channel* ch, const dbappmgr::HealthProbe& msg);
   void OnDbAppDeath(const Address& internal_addr, uint8_t reason);
 
   void RegisterWatchersForTest() { RegisterWatchers(); }
+  void SetRecoveryDeadlineForTest(TimePoint t) { recovery_deadline_ = t; }
 
   struct DBAppInfo {
     Address internal_addr;
@@ -73,6 +76,8 @@ class DBAppMgr : public ManagerApp {
   auto AllocateAppId(uint32_t known_app_id) -> uint32_t;
   void AssignInitialShard(uint32_t app_id, const Address& addr);
   void SplitLargestShardFor(uint32_t app_id, const Address& addr);
+  [[nodiscard]] auto RecoveryWindowActive() const -> bool;
+  [[nodiscard]] auto ShouldDeferShardAssignment(const dbappmgr::RegisterDbApp& msg) const -> bool;
   void ReassignShards(uint32_t dead_app_id);
   void NormalizeShardTable();
   void BumpShardTableVersion();
@@ -86,6 +91,10 @@ class DBAppMgr : public ManagerApp {
   std::vector<dbappmgr::ShardEntry> shard_table_;
   uint32_t next_app_id_{1};
   uint32_t shard_table_version_{0};
+  static constexpr Duration kStartupRecoveryWindowDefault =
+      std::chrono::duration_cast<Duration>(std::chrono::seconds(2));
+  Duration startup_recovery_window_{kStartupRecoveryWindowDefault};
+  TimePoint recovery_deadline_{};
 };
 
 }  // namespace atlas

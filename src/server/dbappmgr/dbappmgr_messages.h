@@ -307,6 +307,52 @@ struct ShardTableUpdate {
 };
 static_assert(NetworkMessage<ShardTableUpdate>);
 
+struct RecoverDBAppState {
+  uint32_t dbapp_id{0};
+  uint32_t shard_table_version{0};
+  std::vector<ShardEntry> shards;
+
+  static auto Descriptor() -> const MessageDesc& {
+    static const MessageDesc kDesc{msg_id::Id(msg_id::DBAppMgr::kRecoverDBAppState),
+                                   "dbappmgr::RecoverDBAppState",
+                                   MessageLengthStyle::kVariable,
+                                   -1,
+                                   MessageReliability::kReliable,
+                                   MessageUrgency::kImmediate};
+    return kDesc;
+  }
+
+  void Serialize(BinaryWriter& w) const {
+    w.Write(dbapp_id);
+    w.Write(shard_table_version);
+    w.Write(static_cast<uint32_t>(shards.size()));
+    for (const auto& shard : shards) shard.Serialize(w);
+  }
+
+  static auto Deserialize(BinaryReader& r) -> Result<RecoverDBAppState> {
+    auto id = r.Read<uint32_t>();
+    auto version = r.Read<uint32_t>();
+    auto count = r.Read<uint32_t>();
+    if (!id || !version || !count || *id == 0 || *version == 0 || *count > kMaxEntries) {
+      return Error{ErrorCode::kInvalidArgument, "dbappmgr::RecoverDBAppState: invalid"};
+    }
+    RecoverDBAppState msg;
+    msg.dbapp_id = *id;
+    msg.shard_table_version = *version;
+    msg.shards.reserve(*count);
+    for (uint32_t i = 0; i < *count; ++i) {
+      auto shard = ShardEntry::Deserialize(r);
+      if (!shard) return shard.Error();
+      msg.shards.push_back(*shard);
+    }
+    return msg;
+  }
+
+ private:
+  static constexpr uint32_t kMaxEntries = 4096;
+};
+static_assert(NetworkMessage<RecoverDBAppState>);
+
 struct HealthProbe {
   uint64_t nonce{0};
   uint8_t reviver_priority{0};

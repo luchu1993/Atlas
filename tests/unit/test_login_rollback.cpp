@@ -1080,6 +1080,25 @@ TEST_F(DBAppRollbackTest, RegisterDbAppAckStoresShardState) {
   EXPECT_EQ(watcher("dbapp/shard_table_version").value_or(""), "3");
 }
 
+TEST_F(DBAppRollbackTest, RegisterDbAppAckKeepsLocalShardStateForRecoveryAck) {
+  dbappmgr::RegisterDbAppAck ack;
+  ack.success = true;
+  ack.dbapp_id = 7;
+  ack.shard_table_version = 3;
+  ack.entries.push_back(dbappmgr::ShardEntry{1, 1000, 7, Address(0x7F000001u, 24001), false});
+  handle_register_dbapp_ack(ack);
+
+  dbappmgr::RegisterDbAppAck recovering;
+  recovering.success = true;
+  recovering.dbapp_id = 7;
+  handle_register_dbapp_ack(recovering);
+
+  EXPECT_EQ(dbapp_id(), 7u);
+  EXPECT_EQ(shard_table_version(), 3u);
+  ASSERT_EQ(shard_count(), 1u);
+  EXPECT_EQ(shard_app_id(0), 7u);
+}
+
 TEST_F(DBAppRollbackTest, ShardTableUpdateReplacesCachedTable) {
   dbappmgr::RegisterDbAppAck ack;
   ack.success = true;

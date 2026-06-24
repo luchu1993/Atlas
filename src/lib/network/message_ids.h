@@ -175,6 +175,7 @@ enum class DBAppMgr : uint16_t {
   kGetShardTable = 8010,
   kShardTableResponse = 8011,
   kShardTableUpdate = 8012,
+  kRecoverDBAppState = 8013,
   kHealthProbe = 8020,
   kHealthProbeAck = 8021,
 };
@@ -321,6 +322,7 @@ ATLAS_ASSERT_ID_RANGE(DBAppMgr::kInformLoad, 8000, 8099);
 ATLAS_ASSERT_ID_RANGE(DBAppMgr::kGetShardTable, 8000, 8099);
 ATLAS_ASSERT_ID_RANGE(DBAppMgr::kShardTableResponse, 8000, 8099);
 ATLAS_ASSERT_ID_RANGE(DBAppMgr::kShardTableUpdate, 8000, 8099);
+ATLAS_ASSERT_ID_RANGE(DBAppMgr::kRecoverDBAppState, 8000, 8099);
 ATLAS_ASSERT_ID_RANGE(DBAppMgr::kHealthProbe, 8000, 8099);
 ATLAS_ASSERT_ID_RANGE(DBAppMgr::kHealthProbeAck, 8000, 8099);
 

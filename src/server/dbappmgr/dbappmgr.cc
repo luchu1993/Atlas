@@ -1,6 +1,7 @@
 #include "dbappmgr.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <functional>
@@ -26,8 +27,11 @@ auto ShardSpan(const dbappmgr::ShardEntry& entry) -> uint64_t {
 }
 
 auto SameOwner(const dbappmgr::ShardEntry& a, const dbappmgr::ShardEntry& b) -> bool {
-  return a.dbapp_id == b.dbapp_id && a.dbapp_addr == b.dbapp_addr &&
-         a.is_retiring == b.is_retiring;
+  return a.dbapp_id == b.dbapp_id && a.dbapp_addr == b.dbapp_addr && a.is_retiring == b.is_retiring;
+}
+
+auto ShardOverlaps(const dbappmgr::ShardEntry& a, const dbappmgr::ShardEntry& b) -> bool {
+  return a.low_dbid < b.high_dbid && b.low_dbid < a.high_dbid;
 }
 
 }  // namespace
@@ -58,6 +62,10 @@ auto DBAppMgr::Init(int argc, char* argv[]) -> bool {
       [this](const Address& src, Channel* ch, const dbappmgr::GetShardTable& msg) {
         OnGetShardTable(src, ch, msg);
       });
+  (void)table.RegisterTypedHandler<dbappmgr::RecoverDBAppState>(
+      [this](const Address& src, Channel* ch, const dbappmgr::RecoverDBAppState& msg) {
+        OnRecoverDBAppState(src, ch, msg);
+      });
   (void)table.RegisterTypedHandler<dbappmgr::HealthProbe>(
       [this](const Address& src, Channel* ch, const dbappmgr::HealthProbe& msg) {
         OnHealthProbe(src, ch, msg);
@@ -66,6 +74,10 @@ auto DBAppMgr::Init(int argc, char* argv[]) -> bool {
   GetMachinedClient().Subscribe(
       machined::ListenerType::kDeath, ProcessType::kDbApp, nullptr,
       [this](const machined::DeathNotification& n) { OnDbAppDeath(n.internal_addr, n.reason); });
+
+  recovery_deadline_ = startup_recovery_window_ > Duration::zero()
+                           ? Clock::now() + startup_recovery_window_
+                           : TimePoint{};
 
   ATLAS_LOG_INFO("DBAppMgr: initialised");
   return true;
@@ -82,6 +94,18 @@ void DBAppMgr::RegisterWatchers() {
                    std::function<uint32_t()>([this] { return shard_table_version_; }));
   wr.Add<std::string>("dbappmgr/shards/table",
                       std::function<std::string()>([this] { return ShardTableSummary(); }));
+  wr.Add<bool>("dbappmgr/ha/recovery_window_active",
+               std::function<bool()>([this] { return RecoveryWindowActive(); }));
+  wr.Add<std::string>("dbappmgr/ha/recovery_window_status", std::function<std::string()>([this] {
+                        const bool active = RecoveryWindowActive();
+                        const auto remaining =
+                            active ? recovery_deadline_ - Clock::now() : Duration::zero();
+                        const auto remaining_ms = std::max<int64_t>(
+                            0, std::chrono::duration_cast<Milliseconds>(remaining).count());
+                        return std::format("state={} active={} remaining_ms={} shards={}",
+                                           active ? "closed" : "open", active ? 1 : 0, remaining_ms,
+                                           shard_table_.size());
+                      }));
 }
 
 void DBAppMgr::OnRegisterDbApp(const Address& src, Channel* ch,
@@ -117,7 +141,7 @@ void DBAppMgr::OnRegisterDbApp(const Address& src, Channel* ch,
   }
   app_id_index_.emplace(kAppId, it->first);
 
-  AssignInitialShard(kAppId, kInternalAddr);
+  if (!ShouldDeferShardAssignment(msg)) AssignInitialShard(kAppId, kInternalAddr);
   if (ch != nullptr) shard_table_subscribers_.insert_or_assign(kInternalAddr, ch);
 
   ack.success = true;
@@ -126,13 +150,61 @@ void DBAppMgr::OnRegisterDbApp(const Address& src, Channel* ch,
   ack.entries = shard_table_;
   if (ch != nullptr) (void)ch->SendMessage(ack);
 
-  ATLAS_LOG_INFO("DBAppMgr: DBApp registered app_id={} internal={}:{} shards={} version={}",
-                 kAppId, kInternalAddr.Ip(), kInternalAddr.Port(), shard_table_.size(),
+  ATLAS_LOG_INFO("DBAppMgr: DBApp registered app_id={} internal={}:{} shards={} version={}", kAppId,
+                 kInternalAddr.Ip(), kInternalAddr.Port(), shard_table_.size(),
                  shard_table_version_);
 }
 
-void DBAppMgr::OnInformLoad(const Address& src, Channel* ch,
-                            const dbappmgr::InformLoad& msg) {
+void DBAppMgr::OnRecoverDBAppState(const Address& src, Channel* ch,
+                                   const dbappmgr::RecoverDBAppState& msg) {
+  DBAppInfo* info = FindDbAppByAppId(msg.dbapp_id);
+  if (info == nullptr) {
+    ATLAS_LOG_WARNING("DBAppMgr: RecoverDBAppState for unknown dbapp_id={} from {}:{}",
+                      msg.dbapp_id, src.Ip(), src.Port());
+    return;
+  }
+  if (!MatchesRegisteredSource(*info, src, ch, "RecoverDBAppState")) return;
+  if (msg.shard_table_version < shard_table_version_) {
+    ATLAS_LOG_WARNING("DBAppMgr: ignoring stale RecoverDBAppState app_id={} version={} current={}",
+                      msg.dbapp_id, msg.shard_table_version, shard_table_version_);
+    return;
+  }
+
+  std::vector<dbappmgr::ShardEntry> recovered;
+  recovered.reserve(msg.shards.size());
+  for (const auto& shard : msg.shards) {
+    if (shard.dbapp_id != msg.dbapp_id) {
+      ATLAS_LOG_WARNING("DBAppMgr: RecoverDBAppState app_id={} contains shard for app_id={}",
+                        msg.dbapp_id, shard.dbapp_id);
+      continue;
+    }
+    auto entry = shard;
+    entry.dbapp_addr = info->internal_addr;
+    recovered.push_back(entry);
+  }
+  if (recovered.empty()) return;
+
+  shard_table_.erase(
+      std::remove_if(
+          shard_table_.begin(), shard_table_.end(),
+          [&](const auto& entry) {
+            if (entry.dbapp_id == msg.dbapp_id || entry.dbapp_addr == info->internal_addr) {
+              return true;
+            }
+            return std::any_of(recovered.begin(), recovered.end(),
+                               [&](const auto& shard) { return ShardOverlaps(entry, shard); });
+          }),
+      shard_table_.end());
+  shard_table_.insert(shard_table_.end(), recovered.begin(), recovered.end());
+  NormalizeShardTable();
+  shard_table_version_ = std::max(shard_table_version_, msg.shard_table_version);
+  BroadcastShardTableUpdate();
+
+  ATLAS_LOG_INFO("DBAppMgr: recovered app_id={} shards={} version={}", msg.dbapp_id,
+                 recovered.size(), shard_table_version_);
+}
+
+void DBAppMgr::OnInformLoad(const Address& src, Channel* ch, const dbappmgr::InformLoad& msg) {
   DBAppInfo* info = FindDbAppByAppId(msg.dbapp_id);
   if (info == nullptr) {
     ATLAS_LOG_WARNING("DBAppMgr: InformLoad for unknown dbapp_id={} from {}:{}", msg.dbapp_id,
@@ -156,8 +228,7 @@ void DBAppMgr::OnGetShardTable(const Address& src, Channel* ch,
   (void)ch->SendMessage(response);
 }
 
-void DBAppMgr::OnHealthProbe(const Address& src, Channel* ch,
-                             const dbappmgr::HealthProbe& msg) {
+void DBAppMgr::OnHealthProbe(const Address& src, Channel* ch, const dbappmgr::HealthProbe& msg) {
   if (ch == nullptr) return;
   dbappmgr::HealthProbeAck ack;
   ack.nonce = msg.nonce;
@@ -173,11 +244,11 @@ void DBAppMgr::OnDbAppDeath(const Address& internal_addr, uint8_t reason) {
 
   const uint32_t kDeadAppId = it->second.app_id;
   if (reason == 0) {
-    ATLAS_LOG_INFO("DBAppMgr: DBApp app_id={} deregistered ({}:{})", kDeadAppId,
-                   internal_addr.Ip(), internal_addr.Port());
+    ATLAS_LOG_INFO("DBAppMgr: DBApp app_id={} deregistered ({}:{})", kDeadAppId, internal_addr.Ip(),
+                   internal_addr.Port());
   } else {
-    ATLAS_LOG_WARNING("DBAppMgr: DBApp app_id={} died ({}:{})", kDeadAppId,
-                      internal_addr.Ip(), internal_addr.Port());
+    ATLAS_LOG_WARNING("DBAppMgr: DBApp app_id={} died ({}:{})", kDeadAppId, internal_addr.Ip(),
+                      internal_addr.Port());
   }
   app_id_index_.erase(kDeadAppId);
   shard_table_subscribers_.erase(internal_addr);
@@ -187,10 +258,9 @@ void DBAppMgr::OnDbAppDeath(const Address& internal_addr, uint8_t reason) {
 
 auto DBAppMgr::FindShard(DatabaseID dbid) const -> std::optional<dbappmgr::ShardEntry> {
   if (dbid <= kInvalidDBID) return std::nullopt;
-  const auto it =
-      std::find_if(shard_table_.begin(), shard_table_.end(), [dbid](const auto& entry) {
-        return entry.low_dbid <= dbid && dbid < entry.high_dbid;
-      });
+  const auto it = std::find_if(shard_table_.begin(), shard_table_.end(), [dbid](const auto& entry) {
+    return entry.low_dbid <= dbid && dbid < entry.high_dbid;
+  });
   if (it == shard_table_.end()) return std::nullopt;
   return *it;
 }
@@ -223,9 +293,8 @@ auto DBAppMgr::FindDbAppByAppId(uint32_t app_id) const -> const DBAppInfo* {
   return (kIt != dbapps_.end()) ? &kIt->second : nullptr;
 }
 
-auto DBAppMgr::MatchesRegisteredSource(const DBAppInfo& info, const Address& src,
-                                       const Channel* ch, std::string_view operation) const
-    -> bool {
+auto DBAppMgr::MatchesRegisteredSource(const DBAppInfo& info, const Address& src, const Channel* ch,
+                                       std::string_view operation) const -> bool {
   if (src != info.internal_addr) {
     ATLAS_LOG_WARNING("DBAppMgr: {} source mismatch for app_id={} expected {}:{} got {}:{}",
                       operation, info.app_id, info.internal_addr.Ip(), info.internal_addr.Port(),
@@ -286,11 +355,11 @@ void DBAppMgr::AssignInitialShard(uint32_t app_id, const Address& addr) {
 }
 
 void DBAppMgr::SplitLargestShardFor(uint32_t app_id, const Address& addr) {
-  auto it = std::max_element(shard_table_.begin(), shard_table_.end(), [](const auto& a,
-                                                                          const auto& b) {
-    if (ShardSpan(a) != ShardSpan(b)) return ShardSpan(a) < ShardSpan(b);
-    return a.low_dbid > b.low_dbid;
-  });
+  auto it =
+      std::max_element(shard_table_.begin(), shard_table_.end(), [](const auto& a, const auto& b) {
+        if (ShardSpan(a) != ShardSpan(b)) return ShardSpan(a) < ShardSpan(b);
+        return a.low_dbid > b.low_dbid;
+      });
   if (it == shard_table_.end() || ShardSpan(*it) < 2) return;
 
   const DatabaseID kSplit = it->low_dbid + static_cast<DatabaseID>(ShardSpan(*it) / 2);
@@ -301,16 +370,23 @@ void DBAppMgr::SplitLargestShardFor(uint32_t app_id, const Address& addr) {
   BumpShardTableVersion();
 }
 
+auto DBAppMgr::RecoveryWindowActive() const -> bool {
+  return recovery_deadline_ != TimePoint{} && Clock::now() < recovery_deadline_;
+}
+
+auto DBAppMgr::ShouldDeferShardAssignment(const dbappmgr::RegisterDbApp& msg) const -> bool {
+  return RecoveryWindowActive() && msg.known_app_id != 0 && msg.known_shard_table_version != 0;
+}
+
 void DBAppMgr::ReassignShards(uint32_t dead_app_id) {
   bool changed = false;
   const DBAppInfo* target = FindLeastLoaded();
   if (target == nullptr) {
     const auto kOldSize = shard_table_.size();
-    shard_table_.erase(std::remove_if(shard_table_.begin(), shard_table_.end(),
-                                      [dead_app_id](const auto& entry) {
-                                        return entry.dbapp_id == dead_app_id;
-                                      }),
-                       shard_table_.end());
+    shard_table_.erase(
+        std::remove_if(shard_table_.begin(), shard_table_.end(),
+                       [dead_app_id](const auto& entry) { return entry.dbapp_id == dead_app_id; }),
+        shard_table_.end());
     changed = shard_table_.size() != kOldSize;
   } else {
     for (auto& entry : shard_table_) {

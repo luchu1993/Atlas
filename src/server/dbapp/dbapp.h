@@ -64,6 +64,7 @@ class DBApp : public ManagerApp {
   [[nodiscard]] auto BuildDbConfig() const -> DatabaseConfig;
   auto ResolveReplyChannel(const Address& addr) -> Channel*;
   void RegisterWithDbAppMgr();
+  void ReportRecoverStateToDbAppMgr();
   void ReportLoadToDbAppMgr();
   [[nodiscard]] auto CurrentLoadFraction() const -> float;
   [[nodiscard]] auto AcceptsShardTableVersion(uint32_t version) const -> bool;

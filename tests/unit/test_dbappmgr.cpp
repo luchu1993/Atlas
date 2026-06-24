@@ -1,8 +1,10 @@
-#include <gtest/gtest.h>
-
+#include <chrono>
 #include <limits>
+#include <optional>
 #include <span>
 #include <vector>
+
+#include <gtest/gtest.h>
 
 #include "dbappmgr/dbappmgr.h"
 #include "network/channel.h"
@@ -22,12 +24,25 @@ class DBAppMgrHarness {
   DBAppMgr mgr;
 };
 
-auto Register(DBAppMgr& mgr, uint16_t port, uint32_t known_app_id = 0) -> Address {
+auto Register(DBAppMgr& mgr, uint16_t port, uint32_t known_app_id = 0,
+              uint32_t known_shard_table_version = 0) -> Address {
   dbappmgr::RegisterDbApp msg;
   msg.internal_addr = Address(0x7F000001u, port);
   msg.known_app_id = known_app_id;
+  msg.known_shard_table_version = known_shard_table_version;
   mgr.OnRegisterDbApp(msg.internal_addr, nullptr, msg);
   return msg.internal_addr;
+}
+
+auto MakeRecoverReport(const std::vector<dbappmgr::ShardEntry>& table, uint32_t app_id,
+                       uint32_t version) -> dbappmgr::RecoverDBAppState {
+  dbappmgr::RecoverDBAppState report;
+  report.dbapp_id = app_id;
+  report.shard_table_version = version;
+  for (const auto& shard : table) {
+    if (shard.dbapp_id == app_id) report.shards.push_back(shard);
+  }
+  return report;
 }
 
 class RecordingChannel final : public Channel {
@@ -42,9 +57,7 @@ class RecordingChannel final : public Channel {
     return data.size();
   }
 
-  [[nodiscard]] auto Sends() const -> const std::vector<std::vector<std::byte>>& {
-    return sends_;
-  }
+  [[nodiscard]] auto Sends() const -> const std::vector<std::vector<std::byte>>& { return sends_; }
 
  private:
   std::vector<std::vector<std::byte>> sends_;
@@ -106,6 +119,48 @@ TEST(DBAppMgr, RegisterSplitsLargestRange) {
   const auto right = h.mgr.FindShard(right_dbid);
   ASSERT_TRUE(right.has_value());
   EXPECT_EQ(right->dbapp_id, 2u);
+}
+
+TEST(DBAppMgr, RecoverDBAppStateRebuildsShardTableFromWorkerReports) {
+  DBAppMgrHarness source;
+  Register(source.mgr, 24001);
+  Register(source.mgr, 24002);
+  const auto source_table = source.mgr.ShardTable();
+  const uint32_t version = source.mgr.ShardTableVersion();
+  const auto first_report = MakeRecoverReport(source_table, 1, version);
+  const auto second_report = MakeRecoverReport(source_table, 2, version);
+
+  DBAppMgrHarness recovered;
+  recovered.mgr.SetRecoveryDeadlineForTest(Clock::now() + std::chrono::seconds(5));
+  const Address first = Register(recovered.mgr, 24001, 1, version);
+  const Address second = Register(recovered.mgr, 24002, 2, version);
+
+  EXPECT_TRUE(recovered.mgr.ShardTable().empty());
+  recovered.mgr.OnRecoverDBAppState(first, nullptr, first_report);
+  recovered.mgr.OnRecoverDBAppState(second, nullptr, second_report);
+
+  ASSERT_EQ(recovered.mgr.ShardTable().size(), source_table.size());
+  EXPECT_EQ(recovered.mgr.ShardTableVersion(), version);
+  const auto first_shard = recovered.mgr.FindShard(source_table[0].low_dbid);
+  ASSERT_TRUE(first_shard.has_value());
+  EXPECT_EQ(first_shard->dbapp_id, source_table[0].dbapp_id);
+  const auto second_shard = recovered.mgr.FindShard(source_table[1].low_dbid);
+  ASSERT_TRUE(second_shard.has_value());
+  EXPECT_EQ(second_shard->dbapp_id, source_table[1].dbapp_id);
+  EXPECT_EQ(recovered.mgr.DbApps().at(second).app_id, 2u);
+}
+
+TEST(DBAppMgr, RecoveryWindowWatcherReflectsDeadline) {
+  DBAppMgrHarness h;
+  h.mgr.RegisterWatchersForTest();
+
+  h.mgr.SetRecoveryDeadlineForTest(Clock::now() + std::chrono::seconds(5));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("dbappmgr/ha/recovery_window_active"),
+            std::optional<std::string>("true"));
+
+  h.mgr.SetRecoveryDeadlineForTest(Clock::now() - std::chrono::milliseconds(1));
+  EXPECT_EQ(h.mgr.GetWatcherRegistry().Get("dbappmgr/ha/recovery_window_active"),
+            std::optional<std::string>("false"));
 }
 
 TEST(DBAppMgr, InformLoadClampsAndRejectsWrongSource) {

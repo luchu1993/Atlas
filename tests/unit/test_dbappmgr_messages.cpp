@@ -101,6 +101,19 @@ TEST(DBAppMgrMessages, ShardTableUpdateRoundTrips) {
   EXPECT_EQ(out.entries[1].dbapp_addr.Port(), 24002u);
 }
 
+TEST(DBAppMgrMessages, RecoverDBAppStateRoundTrips) {
+  RecoverDBAppState msg;
+  msg.dbapp_id = 7;
+  msg.shard_table_version = 11;
+  msg.shards.push_back(MakeShard(1, 500, 7, 24007));
+
+  const auto out = RoundTrip(msg);
+  EXPECT_EQ(out.dbapp_id, 7u);
+  EXPECT_EQ(out.shard_table_version, 11u);
+  ASSERT_EQ(out.shards.size(), 1u);
+  EXPECT_EQ(out.shards[0].dbapp_addr.Port(), 24007u);
+}
+
 TEST(DBAppMgrMessages, DescriptorIdsUseDBAppMgrRange) {
   EXPECT_EQ(RegisterDbApp::Descriptor().id, 8000);
   EXPECT_EQ(RegisterDbAppAck::Descriptor().id, 8001);
@@ -108,6 +121,7 @@ TEST(DBAppMgrMessages, DescriptorIdsUseDBAppMgrRange) {
   EXPECT_EQ(GetShardTable::Descriptor().id, 8010);
   EXPECT_EQ(ShardTableResponse::Descriptor().id, 8011);
   EXPECT_EQ(ShardTableUpdate::Descriptor().id, 8012);
+  EXPECT_EQ(RecoverDBAppState::Descriptor().id, 8013);
   EXPECT_EQ(HealthProbe::Descriptor().id, 8020);
   EXPECT_EQ(HealthProbeAck::Descriptor().id, 8021);
 }
