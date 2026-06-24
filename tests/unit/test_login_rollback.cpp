@@ -254,6 +254,27 @@ class BaseAppRollbackTest : public ::testing::Test {
   auto resolve_dbapp(DatabaseID dbid) -> Channel* { return app_.ResolveDbAppChannel(dbid); }
   auto dbapp_shard_version() const -> uint32_t { return app_.dbapp_shard_table_version_; }
   auto dbapp_shard_count() const -> std::size_t { return app_.dbapp_shard_table_.size(); }
+  auto submit_prepare_login(DatabaseID dbid, uint16_t type_id = 7) -> uint32_t {
+    BaseApp::PendingLogin pending;
+    pending.login_request_id = 7001;
+    pending.loginapp_addr = Address(0x7F000001u, 25001);
+    pending.type_id = type_id;
+    pending.dbid = dbid;
+    pending.created_at = Clock::now();
+    const uint32_t request_id = app_.next_prepare_request_id_;
+    app_.SubmitPrepareLogin(std::move(pending));
+    return request_id;
+  }
+  auto pending_login_contains(uint32_t request_id) const -> bool {
+    return app_.pending_logins_.contains(request_id);
+  }
+  auto pending_login_retry_pending(uint32_t request_id) const -> bool {
+    auto it = app_.pending_logins_.find(request_id);
+    return it != app_.pending_logins_.end() && it->second.checkout_retry_pending;
+  }
+  auto active_login_contains(DatabaseID dbid) const -> bool {
+    return app_.active_login_dbids_.contains(dbid);
+  }
   auto pending_write_to_db_count() const -> std::size_t { return app_.pending_write_to_db_.size(); }
   auto pending_write_to_db_contains(uint32_t request_id) const -> bool {
     return app_.pending_write_to_db_.contains(request_id);
@@ -583,6 +604,46 @@ TEST_F(BaseAppRollbackTest, WriteToDbRetriesPendingWriteAfterDbAppDeathAndShardU
   ack.dbid = 42;
   handle_write_ack(ack);
   EXPECT_FALSE(pending_write_to_db_contains(request_id));
+}
+
+TEST_F(BaseAppRollbackTest, PrepareLoginCheckoutRetriesAfterDbAppDeathAndShardUpdate) {
+  InterfaceTable channel_table;
+  CapturingChannel old_shard(dispatcher_, channel_table, Address(0x7F000001u, 24002));
+  CapturingChannel new_shard(dispatcher_, channel_table, Address(0x7F000001u, 24003));
+  const Address old_addr(0x7F000001u, 24002);
+  const Address new_addr(0x7F000001u, 24003);
+
+  cache_dbapp_channel(old_addr, &old_shard);
+  apply_dbapp_shards(7, {dbappmgr::ShardEntry{1, 1000, 8, old_addr, false}});
+
+  const uint32_t request_id = submit_prepare_login(42);
+
+  const auto first_checkouts = DecodeSentMessages<dbapp::CheckoutEntity>(old_shard);
+  ASSERT_EQ(first_checkouts.size(), 1u);
+  EXPECT_EQ(first_checkouts[0].request_id, request_id);
+  EXPECT_EQ(first_checkouts[0].dbid, 42);
+  EXPECT_EQ(first_checkouts[0].type_id, 7);
+  EXPECT_EQ(first_checkouts[0].shard_table_version, 7u);
+  EXPECT_TRUE(pending_login_contains(request_id));
+  EXPECT_TRUE(active_login_contains(42));
+
+  handle_dbapp_death(old_addr);
+  EXPECT_TRUE(pending_login_contains(request_id));
+  EXPECT_TRUE(pending_login_retry_pending(request_id));
+  EXPECT_TRUE(active_login_contains(42));
+
+  cache_dbapp_channel(new_addr, &new_shard);
+  apply_dbapp_shards(8, {dbappmgr::ShardEntry{1, 1000, 9, new_addr, false}});
+
+  const auto retried_checkouts = DecodeSentMessages<dbapp::CheckoutEntity>(new_shard);
+  ASSERT_EQ(retried_checkouts.size(), 1u);
+  EXPECT_EQ(retried_checkouts[0].request_id, request_id);
+  EXPECT_EQ(retried_checkouts[0].dbid, 42);
+  EXPECT_EQ(retried_checkouts[0].type_id, 7);
+  EXPECT_EQ(retried_checkouts[0].shard_table_version, 8u);
+  EXPECT_TRUE(pending_login_contains(request_id));
+  EXPECT_FALSE(pending_login_retry_pending(request_id));
+  EXPECT_TRUE(active_login_contains(42));
 }
 
 class FakeDatabase final : public IDatabase {

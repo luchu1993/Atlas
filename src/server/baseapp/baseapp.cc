@@ -43,6 +43,7 @@ inline constexpr double kRpcBurstCapacity = 100.0;
 inline constexpr uint32_t kRpcRateViolationDisconnectThreshold = 250;
 inline constexpr double kMovementRefillTokensPerSec = 90.0;
 inline constexpr double kMovementBurstCapacity = 180.0;
+inline constexpr uint8_t kDbappCheckoutRetryLimit = 3;
 inline constexpr uint8_t kDbappWriteRetryLimit = 3;
 inline constexpr uint32_t kMovementLargeCorrectionSuspiciousStreak = 3;
 inline constexpr float kMovementCorrectionReportMaxDistanceM = 1000.0f;
@@ -237,8 +238,9 @@ auto BaseApp::Init(int argc, char* argv[]) -> bool {
     }
     if (dbapp_channel_down) {
       RequestDbAppShardTable();
+      MarkDbappLoginCheckoutsDisconnected(ch.RemoteAddress());
       MarkDbappWriteRequestsDisconnected(ch.RemoteAddress());
-      FailAllDbappPendingRequests("dbapp_channel_down", false);
+      FailAllDbappPendingRequests("dbapp_channel_down", false, true);
     }
     if (&ch == dbappmgr_channel_) {
       ATLAS_LOG_WARNING("BaseApp: dbappmgr channel down (RUDP dead link), clearing");
@@ -1905,25 +1907,11 @@ void BaseApp::DispatchPrepareLogin(PendingLogin pending) {
 
   const uint32_t kRid = next_prepare_request_id_++;
   const DatabaseID kDbid = pending.dbid;
-  const uint16_t kTypeId = pending.type_id;
   pending_logins_[kRid] = std::move(pending);
 
-  auto* db_ch = ResolveDbAppChannel(kDbid);
-  if (db_ch == nullptr) {
-    ATLAS_LOG_ERROR("BaseApp: PrepareLogin: no DBApp connection");
-    FailPendingPrepareLogin(kRid, "no_dbapp");
-    FinishLoginFlow(kDbid);
-    return;
-  }
-
-  dbapp::CheckoutEntity co;
-  co.request_id = kRid;
-  co.dbid = kDbid;
-  co.type_id = kTypeId;
-  co.shard_table_version = dbapp_shard_table_version_;
-  auto send_result = db_ch->SendMessage(co);
-  if (!send_result) {
-    FailPendingPrepareLogin(kRid, "checkout_send_failed");
+  std::string_view failure_reason;
+  if (!SendPendingLoginCheckout(kRid, pending_logins_[kRid], &failure_reason)) {
+    FailPendingPrepareLogin(kRid, failure_reason);
     FinishLoginFlow(kDbid);
   }
 }
@@ -2143,25 +2131,13 @@ void BaseApp::ContinueLoginAfterForceLogoff(uint32_t force_request_id) {
     return;
   }
 
-  auto* db_ch = ResolveDbAppChannel(pending.dbid);
-  if (db_ch == nullptr) {
-    FailPendingPrepareLogin(pending, "no_dbapp");
-    FinishLoginFlow(pending.dbid);
-    return;
-  }
-
   uint32_t new_rid = next_prepare_request_id_++;
   pending_logins_[new_rid] = pending;
 
-  dbapp::CheckoutEntity co;
-  co.request_id = new_rid;
-  co.dbid = pending.dbid;
-  co.type_id = pending.type_id;
-  co.shard_table_version = dbapp_shard_table_version_;
-  auto send_result = db_ch->SendMessage(co);
-  if (!send_result) {
+  std::string_view failure_reason;
+  if (!SendPendingLoginCheckout(new_rid, pending_logins_[new_rid], &failure_reason)) {
     pending_logins_.erase(new_rid);
-    FailPendingPrepareLogin(pending, "checkout_send_failed");
+    FailPendingPrepareLogin(pending, failure_reason);
     FinishLoginFlow(pending.dbid);
   }
 }
@@ -2753,8 +2729,9 @@ void BaseApp::OnDbAppDeath(const machined::DeathNotification& msg) {
   }
   if (removed || removed_legacy) {
     RequestDbAppShardTable();
+    MarkDbappLoginCheckoutsDisconnected(msg.internal_addr);
     MarkDbappWriteRequestsDisconnected(msg.internal_addr);
-    FailAllDbappPendingRequests("dbapp_disconnected", false);
+    FailAllDbappPendingRequests("dbapp_disconnected", false, true);
   }
 }
 
@@ -2811,9 +2788,21 @@ void BaseApp::ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::Shard
   dbapp_shard_table_version_ = version;
   dbapp_shard_table_ = std::move(entries);
   for (const auto& entry : dbapp_shard_table_) (void)ConnectDbAppChannel(entry.dbapp_addr);
+  RetryDisconnectedDbappLoginCheckouts();
   RetryDisconnectedDbappWriteRequests();
   ATLAS_LOG_INFO("BaseApp: DBApp shard table version={} shards={}", dbapp_shard_table_version_,
                  dbapp_shard_table_.size());
+}
+
+void BaseApp::MarkDbappLoginCheckoutsDisconnected(const Address& dbapp_addr) {
+  for (auto& [request_id, pending] : pending_logins_) {
+    (void)request_id;
+    if (pending.checkout_awaiting_ack && pending.checkout_target_addr == dbapp_addr) {
+      pending.checkout_awaiting_ack = false;
+      pending.checkout_retry_pending = true;
+      pending.checkout_target_addr = Address{};
+    }
+  }
 }
 
 void BaseApp::MarkDbappWriteRequestsDisconnected(const Address& dbapp_addr) {
@@ -2824,6 +2813,30 @@ void BaseApp::MarkDbappWriteRequestsDisconnected(const Address& dbapp_addr) {
       pending.target_addr = Address{};
     }
   }
+}
+
+void BaseApp::RetryDisconnectedDbappLoginCheckouts() {
+  std::vector<DatabaseID> failed_dbids;
+  for (auto it = pending_logins_.begin(); it != pending_logins_.end();) {
+    auto& pending = it->second;
+    if (!pending.checkout_retry_pending) {
+      ++it;
+      continue;
+    }
+    if (pending.checkout_retry_count >= kDbappCheckoutRetryLimit) {
+      ATLAS_LOG_ERROR("BaseApp: prepare-login checkout request_id={} dbid={} retry limit exceeded",
+                      it->first, pending.dbid);
+      FailPendingPrepareLogin(pending, "checkout_retry_exceeded");
+      failed_dbids.push_back(pending.dbid);
+      it = pending_logins_.erase(it);
+      continue;
+    }
+    if (SendPendingLoginCheckout(it->first, pending)) {
+      ++pending.checkout_retry_count;
+    }
+    ++it;
+  }
+  DrainFinishedLoginFlows(std::move(failed_dbids));
 }
 
 void BaseApp::RetryDisconnectedDbappWriteRequests() {
@@ -2847,6 +2860,40 @@ void BaseApp::RetryDisconnectedDbappWriteRequests() {
     }
     ++it;
   }
+}
+
+auto BaseApp::SendPendingLoginCheckout(uint32_t request_id, PendingLogin& pending,
+                                       std::string_view* failure_reason) -> bool {
+  auto* db_ch = ResolveDbAppChannel(pending.dbid);
+  if (db_ch == nullptr) {
+    ATLAS_LOG_WARNING("BaseApp: prepare-login checkout request_id={} dbid={} has no DBApp route",
+                      request_id, pending.dbid);
+    pending.checkout_awaiting_ack = false;
+    pending.checkout_target_addr = Address{};
+    if (failure_reason != nullptr) *failure_reason = "no_dbapp";
+    return false;
+  }
+
+  dbapp::CheckoutEntity co;
+  co.request_id = request_id;
+  co.dbid = pending.dbid;
+  co.type_id = pending.type_id;
+  co.shard_table_version = dbapp_shard_table_version_;
+
+  pending.checkout_target_addr = db_ch->RemoteAddress();
+  auto send_result = db_ch->SendMessage(co);
+  if (!send_result) {
+    ATLAS_LOG_WARNING("BaseApp: prepare-login checkout request_id={} dbid={} send failed: {}",
+                      request_id, pending.dbid, send_result.Error().Message());
+    pending.checkout_awaiting_ack = false;
+    pending.checkout_target_addr = Address{};
+    if (failure_reason != nullptr) *failure_reason = "checkout_send_failed";
+    return false;
+  }
+
+  pending.checkout_awaiting_ack = true;
+  pending.checkout_retry_pending = false;
+  return true;
 }
 
 auto BaseApp::SendPendingWriteToDb(uint32_t request_id, PendingWriteToDb& pending) -> bool {
@@ -3305,12 +3352,26 @@ void BaseApp::CleanupExpiredPendingRequests() {
   DrainFinishedLoginFlows(std::move(finished_login_dbids));
 }
 
-void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db) {
-  for (auto& [request_id, pending] : pending_logins_) {
-    (void)request_id;
-    FailPendingPrepareLogin(pending, reason);
+void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db,
+                                          bool preserve_disconnected_logins) {
+  std::vector<DatabaseID> preserved_login_dbids;
+
+  for (auto it = pending_logins_.begin(); it != pending_logins_.end();) {
+    if (preserve_disconnected_logins && it->second.checkout_retry_pending) {
+      if (it->second.dbid != kInvalidDBID) {
+        preserved_login_dbids.push_back(it->second.dbid);
+      }
+      ++it;
+      continue;
+    }
+    FailPendingPrepareLogin(it->second, reason);
+    it = pending_logins_.erase(it);
   }
-  pending_logins_.clear();
+
+  const auto is_preserved_login_dbid = [&preserved_login_dbids](DatabaseID dbid) {
+    return std::find(preserved_login_dbids.begin(), preserved_login_dbids.end(), dbid) !=
+           preserved_login_dbids.end();
+  };
 
   for (auto& [request_id, pending] : pending_force_logoffs_) {
     (void)request_id;
@@ -3339,12 +3400,22 @@ void BaseApp::FailAllDbappPendingRequests(std::string_view reason, bool fail_wri
   pending_local_force_logoff_waiters_.clear();
   logoff_entities_in_flight_.clear();
 
-  for (auto& [dbid, pending] : queued_logins_) {
-    (void)dbid;
-    FailPendingPrepareLogin(pending, reason);
+  for (auto it = queued_logins_.begin(); it != queued_logins_.end();) {
+    if (is_preserved_login_dbid(it->first)) {
+      ++it;
+      continue;
+    }
+    FailPendingPrepareLogin(it->second, reason);
+    it = queued_logins_.erase(it);
   }
-  queued_logins_.clear();
-  active_login_dbids_.clear();
+
+  for (auto it = active_login_dbids_.begin(); it != active_login_dbids_.end();) {
+    if (is_preserved_login_dbid(*it)) {
+      ++it;
+    } else {
+      it = active_login_dbids_.erase(it);
+    }
+  }
 }
 
 void BaseApp::FailPendingPrepareLogin(PendingLogin& pending, std::string_view reason) {

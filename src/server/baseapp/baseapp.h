@@ -229,9 +229,14 @@ class BaseApp : public EntityApp {
   void OnShardTableUpdate(const dbappmgr::ShardTableUpdate& msg);
   void RequestDbAppShardTable();
   void ApplyDbAppShardTable(uint32_t version, std::vector<dbappmgr::ShardEntry> entries);
+  struct PendingLogin;
   struct PendingWriteToDb;
+  void MarkDbappLoginCheckoutsDisconnected(const Address& dbapp_addr);
   void MarkDbappWriteRequestsDisconnected(const Address& dbapp_addr);
+  void RetryDisconnectedDbappLoginCheckouts();
   void RetryDisconnectedDbappWriteRequests();
+  [[nodiscard]] auto SendPendingLoginCheckout(uint32_t request_id, PendingLogin& pending,
+                                              std::string_view* failure_reason = nullptr) -> bool;
   [[nodiscard]] auto SendPendingWriteToDb(uint32_t request_id, PendingWriteToDb& pending) -> bool;
   [[nodiscard]] auto ResolveDbAppChannel(DatabaseID dbid) -> Channel*;
   [[nodiscard]] auto ConnectDbAppChannel(const Address& addr) -> Channel*;
@@ -286,6 +291,10 @@ class BaseApp : public EntityApp {
     bool waiting_for_remote_force_logoff_ack{false};
     bool reply_sent{false};
     bool blob_prefetched{false};
+    Address checkout_target_addr;
+    uint8_t checkout_retry_count{0};
+    bool checkout_awaiting_ack{false};
+    bool checkout_retry_pending{false};
     std::vector<std::byte> entity_blob;
     // Plumbed through so account_entity_index_ can be populated when the
     // entity finally binds to a client in OnClientAuthenticate.
@@ -510,7 +519,8 @@ class BaseApp : public EntityApp {
   static constexpr float kLoadSmoothingBias = 0.25f;
 
   void CleanupExpiredPendingRequests();
-  void FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db = true);
+  void FailAllDbappPendingRequests(std::string_view reason, bool fail_write_to_db = true,
+                                   bool preserve_disconnected_logins = false);
   void FailPendingPrepareLogin(PendingLogin& pending, std::string_view reason);
   void FailPendingPrepareLogin(uint32_t request_id, std::string_view reason);
   void FailPendingForceLogoff(PendingLogin& pending, std::string_view reason);

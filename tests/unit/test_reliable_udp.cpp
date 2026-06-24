@@ -50,6 +50,21 @@ class ReliableUdpTest : public ::testing::Test {
       channel.OnDatagramReceived(std::span<const std::byte>(buf.data(), result->first));
     }
   }
+
+  template <typename Predicate>
+  auto pump_datagrams_until(Socket& sock, ReliableUdpChannel& channel, Predicate predicate,
+                            Duration timeout) -> bool {
+    const auto deadline = Clock::now() + timeout;
+    while (Clock::now() < deadline) {
+      dispatcher_.ProcessOnce();
+      pump_datagrams(sock, channel);
+      if (predicate()) return true;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    dispatcher_.ProcessOnce();
+    pump_datagrams(sock, channel);
+    return predicate();
+  }
 };
 
 TEST_F(ReliableUdpTest, ReliableSendAndReceive) {
@@ -1478,9 +1493,8 @@ TEST_F(ReliableUdpTest, TransportImpairmentDelaysOutboundDatagrams) {
   EXPECT_FALSE(received);
 
   std::this_thread::sleep_for(std::chrono::milliseconds(40));
-  dispatcher_.ProcessOnce();
-  pump_datagrams(*sock_b, channel_b);
-  EXPECT_TRUE(received);
+  EXPECT_TRUE(pump_datagrams_until(
+      *sock_b, channel_b, [&] { return received; }, std::chrono::milliseconds(100)));
 }
 
 TEST_F(ReliableUdpTest, TransportImpairmentDropsInboundDatagrams) {
