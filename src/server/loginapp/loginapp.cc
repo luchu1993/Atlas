@@ -2,6 +2,7 @@
 
 #include <format>
 
+#include "coro/async_sleep.h"
 #include "coro/rpc_call.h"
 #include "coro/scope_guard.h"
 #include "foundation/log.h"
@@ -12,6 +13,19 @@
 #include "server/watcher.h"
 
 namespace atlas {
+
+namespace {
+
+inline constexpr uint8_t kAuthRetryLimit = 3;
+inline constexpr auto kAuthRetryBackoff = std::chrono::milliseconds(50);
+
+auto IsRetryableAuthRpcError(ErrorCode code) -> bool {
+  return code == ErrorCode::kReceiverGone || code == ErrorCode::kChannelCondemned ||
+         code == ErrorCode::kConnectionReset || code == ErrorCode::kConnectionRefused ||
+         code == ErrorCode::kNetworkUnreachable;
+}
+
+}  // namespace
 
 auto LoginApp::Run(int argc, char* argv[]) -> int {
   EventDispatcher dispatcher;
@@ -80,16 +94,22 @@ auto LoginApp::Init(int argc, char* argv[]) -> bool {
     rpc_registry_.CancelByChannel(&ch);
     // Mirrors baseapp.cc — clear cached pointers before condemned channel
     // gets recycled (RUDP dead link beats machined DeathNotification).
+    bool dbapp_channel_down = false;
     if (&ch == dbapp_channel_) {
       ATLAS_LOG_WARNING("LoginApp: dbapp channel down (RUDP dead link), clearing");
       dbapp_channel_ = nullptr;
+      dbapp_channel_down = true;
     }
     for (auto it = dbapp_channels_.begin(); it != dbapp_channels_.end();) {
       if (it->second == &ch) {
         it = dbapp_channels_.erase(it);
+        dbapp_channel_down = true;
       } else {
         ++it;
       }
+    }
+    if (dbapp_channel_down) {
+      RequestDbAppShardTable();
     }
     if (&ch == baseappmgr_channel_) {
       ATLAS_LOG_WARNING("LoginApp: baseappmgr channel down (RUDP dead link), clearing");
@@ -228,6 +248,9 @@ void LoginApp::OnDbAppDeath(const machined::DeathNotification& msg) {
     ATLAS_LOG_INFO("LoginApp: DBApp deregistered");
   } else {
     ATLAS_LOG_WARNING("LoginApp: DBApp died");
+  }
+  if (dead_ch != nullptr) {
+    RequestDbAppShardTable();
   }
 }
 
@@ -397,25 +420,54 @@ auto LoginApp::HandleLoginCoro(uint64_t client_channel_id, Address client_addr,
   ScopeGuard cancel_guard(
       [this, client_channel_id] { channel_cancel_sources_.erase(client_channel_id); });
 
-  Channel* auth_dbapp_ch = ResolveAuthDbAppChannel(username);
-  if (auth_dbapp_ch == nullptr) {
-    RequestDbAppShardTable();
-    SendLoginError(client_channel_id, login::LoginStatus::kServerNotReady, "no_dbapp");
-    co_return;
-  }
-
   login::AuthLogin auth;
   auth.request_id = rid;
   auth.username = request.username;
   auth.password_hash = request.password_hash;
   auth.auto_create = Config().auto_create_accounts;
 
-  auto auth_result = co_await RpcCall<login::AuthLoginResult>(rpc_registry_, *auth_dbapp_ch, auth,
-                                                              kRpcTimeout, token);
-  if (!auth_result) {
-    if (auth_result.Error().Code() == ErrorCode::kCancelled) {
+  Result<login::AuthLoginResult> auth_result{
+      Error{ErrorCode::kNetworkUnreachable, "auth DBApp route unavailable"}};
+  bool auth_route_missing = false;
+  for (uint8_t attempt = 0; attempt <= kAuthRetryLimit; ++attempt) {
+    Channel* auth_dbapp_ch = ResolveAuthDbAppChannel(username);
+    if (auth_dbapp_ch == nullptr) {
+      auth_route_missing = true;
+      RequestDbAppShardTable();
+    } else {
+      auth_route_missing = false;
+      auth_result = co_await RpcCall<login::AuthLoginResult>(rpc_registry_, *auth_dbapp_ch, auth,
+                                                             kRpcTimeout, token);
+      if (auth_result) {
+        break;
+      }
+      if (auth_result.Error().Code() == ErrorCode::kCancelled) {
+        ++abandoned_login_total_;
+        ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' (client disconnected)", username);
+        co_return;
+      }
+      if (!IsRetryableAuthRpcError(auth_result.Error().Code())) {
+        break;
+      }
+      RequestDbAppShardTable();
+      ATLAS_LOG_WARNING("LoginApp: auth RPC retry for '{}' after DBApp route error: {}", username,
+                        auth_result.Error().Message());
+    }
+
+    if (attempt >= kAuthRetryLimit) {
+      break;
+    }
+    auto sleep_result = co_await async_sleep(Dispatcher(), kAuthRetryBackoff, token);
+    if (!sleep_result) {
       ++abandoned_login_total_;
-      ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' (client disconnected)", username);
+      ATLAS_LOG_DEBUG("LoginApp: login cancelled for '{}' during auth retry backoff", username);
+      co_return;
+    }
+  }
+
+  if (!auth_result) {
+    if (auth_route_missing) {
+      SendLoginError(client_channel_id, login::LoginStatus::kServerNotReady, "no_dbapp");
       co_return;
     }
     if (auth_result.Error().Code() == ErrorCode::kTimeout) ++login_timeout_total_;

@@ -67,7 +67,7 @@ auto RpcCall(PendingRpcRegistry& registry, Channel& channel, const Request& requ
             result = std::move(error);
             caller.resume();
           },
-          timeout);
+          timeout, &channel);
 
       if (token.IsValid()) {
         cancel_reg = token.OnCancel([this]() { registry.Cancel(pending_handle); });

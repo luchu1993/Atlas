@@ -123,6 +123,30 @@ class LoginRollbackTest : public ::testing::Test {
     death.reason = 1;
     app_.OnDbAppDeath(death);
   }
+  auto start_login(uint64_t client_channel_id, std::string username) -> uint32_t {
+    login::LoginRequest request;
+    request.username = std::move(username);
+    request.password_hash = "pw";
+    const uint32_t request_id = app_.next_request_id_;
+    app_.HandleLoginCoro(client_channel_id, Address(0x7F000001u, 26001), std::move(request));
+    return request_id;
+  }
+  void handle_auth_result(const login::AuthLoginResult& result) {
+    BinaryWriter writer;
+    result.Serialize(writer);
+    ASSERT_TRUE(
+        app_.rpc_registry_.TryDispatch(login::AuthLoginResult::Descriptor().id, writer.Data()));
+  }
+  template <typename Predicate>
+  auto drive_until(Predicate predicate, Duration timeout) -> bool {
+    const auto deadline = Clock::now() + timeout;
+    while (Clock::now() < deadline) {
+      dispatcher_.ProcessOnce();
+      if (predicate()) return true;
+    }
+    dispatcher_.ProcessOnce();
+    return predicate();
+  }
 
   EventDispatcher dispatcher_;
   NetworkInterface internal_network_;
@@ -205,6 +229,47 @@ TEST_F(LoginRollbackTest, DbappDeathClearsCachedShardChannel) {
   handle_dbapp_death(shard_addr);
 
   EXPECT_EQ(cached_dbapp_channel_count(), 0u);
+}
+
+TEST_F(LoginRollbackTest, AuthLoginRetriesAfterDbappDeathAndShardUpdate) {
+  InterfaceTable channel_table;
+  CapturingChannel old_shard(dispatcher_, channel_table, Address(0x7F000001u, 31004));
+  CapturingChannel new_shard(dispatcher_, channel_table, Address(0x7F000001u, 31005));
+  const Address old_addr(0x7F000001u, 31004);
+  const Address new_addr(0x7F000001u, 31005);
+
+  cache_dbapp_channel(old_addr, &old_shard);
+  apply_dbapp_shards(
+      7, {dbappmgr::ShardEntry{1, std::numeric_limits<DatabaseID>::max(), 8, old_addr}});
+
+  const uint32_t request_id = start_login(77, "alice");
+
+  const auto first_auths = DecodeSentMessages<login::AuthLogin>(old_shard);
+  ASSERT_EQ(first_auths.size(), 1u);
+  EXPECT_EQ(first_auths[0].request_id, request_id);
+  EXPECT_EQ(first_auths[0].username, "alice");
+
+  handle_dbapp_death(old_addr);
+  cache_dbapp_channel(new_addr, &new_shard);
+  apply_dbapp_shards(
+      8, {dbappmgr::ShardEntry{1, std::numeric_limits<DatabaseID>::max(), 9, new_addr}});
+
+  EXPECT_TRUE(drive_until([&] { return new_shard.send_count() > 0; }, Milliseconds(500)));
+  const auto retried_auths = DecodeSentMessages<login::AuthLogin>(new_shard);
+  ASSERT_EQ(retried_auths.size(), 1u);
+  EXPECT_EQ(retried_auths[0].request_id, request_id);
+  EXPECT_EQ(retried_auths[0].username, "alice");
+
+  login::AuthLoginResult auth_reply;
+  auth_reply.request_id = request_id;
+  auth_reply.success = true;
+  auth_reply.status = login::LoginStatus::kSuccess;
+  auth_reply.dbid = 42;
+  auth_reply.type_id = 7;
+  handle_auth_result(auth_reply);
+
+  EXPECT_TRUE(pending_by_username_empty());
+  EXPECT_EQ(active_login_count(), 0u);
 }
 
 class BaseAppRollbackTest : public ::testing::Test {
