@@ -142,6 +142,15 @@ static const CliField kCliFields[] = {
     {"revive-baseappmgr-launch-timeout-ms",
         &ServerConfig::revive_baseappmgr_launch_timeout_ms},
     {"revive-baseappmgr-on-start",  &ServerConfig::revive_baseappmgr_on_start},
+    {"revive-dbappmgr-exe",         &ServerConfig::revive_dbappmgr_exe},
+    {"revive-dbappmgr-name",        &ServerConfig::revive_dbappmgr_name},
+    {"revive-dbappmgr-port",        &ServerConfig::revive_dbappmgr_internal_port},
+    {"revive-dbappmgr-output-path", &ServerConfig::revive_dbappmgr_output_path},
+    {"revive-dbappmgr-priority",    &ServerConfig::revive_dbappmgr_priority},
+    {"revive-dbappmgr-update-hertz",&ServerConfig::revive_dbappmgr_update_hertz},
+    {"revive-dbappmgr-launch-timeout-ms",
+        &ServerConfig::revive_dbappmgr_launch_timeout_ms},
+    {"revive-dbappmgr-on-start",    &ServerConfig::revive_dbappmgr_on_start},
     {"mesh-enabled",                &ServerConfig::mesh_enabled},
     {"mesh-advertise-ip",           &ServerConfig::mesh_advertise_ip},
     {"mesh-broadcast-ip",           &ServerConfig::mesh_broadcast_ip},
@@ -228,16 +237,13 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
   }
 
   if (auto* reviver = root->Child("reviver")) {
-    cfg.revive_restart_delay_ms =
-        reviver->ReadInt("restart_delay_ms", cfg.revive_restart_delay_ms);
+    cfg.revive_restart_delay_ms = reviver->ReadInt("restart_delay_ms", cfg.revive_restart_delay_ms);
     cfg.revive_restart_backoff_cap_ms =
         reviver->ReadInt("restart_backoff_cap_ms", cfg.revive_restart_backoff_cap_ms);
     cfg.revive_max_restarts = reviver->ReadInt("max_restarts", cfg.revive_max_restarts);
     if (auto* cellappmgr = reviver->Child("cellappmgr")) {
-      cfg.revive_cellappmgr_exe =
-          cellappmgr->ReadString("exe", cfg.revive_cellappmgr_exe.string());
-      cfg.revive_cellappmgr_name =
-          cellappmgr->ReadString("name", cfg.revive_cellappmgr_name);
+      cfg.revive_cellappmgr_exe = cellappmgr->ReadString("exe", cfg.revive_cellappmgr_exe.string());
+      cfg.revive_cellappmgr_name = cellappmgr->ReadString("name", cfg.revive_cellappmgr_name);
       cfg.revive_cellappmgr_internal_port = static_cast<uint16_t>(
           cellappmgr->ReadUint("internal_port", cfg.revive_cellappmgr_internal_port));
       cfg.revive_cellappmgr_output_path =
@@ -249,10 +255,9 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
       cfg.revive_cellappmgr_launch_timeout_ms =
           cellappmgr->ReadInt("launch_timeout_ms", cfg.revive_cellappmgr_launch_timeout_ms);
       cfg.revive_cellappmgr_health_interval_ms =
-          cellappmgr->ReadInt("health_interval_ms",
-                              cfg.revive_cellappmgr_health_interval_ms);
-      cfg.revive_cellappmgr_heartbeat_timeout_ms = cellappmgr->ReadInt(
-          "heartbeat_timeout_ms", cfg.revive_cellappmgr_heartbeat_timeout_ms);
+          cellappmgr->ReadInt("health_interval_ms", cfg.revive_cellappmgr_health_interval_ms);
+      cfg.revive_cellappmgr_heartbeat_timeout_ms =
+          cellappmgr->ReadInt("heartbeat_timeout_ms", cfg.revive_cellappmgr_heartbeat_timeout_ms);
       cfg.revive_cellappmgr_manager_health_timeout_ms = cellappmgr->ReadInt(
           "manager_health_timeout_ms", cfg.revive_cellappmgr_manager_health_timeout_ms);
       cfg.revive_cellappmgr_health_failure_threshold = cellappmgr->ReadInt(
@@ -265,10 +270,8 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           cellappmgr->ReadBool("on_start", cfg.revive_cellappmgr_on_start);
     }
     if (auto* baseappmgr = reviver->Child("baseappmgr")) {
-      cfg.revive_baseappmgr_exe =
-          baseappmgr->ReadString("exe", cfg.revive_baseappmgr_exe.string());
-      cfg.revive_baseappmgr_name =
-          baseappmgr->ReadString("name", cfg.revive_baseappmgr_name);
+      cfg.revive_baseappmgr_exe = baseappmgr->ReadString("exe", cfg.revive_baseappmgr_exe.string());
+      cfg.revive_baseappmgr_name = baseappmgr->ReadString("name", cfg.revive_baseappmgr_name);
       cfg.revive_baseappmgr_internal_port = static_cast<uint16_t>(
           baseappmgr->ReadUint("internal_port", cfg.revive_baseappmgr_internal_port));
       cfg.revive_baseappmgr_output_path =
@@ -281,6 +284,20 @@ auto ServerConfig::FromJsonFile(const std::filesystem::path& path) -> Result<Ser
           baseappmgr->ReadInt("launch_timeout_ms", cfg.revive_baseappmgr_launch_timeout_ms);
       cfg.revive_baseappmgr_on_start =
           baseappmgr->ReadBool("on_start", cfg.revive_baseappmgr_on_start);
+    }
+    if (auto* dbappmgr = reviver->Child("dbappmgr")) {
+      cfg.revive_dbappmgr_exe = dbappmgr->ReadString("exe", cfg.revive_dbappmgr_exe.string());
+      cfg.revive_dbappmgr_name = dbappmgr->ReadString("name", cfg.revive_dbappmgr_name);
+      cfg.revive_dbappmgr_internal_port = static_cast<uint16_t>(
+          dbappmgr->ReadUint("internal_port", cfg.revive_dbappmgr_internal_port));
+      cfg.revive_dbappmgr_output_path =
+          dbappmgr->ReadString("output_path", cfg.revive_dbappmgr_output_path.string());
+      cfg.revive_dbappmgr_priority = dbappmgr->ReadInt("priority", cfg.revive_dbappmgr_priority);
+      cfg.revive_dbappmgr_update_hertz =
+          dbappmgr->ReadInt("update_hertz", cfg.revive_dbappmgr_update_hertz);
+      cfg.revive_dbappmgr_launch_timeout_ms =
+          dbappmgr->ReadInt("launch_timeout_ms", cfg.revive_dbappmgr_launch_timeout_ms);
+      cfg.revive_dbappmgr_on_start = dbappmgr->ReadBool("on_start", cfg.revive_dbappmgr_on_start);
     }
   }
 

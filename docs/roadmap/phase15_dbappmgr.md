@@ -8,8 +8,8 @@ DBApp range-scoped explicit DBID create allocation 已接入；allocator recover
 XML duplicate guard、duplicate retry、BaseApp WriteToDB death retry、
 BaseApp login checkout death retry、LoginApp auth death retry 和 BaseApp
 logoff death retry 已接入；`RecoverDBAppState` worker shard 重报、
-DBAppMgr recovery window 冻结恢复注册 split、`known_app_id` echo 已接入；
-Reviver dbappmgr target 和 HA verify 脚本未完成。
+DBAppMgr recovery window 冻结恢复注册 split、`known_app_id` echo、
+Reviver dbappmgr target 已接入；HA verify 脚本未完成。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
 
@@ -132,7 +132,7 @@ recovery 窗口内等存活 DBApp 重注册并重报权威状态,从 worker 报�
 |---|---|
 | P15.2-S1 | ✅ DBApp `RecoverDBAppState` 重报 shard ranges；DBAppMgr recovery window 内冻结恢复注册 split |
 | P15.2-S2 | ✅ `RegisterDBApp.known_app_id` echo 保留 dbapp_id |
-| P15.2-S3 | ⏳ Reviver 多 target 加 dbappmgr |
+| P15.2-S3 | ✅ Reviver 多 target 加 dbappmgr |
 | P15.2-S4 | ⏳ verify_dbappmgr_ha.py + docs |
 
 worker 重报的权威状态:
@@ -143,8 +143,8 @@ worker 重报的权威状态:
 
 `next_dbapp_id_` 从重报的 dbapp_id 推回(取 max + 1),`known_app_id` 保留原 id。
 
-Reviver 扩 multi-target(已就位的 `ManagedTarget` 框架,加一个
-`dbappmgr_target_` 即可,~150 行)。
+Reviver multi-target 已接入 `dbappmgr_target_`，支持
+`--revive-dbappmgr-*` CLI 和 `reviver.dbappmgr` JSON 配置。
 
 ## 4. 不在范围内
 
@@ -209,7 +209,8 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 | P15.1-D4 | DBApp 端 request version 校验 + idempotency cache + request retry on death | version 校验、completed ack idempotency cache、BaseApp WriteToDB death retry、BaseApp login checkout death retry、LoginApp auth death retry 与 BaseApp logoff death retry 已接入 |
 | P15.2-S1 | DBApp worker shard 重报 + recovery window | 已接入 |
 | P15.2-S2 | `known_app_id` echo 保留 dbapp_id | 已接入 |
-| P15.2-S3..S4 | Reviver dbappmgr target + HA verify/docs | 未完成 |
+| P15.2-S3 | Reviver dbappmgr target | 已接入 |
+| P15.2-S4 | HA verify/docs | 未完成 |
 | 单测 + 集成测试 | | ~1500 行 |
 | 文档 | phase15 主文档 + verify 脚本 + ops 指南 | ~800 行 |
 | **总计** | | **~7600 行** |

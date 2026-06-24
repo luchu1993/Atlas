@@ -175,14 +175,29 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
                  "--revive-baseappmgr-launch-timeout-ms",
                  "700",
                  "--revive-baseappmgr-on-start",
+                 "true",
+                 "--revive-dbappmgr-exe",
+                 "bin/atlas_dbappmgr.exe",
+                 "--revive-dbappmgr-name",
+                 "dbappmgr_a",
+                 "--revive-dbappmgr-port",
+                 "31200",
+                 "--revive-dbappmgr-output-path",
+                 "logs/revived_dbappmgr.log",
+                 "--revive-dbappmgr-update-hertz",
+                 "35",
+                 "--revive-dbappmgr-launch-timeout-ms",
+                 "750",
+                 "--revive-dbappmgr-priority",
+                 "200",
+                 "--revive-dbappmgr-on-start",
                  "true"});
   auto r = ServerConfig::FromArgs(args.argc(), args.argv());
   ASSERT_TRUE(r.HasValue()) << r.Error().Message();
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
-  EXPECT_EQ(r->revive_cellappmgr_output_path,
-            std::filesystem::path("logs/revived_cellappmgr.log"));
+  EXPECT_EQ(r->revive_cellappmgr_output_path, std::filesystem::path("logs/revived_cellappmgr.log"));
   EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
   EXPECT_EQ(r->revive_cellappmgr_launch_timeout_ms, 650);
   EXPECT_EQ(r->revive_restart_delay_ms, 75);
@@ -198,11 +213,18 @@ TEST(ServerConfig, FromArgsParsesHaOptions) {
   EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
   EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
   EXPECT_EQ(r->revive_baseappmgr_internal_port, 31100);
-  EXPECT_EQ(r->revive_baseappmgr_output_path,
-            std::filesystem::path("logs/revived_baseappmgr.log"));
+  EXPECT_EQ(r->revive_baseappmgr_output_path, std::filesystem::path("logs/revived_baseappmgr.log"));
   EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
   EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
   EXPECT_TRUE(r->revive_baseappmgr_on_start);
+  EXPECT_EQ(r->revive_dbappmgr_exe, std::filesystem::path("bin/atlas_dbappmgr.exe"));
+  EXPECT_EQ(r->revive_dbappmgr_name, "dbappmgr_a");
+  EXPECT_EQ(r->revive_dbappmgr_internal_port, 31200);
+  EXPECT_EQ(r->revive_dbappmgr_output_path, std::filesystem::path("logs/revived_dbappmgr.log"));
+  EXPECT_EQ(r->revive_dbappmgr_update_hertz, 35);
+  EXPECT_EQ(r->revive_dbappmgr_launch_timeout_ms, 750);
+  EXPECT_EQ(r->revive_dbappmgr_priority, 200);
+  EXPECT_TRUE(r->revive_dbappmgr_on_start);
 }
 
 TEST(ServerConfig, FromJsonFileParsesEntitydefBinPath) {
@@ -245,6 +267,16 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
                 "update_hertz": 30,
                 "launch_timeout_ms": 700,
                 "on_start": true
+            },
+            "dbappmgr": {
+                "exe": "bin/atlas_dbappmgr.exe",
+                "name": "dbappmgr_a",
+                "internal_port": 31200,
+                "output_path": "logs/revived_dbappmgr.log",
+                "priority": 200,
+                "update_hertz": 35,
+                "launch_timeout_ms": 750,
+                "on_start": true
             }
         }
     })");
@@ -256,8 +288,7 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_cellappmgr_exe, std::filesystem::path("bin/atlas_cellappmgr.exe"));
   EXPECT_EQ(r->revive_cellappmgr_name, "cellappmgr_a");
   EXPECT_EQ(r->revive_cellappmgr_internal_port, 31000);
-  EXPECT_EQ(r->revive_cellappmgr_output_path,
-            std::filesystem::path("logs/revived_cellappmgr.log"));
+  EXPECT_EQ(r->revive_cellappmgr_output_path, std::filesystem::path("logs/revived_cellappmgr.log"));
   EXPECT_EQ(r->revive_cellappmgr_update_hertz, 25);
   EXPECT_EQ(r->revive_cellappmgr_launch_timeout_ms, 650);
   EXPECT_EQ(r->revive_cellappmgr_health_interval_ms, 100);
@@ -270,11 +301,18 @@ TEST(ServerConfig, FromJsonFileParsesHaOptions) {
   EXPECT_EQ(r->revive_baseappmgr_exe, std::filesystem::path("bin/atlas_baseappmgr.exe"));
   EXPECT_EQ(r->revive_baseappmgr_name, "baseappmgr_a");
   EXPECT_EQ(r->revive_baseappmgr_internal_port, 31100);
-  EXPECT_EQ(r->revive_baseappmgr_output_path,
-            std::filesystem::path("logs/revived_baseappmgr.log"));
+  EXPECT_EQ(r->revive_baseappmgr_output_path, std::filesystem::path("logs/revived_baseappmgr.log"));
   EXPECT_EQ(r->revive_baseappmgr_update_hertz, 30);
   EXPECT_EQ(r->revive_baseappmgr_launch_timeout_ms, 700);
   EXPECT_TRUE(r->revive_baseappmgr_on_start);
+  EXPECT_EQ(r->revive_dbappmgr_exe, std::filesystem::path("bin/atlas_dbappmgr.exe"));
+  EXPECT_EQ(r->revive_dbappmgr_name, "dbappmgr_a");
+  EXPECT_EQ(r->revive_dbappmgr_internal_port, 31200);
+  EXPECT_EQ(r->revive_dbappmgr_output_path, std::filesystem::path("logs/revived_dbappmgr.log"));
+  EXPECT_EQ(r->revive_dbappmgr_update_hertz, 35);
+  EXPECT_EQ(r->revive_dbappmgr_launch_timeout_ms, 750);
+  EXPECT_EQ(r->revive_dbappmgr_priority, 200);
+  EXPECT_TRUE(r->revive_dbappmgr_on_start);
 }
 
 TEST(ServerConfig, FromArgsInvalidPortReturnsError) {

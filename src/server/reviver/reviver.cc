@@ -10,6 +10,7 @@
 
 #include "baseappmgr/baseappmgr_messages.h"
 #include "cellappmgr/cellappmgr_messages.h"
+#include "dbappmgr/dbappmgr_messages.h"
 #include "foundation/log.h"
 #include "network/event_dispatcher.h"
 #include "network/network_interface.h"
@@ -29,8 +30,42 @@ auto IsLoopbackAddress(const Address& addr) -> bool {
 
 auto AgeMsSince(TimePoint t) -> int64_t {
   if (t.time_since_epoch() == Duration::zero()) return -1;
-  return std::max<int64_t>(
-      0, std::chrono::duration_cast<Milliseconds>(Clock::now() - t).count());
+  return std::max<int64_t>(0, std::chrono::duration_cast<Milliseconds>(Clock::now() - t).count());
+}
+
+auto TargetExeName(ProcessType process_type) -> std::string_view {
+  switch (process_type) {
+#if defined(_WIN32)
+    case ProcessType::kCellAppMgr:
+      return "atlas_cellappmgr.exe";
+    case ProcessType::kBaseAppMgr:
+      return "atlas_baseappmgr.exe";
+    case ProcessType::kDbAppMgr:
+      return "atlas_dbappmgr.exe";
+#else
+    case ProcessType::kCellAppMgr:
+      return "atlas_cellappmgr";
+    case ProcessType::kBaseAppMgr:
+      return "atlas_baseappmgr";
+    case ProcessType::kDbAppMgr:
+      return "atlas_dbappmgr";
+#endif
+    default:
+      return {};
+  }
+}
+
+auto TargetTypeArg(ProcessType process_type) -> std::string_view {
+  switch (process_type) {
+    case ProcessType::kCellAppMgr:
+      return "cellappmgr";
+    case ProcessType::kBaseAppMgr:
+      return "baseappmgr";
+    case ProcessType::kDbAppMgr:
+      return "dbappmgr";
+    default:
+      return {};
+  }
 }
 
 }  // namespace
@@ -62,7 +97,7 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
     t.on_start = Config().revive_cellappmgr_on_start;
     t.priority = static_cast<uint8_t>(std::clamp(Config().revive_cellappmgr_priority, 0, 255));
-  } else {
+  } else if (t.process_type == ProcessType::kBaseAppMgr) {
     t.configured_name = Config().revive_baseappmgr_name;
     t.exe = Config().revive_baseappmgr_exe;
     t.internal_port = Config().revive_baseappmgr_internal_port;
@@ -79,6 +114,21 @@ void Reviver::InitTarget(ManagedTarget& t) {
     t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
     t.on_start = Config().revive_baseappmgr_on_start;
     t.priority = static_cast<uint8_t>(std::clamp(Config().revive_baseappmgr_priority, 0, 255));
+  } else {
+    t.configured_name = Config().revive_dbappmgr_name;
+    t.exe = Config().revive_dbappmgr_exe;
+    t.internal_port = Config().revive_dbappmgr_internal_port;
+    t.output_path = Config().revive_dbappmgr_output_path;
+    t.update_hertz = Config().revive_dbappmgr_update_hertz;
+    t.launch_timeout_ms = Config().revive_dbappmgr_launch_timeout_ms;
+    t.health_interval_ms = Config().revive_cellappmgr_health_interval_ms;
+    t.heartbeat_timeout_ms = Config().revive_cellappmgr_heartbeat_timeout_ms;
+    t.manager_health_timeout_ms = Config().revive_cellappmgr_manager_health_timeout_ms;
+    t.health_failure_threshold = Config().revive_cellappmgr_health_failure_threshold;
+    t.audit_interval_ms = Config().revive_cellappmgr_audit_interval_ms;
+    t.missing_audit_threshold = Config().revive_cellappmgr_missing_audit_threshold;
+    t.on_start = Config().revive_dbappmgr_on_start;
+    t.priority = static_cast<uint8_t>(std::clamp(Config().revive_dbappmgr_priority, 0, 255));
   }
   // Seed the takeover grace from startup so a lone Reviver cold-starts an
   // absent subject after its priority-scaled delay rather than never.
@@ -102,23 +152,23 @@ auto Reviver::Init(int argc, char* argv[]) -> bool {
   cellappmgr_target_.process_type = ProcessType::kCellAppMgr;
   baseappmgr_target_.slug = "baseappmgr";
   baseappmgr_target_.process_type = ProcessType::kBaseAppMgr;
+  dbappmgr_target_.slug = "dbappmgr";
+  dbappmgr_target_.process_type = ProcessType::kDbAppMgr;
   if (!ManagerApp::Init(argc, argv)) return false;
 
   InitTarget(cellappmgr_target_);
   InitTarget(baseappmgr_target_);
+  InitTarget(dbappmgr_target_);
 
   cellappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);
   baseappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);
+  dbappmgr_target_.startup_check_at = Clock::now() + std::chrono::milliseconds(500);
 
   if (TargetEnabled(cellappmgr_target_)) {
     GetMachinedClient().Subscribe(
         machined::ListenerType::kBoth, ProcessType::kCellAppMgr,
-        [this](const machined::BirthNotification& msg) {
-          OnTargetBirth(cellappmgr_target_, msg);
-        },
-        [this](const machined::DeathNotification& msg) {
-          OnTargetDeath(cellappmgr_target_, msg);
-        });
+        [this](const machined::BirthNotification& msg) { OnTargetBirth(cellappmgr_target_, msg); },
+        [this](const machined::DeathNotification& msg) { OnTargetDeath(cellappmgr_target_, msg); });
     (void)Network().InterfaceTable().RegisterTypedHandler<cellappmgr::HealthProbeAck>(
         [this](const Address& src, Channel* ch, const cellappmgr::HealthProbeAck& msg) {
           OnCellAppMgrHeartbeatAck(src, ch, msg);
@@ -127,22 +177,28 @@ auto Reviver::Init(int argc, char* argv[]) -> bool {
   if (TargetEnabled(baseappmgr_target_)) {
     GetMachinedClient().Subscribe(
         machined::ListenerType::kBoth, ProcessType::kBaseAppMgr,
-        [this](const machined::BirthNotification& msg) {
-          OnTargetBirth(baseappmgr_target_, msg);
-        },
-        [this](const machined::DeathNotification& msg) {
-          OnTargetDeath(baseappmgr_target_, msg);
-        });
+        [this](const machined::BirthNotification& msg) { OnTargetBirth(baseappmgr_target_, msg); },
+        [this](const machined::DeathNotification& msg) { OnTargetDeath(baseappmgr_target_, msg); });
     (void)Network().InterfaceTable().RegisterTypedHandler<baseappmgr::HealthProbeAck>(
         [this](const Address& src, Channel* ch, const baseappmgr::HealthProbeAck& msg) {
           OnBaseAppMgrHeartbeatAck(src, ch, msg);
+        });
+  }
+  if (TargetEnabled(dbappmgr_target_)) {
+    GetMachinedClient().Subscribe(
+        machined::ListenerType::kBoth, ProcessType::kDbAppMgr,
+        [this](const machined::BirthNotification& msg) { OnTargetBirth(dbappmgr_target_, msg); },
+        [this](const machined::DeathNotification& msg) { OnTargetDeath(dbappmgr_target_, msg); });
+    (void)Network().InterfaceTable().RegisterTypedHandler<dbappmgr::HealthProbeAck>(
+        [this](const Address& src, Channel* ch, const dbappmgr::HealthProbeAck& msg) {
+          OnDbAppMgrHeartbeatAck(src, ch, msg);
         });
   }
   return true;
 }
 
 void Reviver::Fini() {
-  for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_}) {
+  for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_, &dbappmgr_target_}) {
     if (tp->restart_timer.IsValid()) {
       (void)Dispatcher().CancelTimer(tp->restart_timer);
       tp->restart_timer = {};
@@ -156,18 +212,15 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
   const auto root = std::format("reviver/{}", t.slug);
   wr.Add<std::string>(root + "/status",
                       std::function<std::string()>([this, &t] { return TargetStatus(t); }));
-  wr.Add<bool>(root + "/active",
-               std::function<bool()>([&t] { return t.active; }));
-  wr.Add<uint32_t>(root + "/active_pid",
-                   std::function<uint32_t()>([&t] { return t.last_pid; }));
+  wr.Add<bool>(root + "/active", std::function<bool()>([&t] { return t.active; }));
+  wr.Add<uint32_t>(root + "/active_pid", std::function<uint32_t()>([&t] { return t.last_pid; }));
   wr.Add<uint64_t>(root + "/active_generation",
                    std::function<uint64_t()>([&t] { return t.active_generation; }));
   wr.Add<uint32_t>(root + "/launched_pid",
                    std::function<uint32_t()>([&t] { return t.launched.Pid(); }));
   wr.Add<std::string>(root + "/output_path",
                       std::function<std::string()>([&t] { return t.output_path.string(); }));
-  wr.Add<bool>(root + "/launch_pending",
-               std::function<bool()>([&t] { return t.launch_pending; }));
+  wr.Add<bool>(root + "/launch_pending", std::function<bool()>([&t] { return t.launch_pending; }));
   wr.Add<uint32_t>(root + "/restart_attempts",
                    std::function<uint32_t()>([&t] { return t.restart_attempts; }));
   wr.Add<uint64_t>(root + "/launch_count",
@@ -196,9 +249,9 @@ void Reviver::RegisterTargetWatchers(ManagedTarget& t) {
               std::function<int()>([&t] { return t.heartbeat_timeout_ms; }));
   wr.Add<uint64_t>(root + "/heartbeat_acks",
                    std::function<uint64_t()>([&t] { return t.heartbeat_ack_count; }));
-  wr.Add<int64_t>(root + "/heartbeat_last_ack_age_ms",
-                  std::function<int64_t()>(
-                      [this, &t] { return HeartbeatLastAckAgeMsForWatcher(t); }));
+  wr.Add<int64_t>(root + "/heartbeat_last_ack_age_ms", std::function<int64_t()>([this, &t] {
+                    return HeartbeatLastAckAgeMsForWatcher(t);
+                  }));
   wr.Add<uint64_t>(root + "/heartbeat_failures",
                    std::function<uint64_t()>([&t] { return t.heartbeat_failure_count; }));
   wr.Add<uint64_t>(root + "/heartbeat_timeouts",
@@ -223,9 +276,10 @@ void Reviver::RegisterWatchers() {
   ManagerApp::RegisterWatchers();
   RegisterTargetWatchers(cellappmgr_target_);
   RegisterTargetWatchers(baseappmgr_target_);
+  RegisterTargetWatchers(dbappmgr_target_);
 
-  // cellappmgr keeps the legacy reviver/leader/* watcher path for verify
-  // scripts; baseappmgr lives under reviver/baseappmgr/leader/*.
+  // cellappmgr keeps the legacy reviver/leader/* watcher path for verify;
+  // other targets live under reviver/<slug>/leader/*.
   auto& wr = GetWatcherRegistry();
   // "active" now means subject-designated active monitor (legacy alias kept so
   // verify scripts that watched the leader-lock flag still resolve).
@@ -233,10 +287,12 @@ void Reviver::RegisterWatchers() {
                std::function<bool()>([this] { return cellappmgr_target_.is_active_reviver; }));
   wr.Add<bool>("reviver/baseappmgr/leader/active",
                std::function<bool()>([this] { return baseappmgr_target_.is_active_reviver; }));
+  wr.Add<bool>("reviver/dbappmgr/leader/active",
+               std::function<bool()>([this] { return dbappmgr_target_.is_active_reviver; }));
 }
 
 void Reviver::OnTickComplete() {
-  for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_}) {
+  for (ManagedTarget* tp : {&cellappmgr_target_, &baseappmgr_target_, &dbappmgr_target_}) {
     if (!TargetEnabled(*tp)) continue;
     const bool supervise = ShouldSupervise(*tp);
     if (supervise) {
@@ -320,15 +376,15 @@ void Reviver::AuditRevive(ManagedTarget& t) {
   t.query_pending = true;
   GetMachinedClient().QueryAsync(t.process_type,
                                  [this, &t](std::vector<machined::ProcessInfo> infos) {
-    t.query_pending = false;
-    if (t.active) return;
-    for (const auto& info : infos) {
-      if (!MatchesTargetName(t, info.name)) continue;
-      RememberTarget(t, info.name, info.internal_addr, info.pid);
-      return;
-    }
-    ScheduleTargetRestart(t, Duration::zero());
-  });
+                                   t.query_pending = false;
+                                   if (t.active) return;
+                                   for (const auto& info : infos) {
+                                     if (!MatchesTargetName(t, info.name)) continue;
+                                     RememberTarget(t, info.name, info.internal_addr, info.pid);
+                                     return;
+                                   }
+                                   ScheduleTargetRestart(t, Duration::zero());
+                                 });
 }
 
 void Reviver::AuditTargetRegistry(ManagedTarget& t) {
@@ -342,8 +398,8 @@ void Reviver::AuditTargetRegistry(ManagedTarget& t) {
   ++t.registry_audit_count;
   GetMachinedClient().QueryAsync(t.process_type,
                                  [this, &t](std::vector<machined::ProcessInfo> infos) {
-    OnTargetRegistryAudit(t, std::move(infos));
-  });
+                                   OnTargetRegistryAudit(t, std::move(infos));
+                                 });
 }
 
 void Reviver::AuditTargetLaunch(ManagedTarget& t) {
@@ -408,8 +464,17 @@ void Reviver::SendHeartbeat(ManagedTarget& t) {
       t.heartbeat_pending_nonce = 0;
       RecordTargetHeartbeatFailure(t, "heartbeat send failed");
     }
-  } else {
+  } else if (t.process_type == ProcessType::kBaseAppMgr) {
     baseappmgr::HealthProbe msg;
+    msg.nonce = nonce;
+    msg.reviver_priority = t.priority;
+    if (auto send = (*ch)->SendMessage(msg); !send) {
+      t.heartbeat_pending = false;
+      t.heartbeat_pending_nonce = 0;
+      RecordTargetHeartbeatFailure(t, "heartbeat send failed");
+    }
+  } else {
+    dbappmgr::HealthProbe msg;
     msg.nonce = nonce;
     msg.reviver_priority = t.priority;
     if (auto send = (*ch)->SendMessage(msg); !send) {
@@ -469,6 +534,11 @@ void Reviver::OnCellAppMgrHeartbeatAck(const Address& src, Channel*,
 void Reviver::OnBaseAppMgrHeartbeatAck(const Address& src, Channel*,
                                        const baseappmgr::HealthProbeAck& msg) {
   RecordHeartbeatAck(baseappmgr_target_, src, msg.nonce, msg.game_time, msg.is_active_reviver);
+}
+
+void Reviver::OnDbAppMgrHeartbeatAck(const Address& src, Channel*,
+                                     const dbappmgr::HealthProbeAck& msg) {
+  RecordHeartbeatAck(dbappmgr_target_, src, msg.nonce, msg.game_time, msg.is_active_reviver);
 }
 
 void Reviver::AuditTargetHealth(ManagedTarget& t) {
@@ -655,20 +725,13 @@ void Reviver::LaunchTarget(ManagedTarget& t) {
   // configured (matches the legacy CellAppMgr behaviour).
   std::filesystem::path exe = t.exe;
   if (exe.empty()) {
-#if defined(_WIN32)
-    const auto kExeName = t.process_type == ProcessType::kCellAppMgr ? "atlas_cellappmgr.exe"
-                                                                      : "atlas_baseappmgr.exe";
-#else
-    const auto kExeName = t.process_type == ProcessType::kCellAppMgr ? "atlas_cellappmgr"
-                                                                      : "atlas_baseappmgr";
-#endif
+    const auto kExeName = TargetExeName(t.process_type);
     exe = !self_exe_.empty() ? self_exe_.parent_path() / kExeName : std::filesystem::path{kExeName};
   } else {
     exe = std::filesystem::absolute(exe);
   }
 
-  const uint16_t port =
-      t.internal_port != 0 ? t.internal_port : t.last_addr.Port();
+  const uint16_t port = t.internal_port != 0 ? t.internal_port : t.last_addr.Port();
 
   if (exe.empty() || !std::filesystem::exists(exe)) {
     ++t.launch_failures;
@@ -690,12 +753,10 @@ void Reviver::LaunchTarget(ManagedTarget& t) {
     args.push_back("--config");
     args.push_back(Config().config_path.string());
   }
-  args.insert(args.end(), {
-      "--type", t.process_type == ProcessType::kCellAppMgr ? "cellappmgr" : "baseappmgr",
-      "--name", t.configured_name,
-      "--internal-port", std::to_string(port),
-      "--machined", Config().machined_address.ToString(),
-      "--update-hertz", std::to_string(t.update_hertz)});
+  args.insert(args.end(), {"--type", std::string(TargetTypeArg(t.process_type)), "--name",
+                           t.configured_name, "--internal-port", std::to_string(port), "--machined",
+                           Config().machined_address.ToString(), "--update-hertz",
+                           std::to_string(t.update_hertz)});
 
   ProcessLaunchOptions opts;
   opts.exe = exe;

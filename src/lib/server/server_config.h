@@ -106,6 +106,14 @@ struct ServerConfig {
   int revive_baseappmgr_launch_timeout_ms{5000};
   int revive_baseappmgr_priority{255};
   bool revive_baseappmgr_on_start{false};
+  std::filesystem::path revive_dbappmgr_exe;
+  std::string revive_dbappmgr_name{"dbappmgr"};
+  uint16_t revive_dbappmgr_internal_port{0};
+  std::filesystem::path revive_dbappmgr_output_path;
+  int revive_dbappmgr_update_hertz{10};
+  int revive_dbappmgr_launch_timeout_ms{5000};
+  int revive_dbappmgr_priority{255};
+  bool revive_dbappmgr_on_start{false};
   int revive_restart_delay_ms{1000};
   // 0 disables backoff; positive cap doubles the base delay each attempt
   // up to backoff_cap_ms so a wedged exe can't burn the restart budget.

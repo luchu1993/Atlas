@@ -24,6 +24,9 @@ struct HealthProbeAck;
 namespace baseappmgr {
 struct HealthProbeAck;
 }
+namespace dbappmgr {
+struct HealthProbeAck;
+}
 
 class Reviver : public ManagerApp {
  public:
@@ -38,8 +41,8 @@ class Reviver : public ManagerApp {
   void OnTickComplete() override;
 
  private:
-  // One Reviver process supervises both CellAppMgr and BaseAppMgr; each
-  // target keeps its own priority, heartbeat, restart budget, watchers.
+  // One Reviver process can supervise multiple manager targets; each target
+  // keeps its own priority, heartbeat, restart budget, and watchers.
   struct ManagedTarget {
     ProcessType process_type;
     std::string slug;  // baked into reviver/<slug>/* watcher paths
@@ -155,8 +158,9 @@ class Reviver : public ManagerApp {
                                 const cellappmgr::HealthProbeAck& msg);
   void OnBaseAppMgrHeartbeatAck(const Address& src, Channel* ch,
                                 const baseappmgr::HealthProbeAck& msg);
-  void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce,
-                          uint64_t game_time, bool is_active_reviver);
+  void OnDbAppMgrHeartbeatAck(const Address& src, Channel* ch, const dbappmgr::HealthProbeAck& msg);
+  void RecordHeartbeatAck(ManagedTarget& t, const Address& src, uint64_t nonce, uint64_t game_time,
+                          bool is_active_reviver);
 
   // Whether this Reviver should run supervision/revive actions for t now: it
   // is the subject-designated active monitor, or the subject is down and this
@@ -173,6 +177,7 @@ class Reviver : public ManagerApp {
   std::filesystem::path self_exe_;
   ManagedTarget cellappmgr_target_;
   ManagedTarget baseappmgr_target_;
+  ManagedTarget dbappmgr_target_;
 };
 
 }  // namespace atlas
