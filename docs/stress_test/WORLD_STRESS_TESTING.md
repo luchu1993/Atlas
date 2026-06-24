@@ -520,7 +520,58 @@ Reviver,等待 standby 通过 lease 接管同一 BaseAppMgr(不重启 mgr)。
 summary JSON 的 `current.leader_lock` 和 `current.reviver_failover` 段记录所有
 观测到的指标,适合直接归档到 CI baseline。
 
-### 4.8 P4 高密度 AoI
+### 4.8 DBAppMgr HA 验证
+
+要让 Reviver 监督 DBAppMgr,给 Reviver 启动传入 `--revive-dbappmgr-*`
+参数,或在 config JSON 的 `reviver.dbappmgr` 段配置 exe/name/port。
+
+集群起来后:
+
+```powershell
+tools\bin\verify_dbappmgr_ha.bat --min-dbapps 1 --timeout-sec 90
+```
+
+Linux / macOS:
+
+```bash
+tools/bin/verify_dbappmgr_ha.sh --min-dbapps 1 --timeout-sec 90
+```
+
+非破坏性巡检:
+
+```powershell
+tools\bin\verify_dbappmgr_ha.bat --no-inject --summary-json .tmp\dbappmgr_ha.json
+```
+
+注入异常关闭并设 SLO gate:
+
+```powershell
+tools\bin\verify_dbappmgr_ha.bat `
+  --cycles 2 `
+  --max-takeover-ms 20000 `
+  --summary-json .tmp\dbappmgr_ha_cycles.json
+```
+
+验收:脚本打印 `PASS`,`dbappmgr/dbapp_count` 恢复到 DBApp 数量,
+`dbappmgr/shards/count > 0`,`dbappmgr/shards/version > 0`,
+`reviver/dbappmgr/active_pid` 等于新 DBAppMgr pid,
+`reviver/dbappmgr/heartbeat_acks > 0`,且无 `last_error`。
+
+多 Reviver monitor 接管:
+
+```powershell
+tools\bin\verify_dbappmgr_ha.bat `
+  --min-revivers 2 `
+  --verify-reviver-failover `
+  --max-reviver-failover-ms 10000 `
+  --no-inject `
+  --summary-json .tmp\dbappmgr_reviver_failover.json
+```
+
+`--verify-reviver-failover` 会关闭当前 DBAppMgr active monitor Reviver,
+等待 standby 接管同一个 DBAppMgr(不重启 mgr)。
+
+### 4.9 P4 高密度 AoI
 
 ```powershell
 tools\bin\run_world_stress.bat `

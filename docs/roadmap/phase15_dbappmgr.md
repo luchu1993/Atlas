@@ -1,6 +1,6 @@
 # Phase 15: DBAppMgr — 多 DBApp 分片管理 + HA
 
-**Status:** 🚧 P15.2 HA 中 — DBAppMgr 进程骨架、DBApp 注册、range shard
+**Status:** ✅ P15.2 主线 — DBAppMgr 进程骨架、DBApp 注册、range shard
 table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元测试
 已起步；BaseApp shard cache 与 dbid 路由、LoginApp shard cache 与 username
 auth shard 路由、DBApp request version 校验和 request idempotency cache 已接入，
@@ -9,7 +9,7 @@ XML duplicate guard、duplicate retry、BaseApp WriteToDB death retry、
 BaseApp login checkout death retry、LoginApp auth death retry 和 BaseApp
 logoff death retry 已接入；`RecoverDBAppState` worker shard 重报、
 DBAppMgr recovery window 冻结恢复注册 split、`known_app_id` echo、
-Reviver dbappmgr target 已接入；HA verify 脚本未完成。
+Reviver dbappmgr target、HA verify 脚本已接入。
 **Prereq:** Phase 7(DBApp + DB 层),Phase 13(Manager HA 框架已就位)
 **BigWorld 参考:** `server/dbmgr/`
 
@@ -133,7 +133,7 @@ recovery 窗口内等存活 DBApp 重注册并重报权威状态,从 worker 报�
 | P15.2-S1 | ✅ DBApp `RecoverDBAppState` 重报 shard ranges；DBAppMgr recovery window 内冻结恢复注册 split |
 | P15.2-S2 | ✅ `RegisterDBApp.known_app_id` echo 保留 dbapp_id |
 | P15.2-S3 | ✅ Reviver 多 target 加 dbappmgr |
-| P15.2-S4 | ⏳ verify_dbappmgr_ha.py + docs |
+| P15.2-S4 | ✅ verify_dbappmgr_ha.py + docs |
 
 worker 重报的权威状态:
 - DBApp 表(addr, dbapp_id, shard ranges, is_retiring, last_load_at)——由重注册
@@ -210,7 +210,7 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
 | P15.2-S1 | DBApp worker shard 重报 + recovery window | 已接入 |
 | P15.2-S2 | `known_app_id` echo 保留 dbapp_id | 已接入 |
 | P15.2-S3 | Reviver dbappmgr target | 已接入 |
-| P15.2-S4 | HA verify/docs | 未完成 |
+| P15.2-S4 | HA verify/docs | 已接入 |
 | 单测 + 集成测试 | | ~1500 行 |
 | 文档 | phase15 主文档 + verify 脚本 + ops 指南 | ~800 行 |
 | **总计** | | **~7600 行** |
@@ -234,6 +234,6 @@ Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
       `--revive-dbappmgr-on-start` 与 cellappmgr / baseappmgr 对齐。
 - [x] Shard table 是否在 watcher 中暴露(便于 ops debug)? → 是,
       `dbappmgr/shards/table` 摘要 + `shards/version`。
-- [ ] verify_dbappmgr_ha.py 是否复用 verify_baseappmgr_ha 的 90% 代码,
-      还是抽 verify-common 模块? → 先复用 + copy,等第三个 mgr verify
-      后再做共享(参考 second-use 原则)。
+- [x] verify_dbappmgr_ha.py 覆盖 DBAppMgr restart / worker shard rebuild /
+      Reviver monitor failover；当前先 copy BaseAppMgr verify 的通用结构,
+      等第三个 mgr verify 后再抽共享模块(参考 second-use 原则)。
