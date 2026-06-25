@@ -1,5 +1,7 @@
 # Script-Client Smoke 手册
 
+> 状态: 当前 `world_stress --script-clients` 工具说明；留档基线不是最新验收结果
+>
 运行 `world_stress --script-clients N` 的各种场景。`--script-clients` 模式会拉起真实的
 `atlas_client.exe` 子进程（不是裸协议虚拟 client），通过子进程 stdout 解析
 `[StressAvatar:<id>] <Event>` 日志计事件数，用来验证服务端属性 / 位置变更是否端到端到达客户端脚本
@@ -21,27 +23,29 @@
 它以 10 Hz 发送 movement input，收到 `MovementStateAck` 后用 native
 predictor replay 未确认输入，并向 BaseApp 回报 correction telemetry。
 
-服务端节律：`samples/stress/Atlas.StressTest.Cell/StressAvatar.cs::OnTick` 以 1 Hz 把 HP 从 100 递减到 1 再回到 100 循环 —— 所有场景里 `hp` 的期望计数都以这个节律为基准。
+服务端节律：
+[`StressTimerComponent.cs`](../../samples/stress/Atlas.StressTest.Cell/StressTimerComponent.cs)
+的 `OnTick` 以 1 Hz 把 HP 从 100 递减到 1 再回到 100 循环 —— 所有场景里
+`hp` 的期望计数都以这个节律为基准。
 
 ---
 
-## 场景总览（基线数字，2026-05-24）
+## 场景总览（留档基线）
 
-4 个场景的典型输出。偏差 ≤±2 属正常 tick 边界抖动，偏差更大再复查。
+以下数字来自 2026-05-24 本地测量；当前判断需重新运行本节命令刷新。
+偏差 ≤±2 属正常 tick 边界抖动，偏差更大再复查。
 
 | 场景 | 主题 | 命令（简化） | hp | gaps |
 |---|---|---|---:|---:|
 | 1 | AoI 广播事件计数（多 peer 负载） | `... --clients 50 --duration-sec 30` | ~669 | **0** |
 | 2 | 应用层丢包（reliable 属性）| `... --client-drop-inbound-ms 5000 4000` | 31 | 8 |
 | 3 | 传输层丢包（RUDP 重传验证） | `... --client-drop-transport-ms 5000 4000` | **39** | **0** |
-| 4 | 应用层丢包（unreliable 属性 + baseline 兜底）| `python tools\cluster_control\run_unreliable_recovery.py` | 31-33 | 6-8 |
 
 **关键对比**：
 
 - **场景 2 vs 3** — 同样是 4 秒丢包窗口，**app 层 drop 丢 8 条事件**（`hp=31 gaps=8`），**transport 层 drop 由 RUDP 自动重传补齐**（`hp=39 gaps=0`）。这对组合是 reliable retransmit 工作的决定性证据。
-- **场景 2 vs 4** — app 层 drop 对 reliable / unreliable 无区分（都丢 8 条），差异在**字段层面**：场景 4 下 baseline pump 每 ~6 s 静默拉回 `_hp` 真值，场景 2 下 reliable channel 已经 ACK 过所以无重传需要。脚本事件计数几乎一样。
 
-**不变量**（场景 2-4 通用）：`hp + gaps ≈ duration_sec × peer_count × 1 Hz`，双 script client 互为 peer 时 `peer_count=2`。这个和对应服务端实际产生的 HP delta 总数。
+**不变量**（场景 2-3 通用）：`hp + gaps ≈ duration_sec × peer_count × 1 Hz`，双 script client 互为 peer 时 `peer_count=2`。这个和对应服务端实际产生的 HP delta 总数。
 
 ---
 
@@ -107,7 +111,11 @@ ack 和 step p95。单元格为 `?` 表示该 watcher 查询失败。
 
 ## 场景 2：应用层丢包（reliable 属性）
 
-2 个 script client 互为 peer，在第 5-9 秒由 **client 的应用层**（`client_app.cc::MainLoop` 默认 handler）丢弃入站 state-channel 消息。此时 RUDP 已经 ACK 过 —— 发送方不知道包丢了，**不会触发重传**，丢的事件就永久丢失，`event_seq` 跳号被 client 检出累加到 `gaps`。
+2 个 script client 互为 peer，在第 5-9 秒由 **client 的应用层**
+（`ClientApp::RegisterMessageHandlers` 安装的 default handler）丢弃入站
+state-channel 消息。此时 RUDP 已经 ACK 过 —— 发送方不知道包丢了，
+**不会触发重传**，丢的事件就永久丢失，`event_seq` 跳号被 client 检出累加到
+`gaps`。
 
 ```bash
 tools/bin/run_world_stress.sh \
@@ -127,6 +135,28 @@ tools/bin/run_world_stress.sh \
 ```
 
 验证 `hp + gaps = 31 + 8 = 39 ≈ 40`（2 avatars × 20 s × 1 Hz），8 个被丢的 reliable delta 精确转化为 8 个 `event_seq` 跳号。
+
+---
+
+## 场景 2b：`reliable` 元数据保留回归
+
+`.def` 上的 `reliable` 属性当前仍写入描述符，但生成的 property delta 全部走
+reliable 通道；per-property unreliable 尚未接入。`run_unreliable_recovery`
+只验证这个元数据边界不会破坏构建和场景 2 的应用层丢包恢复 smoke。
+
+```powershell
+tools\bin\run_unreliable_recovery.bat
+```
+
+```bash
+tools/bin/run_unreliable_recovery.sh
+```
+
+脚本会临时把 `entity_defs/StressAvatar.def` 中 `hp` 的
+`reliable="true"` 改为 `false`，重建受影响的 native / C# target，再通过
+`run_world_stress --client-drop-inbound-ms 5000 4000` 跑场景 2 smoke。最后在
+`finally` 中恢复为 `reliable="true"` 并再次重建。`--skip-restore` 只用于调试
+helper 本身；不要带着 `reliable="false"` 提交。
 
 ---
 
@@ -155,28 +185,11 @@ tools/bin/run_world_stress.sh \
 
 ---
 
-## 场景 4：应用层丢包（unreliable 属性 + baseline 兜底）
-
-把 `StressAvatar.hp` 标成 `reliable="false"`，跑场景 2 同样的丢窗口。unreliable 通道无 RUDP 重传，靠 **CellApp-side baseline pump** 每 `kClientBaselineIntervalTicks = 120` tick（~6 s）发一次全量 owner snapshot 来把 `_hp` 字段拉回真值。
-
-一键 runner 包装了 patch → rebuild → smoke → restore，`try/finally` 保证 def 退出时一定回到 `reliable="true"`：
-
-```bash
-python tools/cluster_control/run_unreliable_recovery.py  # 默认 20s / drop 5..9s
-python tools/cluster_control/run_unreliable_recovery.py --duration-sec 30
-```
-
-跑出来的 `hp / gaps` 和场景 2 几乎相同（因为 `--client-drop-inbound-ms` 是应用层过滤，不区分 reliable / unreliable）。**差异在字段层面而非脚本层面**：baseline 静默把 `_hp` 拉回服务端真值，脚本看不到补调的事件（见 [property_sync_design.md §5](../property_sync/property_sync_design.md#5-客户端接收侧bigworld-对齐的回调语义) 的回调触发规则）。
-
-想看 baseline 实际收敛可以给 `StressAvatar.cs` 加周期性字段打印（`Hp` 值每 30 tick 打一次），观察 drop 窗口结束后 6 s 内值从 drop-前值漂移到服务端当前值。
-
----
-
 ## 两种丢包注入点对照
 
 | Flag | 注入层 | 时机 | 用途 |
 |---|---|---|---|
-| `--drop-inbound-ms <s> <d>` | 应用层（`client_app.cc::MainLoop` 默认 handler） | RUDP 已 ACK 之后 | 验证 app 层的 gap 检测、baseline 兜底路径（场景 2 / 4） |
+| `--drop-inbound-ms <s> <d>` | 应用层（`ClientApp::RegisterMessageHandlers` default handler） | RUDP 已 ACK 之后 | 验证 app 层的 gap 检测、baseline 兜底路径（场景 2） |
 | `--drop-transport-ms <s> <d>` | 传输层（`ReliableUdpChannel::OnDatagramReceived`） | ACK 生成之前 | 验证 RUDP reliable 重传路径（场景 3） |
 
 两个 flag 可以同时开（应用层先丢、传输层再丢），实际场景通常只开一个。
@@ -193,7 +206,7 @@ python tools/cluster_control/run_unreliable_recovery.py --duration-sec 30
 | `[StressAvatar:42] OnInit` | `on_init` | 工厂刚创建实例（enter 或玩家自身） |
 | `[StressAvatar:42] OnEnterWorld pos=(..) hp=..` | `on_enter_world` | `kEntityEnter` 信封初始快照应用完毕 |
 | `[StressAvatar:42] OnDestroy` | `on_destroy` | `kEntityLeave` 或登出 |
-| `[StressAvatar:42] OnHpChanged old=X new=Y` | `on_hp_changed` | **只由 delta 通道触发**（`0xF001` / `0xF003` kEntityPropertyUpdate → `ApplyReplicatedDelta`）；**baseline `0xF002` 不触发**（`ApplyOwnerSnapshot` 直写字段） |
+| `[StressAvatar:42] OnHpChanged old=X new=Y` | `on_hp_changed` | **只由 reliable delta 通道触发**（`0xF003` kEntityPropertyUpdate → `ApplyReplicatedDelta`）；**baseline `0xF002` 不触发**（`ApplyOwnerSnapshot` 直写字段） |
 | `[StressAvatar:42] OnPositionUpdated pos=(..)` | `on_position_updated` | volatile delta `0xF001` kEntityPositionUpdate |
 | `[StressAvatar:42] OnMovementInputSent seq=N tick=T count=C` | `mIn` | owner 本地预测后发送 movement input |
 | `[StressAvatar:42] OnMovementCorrection ack=A tick=T tier=N distance=D` | `mAck / mc1 / mc2 / snap` | owner 收到 `MovementStateAck` 后 replay 并回报 correction tier |

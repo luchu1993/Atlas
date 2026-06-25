@@ -1,11 +1,10 @@
 # BigWorld RPC 机制参考
 
+> 状态: 参考资料。本文聚焦 BigWorld 原始机制；Atlas 当前 RPC wire
+> contract 见 [Atlas RPC wire contract](../rpc/RPC_AUDIT_REMEDIATION.md)。
+>
 > 来源: BigWorld Engine 14.4.1 源码分析
 > 关联: [Entity Mailbox 设计](../scripting/entity_mailbox_design.md) | [Phase 8 BaseApp](../roadmap/phase08_baseapp.md) | [Phase 10 CellApp](../roadmap/phase10_cellapp.md)
->
-> 本文档聚焦 **BigWorld 原始机制**。Atlas 侧的实现以代码为准；2026-04 RPC
-> 审计列出的缺陷与安全加固项已合入主线，背景速查见
-> [Atlas RPC 审计修复](../rpc/RPC_AUDIT_REMEDIATION.md)。
 
 ---
 
@@ -1012,5 +1011,5 @@ MERCURY_METHOD_RANGE_MSG( entityMethod, 2 ) // 方法消息范围
 | 7. 需要 Exposed? | Yes | Yes | No | No | No | No |
 | 8. sourceID 验证 | OWN_CLIENT 时 | No | No | No | N/A | N/A |
 
-> Atlas 侧 2026-04 RPC 审计项已修复；背景速查见
-> [Atlas RPC 审计修复](../rpc/RPC_AUDIT_REMEDIATION.md)。
+> Atlas 侧当前 RPC ID 与 wire 字段速查见
+> [Atlas RPC wire contract](../rpc/RPC_AUDIT_REMEDIATION.md)。

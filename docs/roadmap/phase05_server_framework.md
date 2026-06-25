@@ -8,8 +8,9 @@
 ## 目标
 
 为所有 Atlas 服务器进程提供统一运行时骨架。每个进程继承适当层级的基类，
-注册消息处理器后即获得：事件循环、网络通信、C# 脚本集成、定时器、
-后台任务、信号处理、运行时监控。
+注册消息处理器后即获得事件循环、网络通信、定时器、信号处理和运行时
+监控；BaseApp / CellApp 通过 `ScriptApp` / `EntityApp` 额外获得 C# 脚本
+宿主与后台任务能力。
 
 ## 类层次
 
@@ -56,5 +57,6 @@ ServerApp                — 事件循环、GameClock、信号、Updatable、Wat
 | 6000 – 6999 | BaseAppMgr 接口 |
 | 7000 – 7999 | CellAppMgr 接口 |
 | 8000 – 8999 | DBAppMgr 接口 |
-| 10000 – 19999 | 外部接口（客户端 ↔ 服务器） |
-| 50000 – 59999 | C# RPC 转发 |
+| 10000 – 19999 | 预留外部接口 |
+| 0xF000 – 0xF0FF | 客户端下行 envelope；当前使用 `0xF001`–`0xF007` |
+| 32-bit `rpc_id` | Source Generator RPC 标识；不占用 `MessageID` 段 |

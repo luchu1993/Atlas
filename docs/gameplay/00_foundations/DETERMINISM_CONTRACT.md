@@ -4,7 +4,8 @@
 >
 > **读者**：所有游戏逻辑开发者（C++ 与 C#）、工具链开发者。不涉及渲染、音效、UI 开发者。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标契约。当前工程已有 movement parity、physics backend parity
+> 与 C# generator/runtime 测试；完整玩法端同回放与战斗确定性套件仍未落地。
 >
 > **前置文档**：`OVERVIEW.md`
 >
@@ -34,7 +35,7 @@ Atlas 的多个核心能力**建立在端同仿真一致性之上**：
 
 ### 2.1 必须确定性的代码
 
-- **移动仿真**（`src/lib/movement/` C++ native plugin）
+- **移动仿真**（`src/lib/movement_sim/` C++ shared simulation core）
 - **技能执行**（Timeline + State Machine runtime，`Atlas.CombatCore` C#）
 - **Buff 系统**（状态变化、modifier 计算）
 - **命中判定**（hitbox 碰撞、伤害计算）
@@ -122,7 +123,8 @@ C# 的浮点确定性有**特殊复杂度**：
 - 结果按字节比较
 - 任一不一致 → 阻塞合并
 
-**首次触发条件**：Phase 0 地基搭建完毕时必须建立，不得延后。
+**首次触发条件**：任何 deterministic core、movement_sim 或战斗结算逻辑变更
+进入主线前必须建立或更新对应跨平台字节一致性验证。
 
 ---
 
@@ -145,14 +147,17 @@ C#：
 - `RandomNumberGenerator.Create()` ← 加密级，非确定
 - `Guid.NewGuid()` 用于仿真 ← 基于 MAC 地址和时间
 
-### 4.2 Atlas 指定 RNG
+### 4.2 Atlas 指定 RNG（目标）
 
 **算法**：`xoshiro256**`（质量好、快、state 小、周期长）
 
-**接口**（端共享，C++ 与 C# 各一份，位比特一致）：
+**状态**：当前仓库尚未提供可复用的 `DeterministicRng` C++ / C# 实现。
+在该接口落地前，权威 gameplay 逻辑不得引入随机分支；必须使用随机的模块先补齐
+等价实现和跨语言测试。
+
+**目标接口**（端共享，C++ 与 C# 各一份，位比特一致）：
 
 ```cpp
-// src/lib/foundation/deterministic_rng.h
 namespace atlas {
 class DeterministicRng {
  public:
@@ -239,11 +244,15 @@ event_time = tick × tick_duration_us + intra_tick_us
 
 ### 5.3 客户端时间
 
-客户端的 `server_tick` 由**时间同步协议**估算（见 `NETWORK_PROTOCOL.md`）：
+目标客户端时间同步服务会估算 `server_tick`：
 - 周期性握手样本
 - 滑动窗口取最小 RTT 样本
 - EMA 平滑
 - 永远只是估算，客户端做"我猜服务端现在是 tick X"的预测
+
+当前已落地的移动路径通过 `MovementStateAck` / `MovementCommand` 下发
+`server_tick`，供 owner predictor 和移动命令播放使用；通用时间同步协议尚未
+单独落地。
 
 ### 5.4 允许的 wall clock 用途
 
@@ -262,6 +271,9 @@ event_time = tick × tick_duration_us + intra_tick_us
 ---
 
 ## 6. 坐标规约
+
+本节是大地图精度目标契约。当前引擎实体位置仍以 Space 内 `Vector3` 表示；
+cell-local 坐标需要等大地图精度扩展落地后再接入运行时。
 
 ### 6.1 实体位置表示
 
@@ -365,9 +377,9 @@ foreach (var entity in entities) {  // 若 entities 是 HashSet 禁止
 
 | API | 禁止原因 | 替代 |
 |---|---|---|
-| `rand()`, `srand()` | libc 实现差异 | `DeterministicRng` |
-| `std::mt19937` | 行为不完全规定 | `DeterministicRng` |
-| `std::random_device` | 非确定 | `DeterministicRng` |
+| `rand()`, `srand()` | libc 实现差异 | `DeterministicRng`（待落地） |
+| `std::mt19937` | 行为不完全规定 | `DeterministicRng`（待落地） |
+| `std::random_device` | 非确定 | `DeterministicRng`（待落地） |
 | `std::chrono::system_clock::now()` | 墙钟 | `ctx.CurrentTick()` |
 | `std::chrono::steady_clock::now()` | 墙钟 | `ctx.CurrentTick()` |
 | `std::sin/cos/tan/exp/log/pow` | libc 差异 | `Atlas::Math::Sin` 等 |
@@ -382,8 +394,8 @@ foreach (var entity in entities) {  // 若 entities 是 HashSet 禁止
 
 | API | 禁止原因 | 替代 |
 |---|---|---|
-| `System.Random`（默认构造） | 基于时钟 | `DeterministicRng` |
-| `UnityEngine.Random` | 全局状态 | `DeterministicRng` |
+| `System.Random`（默认构造） | 基于时钟 | `DeterministicRng`（待落地） |
+| `UnityEngine.Random` | 全局状态 | `DeterministicRng`（待落地） |
 | `DateTime.Now / UtcNow` | 墙钟 | `ctx.CurrentTick` |
 | `Environment.TickCount` | 墙钟 | `ctx.CurrentTick` |
 | `System.Math.*` 权威计算 | JIT 差异 | `Atlas.CombatCore.Math.*` |
@@ -574,11 +586,14 @@ Atlas 选择自研是**根治不确定性**，避免未来升级 .NET 版本或�
 - 本地测试用例失效
 - 和解 bug 定位困难
 
-可以提供 **`ATLAS_ASSUME_DETERMINISTIC` 宏**：启用时禁用某些运行时检查（减少开销），但代码路径完全相同。
+未来若 profiler 证明检查成本过高，可新增 **`ATLAS_ASSUME_DETERMINISTIC` 宏**：
+启用时只禁用部分运行时检查（减少开销），但代码路径必须完全相同。当前代码树
+尚未提供该宏。
 
 ### Q10: 确定性和 AI 的兼容性？
 
-AI 决策常用随机（巡逻方向、攻击选择），**这些随机必须走 `DeterministicRng`**。
+AI 决策常用随机（巡逻方向、攻击选择），**这些随机必须走待落地的
+`DeterministicRng`**。
 - 不能说 "AI 反正不精确，用 `UnityEngine.Random` 图方便"
 - AI 回放同样是调试工具，没有确定性无法重现 boss bug
 
@@ -604,7 +619,7 @@ AI 决策常用随机（巡逻方向、攻击选择），**这些随机必须走
   - `OVERVIEW.md`（§4 Day-1 硬决策引用本文）
   - `02_sync/MOVEMENT_SYNC.md`（位置仿真依赖本文 §3 §6）
   - `03_combat/SKILL_SYSTEM.md`（技能执行依赖本文 §4 §5）
-  - `09_tools/LOAD_TESTING.md`（端同验证工具链）
+  - `../../stress_test/WORLD_STRESS_TESTING.md`（压力与回归验证入口）
 
 ---
 

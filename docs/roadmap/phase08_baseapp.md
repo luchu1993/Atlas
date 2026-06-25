@@ -1,7 +1,8 @@
 # Phase 8: BaseApp — 实体宿主与客户端代理
 
 **Status:** ✅ 完成。`ClientCellRpc` 与 AOI 多观察者 fan-out 已在 Phase 10
-落地；`EnableEntities` / `HeartbeatPing` 仍由 Phase 12 承接。
+落地；Phase 12 已交付 `atlas_net_client` / `Atlas.Client` 登录、认证、AoI
+和 RPC 客户端链路。
 **前置依赖:** Phase 7 (DBApp)、Phase 5 (ScriptApp/EntityApp)、脚本层实体
 与 RPC 子集（[`docs/scripting/`](../scripting/)）
 **BigWorld 参考:** `server/baseapp/baseapp.hpp`, `base.hpp`, `proxy.hpp`
@@ -33,9 +34,9 @@ BaseApp : EntityApp : ScriptApp : ServerApp
   `OnExternalClientDisconnect` 按 Address 查找。
 - **异步销毁** — `MarkForDestroy` + `WriteEntityAck` 回调驱动真正释放；
   `writing_to_db_` 阻止重入。
-- **属性同步** — C# 主动推送 delta blob 到 NativeApi，C++ 按字节预算转发
-  （`DeltaForwarder`，16 KB/tick）；reliable 属性走独立通道；
-  `kBaselineInterval = 30 ticks` 定期发送 owner-scope 全量快照兜底 UDP 丢包。
+- **属性同步** — C# 主动推送 delta blob 到 NativeApi，volatile 位置流经
+  `DeltaForwarder`（16 KB/tick）；property delta 走 reliable 独立通道；
+  `kBaselineInterval = 30 ticks` 定期发送 owner-scope 全量快照兜底重同步。
   同实体新 delta 替换旧 delta，`deferred_ticks` 递增防饥饿。
 - **登录鲁棒性** — `PrepareLogin` → checkout → (冲突时) `ForceLogoff` +
   指数退避 → blob prefetch → `AuthenticateResult`；支持取消、回滚、
@@ -44,10 +45,10 @@ BaseApp : EntityApp : ScriptApp : ServerApp
   `FindProxyBySession` 校验 session_key；认证前仅允许 `Authenticate`；
   `EntityDefRegistry::FindRpc` 校验 exposed scope。
 
-### 由后续 Phase 承接
+### 当前边界
 
-| 功能 | 承接阶段 |
+| 功能 | 状态 |
 |---|---|
-| `EnableEntities` / `CreateBasePlayer` / `ResetEntities` | Phase 12 SDK |
-| 实体备份（BackupHash）多 BaseApp 冗余 | Phase 13 |
+| BigWorld `EnableEntities` / `CreateBasePlayer` / `ResetEntities` 独立消息 | Atlas 当前不采用这组 wire contract；登录 / 认证 / 绑定已由 Phase 9 + Phase 12 路径覆盖 |
+| 实体备份（BackupHash）多 BaseApp 冗余 | 未实现；Phase 13 当前覆盖 Manager HA，不覆盖 BaseApp 业务状态冗余 |
 | DataDownloads / Global Bases 广播 / 客户端 TLS | 按需 |

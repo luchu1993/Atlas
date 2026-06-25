@@ -26,7 +26,7 @@ from common.cluster import (
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bring up a local Atlas cluster and run login_stress.")
-    parser.add_argument("--build-dir", default="build/debug-windows")
+    parser.add_argument("--build-dir", default="build/debug")
     parser.add_argument("--config", default="Debug")
     parser.add_argument("--machined-host", default="127.0.0.1")
     parser.add_argument("--machined-port", type=int, default=20018)

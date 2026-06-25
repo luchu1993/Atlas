@@ -1,6 +1,7 @@
 # C# 协程基础设施
 
-> 状态：✅ 已落地
+> 状态：✅ Runtime / awaitable / BaseApp RPC await 主线已落地；CellApp 主动
+> await 与部分 analyzer 规则仍是已知限制，见 §9。
 > 关联：[C++ 协程基础设施](cpp_coroutine_design.md) | [脚本架构](../scripting/native_api_architecture.md)
 
 ---
@@ -73,7 +74,8 @@ post 装箱 `SendOrPostCallback`，`ConfigureAwait(false)` 又破坏"恢复必�
 ```
 
 `AtlasTask` 类型本身在 `Atlas.Shared/Coro/` 下，目标 `netstandard2.1`，
-二进制兼容 .NET 服务端与 Unity 2022 IL2CPP 客户端。
+二进制兼容 .NET 服务端与当前 MVP Unity 6 Mono / IL2CPP 客户端，同时保持
+Unity 2022.3 LTS+ 可用的 netstandard2.1 表面。
 
 ---
 
@@ -260,8 +262,8 @@ reply 写回、错误翻译、LifecycleCancellation 联动。
   `return RpcReply<T>.Fail(...)`
 - **Lifecycle-aware** —— 不假装跨进程迁移状态机；offload / destroy /
   hot-reload 显式 cancel + 业务重试
-- **兼容性** —— netstandard2.1 / Unity 2022 (C# 9) / IL2CPP AOT 全栈，无
-  `static abstract`、无运行期反射
+- **兼容性** —— netstandard2.1 / 当前 MVP Unity 6（保持 Unity 2022.3 LTS+
+  可用子集）/ IL2CPP AOT 全栈，无 `static abstract`、无运行期反射
 - **复用现有基建** —— `PendingRpcRegistry` / `coro_bridge` /
   `AtlasRpcSource` / `RpcArgCodec` / `.def` 解析全部沿用
 
@@ -436,10 +438,11 @@ unload 路径。
 | `AtlasTaskSourceBox<TStateMachine, T>` | builder 挂起时承载状态机 + source |
 | `AtlasRpcSource<T>` | 单次 RPC 等待 |
 | `WaitUntilAwaitable` | predicate poll |
+| `DelayAwaitable` | timer / PlayerLoop delay |
 
 池满 fallback 到 `new` —— 不抛、不阻塞。其他 awaitable（`WhenAll` /
-`WhenAny` / `BgWorkSource` / `DelayAwaitable`）每次 await 直接 `new`，
-后续若 profiler 显示热点再挂入池。
+`WhenAny` / `BgWorkSource`）每次 await 直接 `new`，后续若 profiler
+显示热点再挂入池。
 
 GC 验证靠 `tests/csharp` 里的 stress 用例 + `Atlas.Runtime.Diagnostics`
 里的运行期监控。

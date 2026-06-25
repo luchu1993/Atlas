@@ -4,11 +4,13 @@
 >
 > **读者**：工程（必读）、网络工程师（必读）、客户端开发（§7 必读）、运维（§8 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：部分落地。distance LOD、adaptive bandwidth、group broadcast
+> 和 witness channel cache 已进入优化基线；更高层的密度自适应策略仍按 fresh
+> profile 触发。
 >
 > **前置文档**：`OVERVIEW.md`、`CELL_ARCHITECTURE.md`、`GHOST_ENTITY.md`、`MOVEMENT_SYNC.md`
 >
-> **关联文档**：`ENTITY_SNAPSHOT.md`（快照格式细节，待写）、`COMBAT_EVENT_ORDERING.md`（事件通道独立）
+> **关联文档**：`ENTITY_SNAPSHOT.md`（快照格式细节）、`COMBAT_EVENT_ORDERING.md`（事件通道独立）
 
 ---
 
@@ -598,8 +600,8 @@ OVERVIEW 设定 5000，实际能力可能 8000–10000。超出后需要分服�
   - `GHOST_ENTITY.md`（Ghost AoI 上游）
   - `MOVEMENT_SYNC.md §6`（远端实体插值消费快照）
   - `COMBAT_EVENT_ORDERING.md`（事件通道独立性）
-  - `ENTITY_SNAPSHOT.md`（快照格式细节，待写）
-  - `09_tools/LOAD_TESTING.md`（5000 并发压测，待写）
+  - `ENTITY_SNAPSHOT.md`（快照格式细节）
+  - `../../stress_test/WORLD_STRESS_TESTING.md`（集群压测）
 
 ---
 

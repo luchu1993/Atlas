@@ -1,6 +1,7 @@
 # Atlas 全链路压测说明
 
-> 更新时间: 2026-05-24
+> 状态: 当前 `world_stress` 工具说明；历史数字只作留档，判断当前状态需重跑对应命令
+> 更新时间: 2026-06-24
 > 适用范围: LoginApp / BaseApp / DBApp / BaseAppMgr / CellAppMgr / CellApp 的端到端登录、世界态进入、cell RPC、AoI、短线重登压测
 
 ## 1. 目标
@@ -24,9 +25,11 @@ client
    ├── ← EntityTransferred (客户端切换到 StressAvatar)
    ├── ← CellReady         (cell 已绑定，安全发 cell RPC)
    ├── ClientCellRpc → StressAvatar.Echo  (cell 侧 RPC 回环)
-   │     └── Client.EchoReply → SelfRpcFromCell → client
-   ├── ClientCellRpc → StressAvatar.ReportPos (位置更新 + AoI 广播)
+   │     └── Client.EchoReply → BroadcastRpcFromCell → BaseApp → client
+   ├── move-mode=report-pos: ClientCellRpc → StressAvatar.ReportPos
    │     └── Position 属性 → 邻居收 kEntityPositionUpdate
+   ├── move-mode=input: ClientMovementInput → BaseApp → CellApp
+   │     └── MovementStateAck → owner client
    └── Disconnect / shortline / reconnect
          └── OnExternalClientDisconnect
                ├── UnbindClient → cellapp::DisableWitness  (witness 立即释放)
@@ -48,17 +51,23 @@ client
   验证；通过 machined abnormal shutdown 一个持 leaf 的 CellApp，并轮询
   CellAppMgr / BaseApp watcher 直到 BSP leaf 全部 rehome。
 - `tools/bin/verify_cellappmgr_ha.{bat,sh}` — live cluster CellAppMgr HA 验证；
-  通过 machined 注入 abnormal shutdown，等待 Reviver 重启 mgr，并验证 snapshot
-  restore、direct heartbeat 和 CellApp reattach 收敛。
+  通过 machined 注入 abnormal shutdown，等待 Reviver 重启 mgr，并验证
+  worker-rebuild recovery、direct heartbeat 和 CellApp 重注册 / BSP 重报收敛。
+- `tools/bin/dump_cellapp_load.{bat,sh}` — live cluster CellApp 负载表；
+  枚举已注册 CellApp，并读取 `cellapp/load`、real / total entity count 和
+  space count watcher。`--watch N` 可持续刷新，用于观察多 CellApp LB / Offload
+  是否把实体分散到不同 BSP cell。
 - `tools/bin/run_cluster.sh` — Linux/macOS 只起集群，不跑客户端（preset wrapper
   → `run_world_stress --clients 0 --keep-cluster`）。Windows 侧可直接使用
   `tools/bin/run_world_stress.bat`;MVP Unity 调试可用
   `tools/bin/run_mvp_cluster.bat`。
 
-相对 `run_login_stress.py` 的增量：
+相对 `tools/bin/run_login_stress.{bat,sh}` 的增量：
 - 启动 CellAppMgr + N 个 CellApp
-- 可选启动 Reviver 监督 CellAppMgr，并为 CellAppMgr 配置 HA snapshot
-- BaseApp / CellApp 的 `--assembly` 指向 `samples/stress/Atlas.StressTest.{Base,Cell}`
+- 可选启动 Reviver 监督 CellAppMgr，并用 priority 仲裁多个 Reviver monitor
+- wrapper 通过 `--base-assembly` / `--cell-assembly` 分别覆盖 BaseApp /
+  CellApp 脚本 DLL；默认指向 `bin/<build>/Atlas.StressTest.Base.dll` 与
+  `bin/<build>/Atlas.StressTest.Cell.dll`
 - 新参数：`--cellapp-count`、`--space-count`、`--rpc-rate-hz`、`--move-rate-hz`
 
 ### 2.2 压测客户端
@@ -144,7 +153,7 @@ tools\bin\run_world_stress.bat `
   --login-rate-limit-global 10000
 ```
 
-可持续基线（截至 2026-04-21 的测量值）：
+留档基线（2026-04-21 测量；当前判断需重新运行本节命令）：
 - `entity_transferred / cell_ready`: 1:1
 - `move_sent / fail`: ~54k / 0
 - `echo_rtt_p50 / p95 / p99`: ≈ 1.3 / 2.2 / 6.2 ms
@@ -195,7 +204,7 @@ tools/bin/verify_retire_drain.sh --min-spaces 4 --timeout-sec 120
 未显式传 `--target-app-id` 时，脚本会选择当前持有 BSP leaf 的 CellApp；
 显式目标若没有持有 leaf 会失败，避免空退役被误判为通过。
 
-当前最小实测：8 clients / 2 Spaces / 3 CellApps 的 live 集群上，
+历史留档最小实测：8 clients / 2 Spaces / 3 CellApps 的 live 集群上，
 `world_stress` 得到 `echo_sent=81`、`echo_received=81`、`echo_loss=0`；
 随后 `verify_retire_drain.bat --min-cellapps 3 --min-spaces 2` 通过，目标 app
 从 2 个 leaf drain 到 `owned=0 drains=0 pending=0 ready=1 stuck=0`。
@@ -277,7 +286,7 @@ failure 计数不能增长。
 开启 `--min-ghost-backup-restores` 时，Ghost backup source 增量也必须达到阈值。
 开启 `--min-promoted-restores` 时，Ghost→Real promotion 增量也必须达到阈值。
 
-当前最小实测：3 CellApps / 2 Spaces live 集群上，脚本杀掉
+历史留档最小实测：3 CellApps / 2 Spaces live 集群上，脚本杀掉
 `cellapp_02 app_id=3`，目标从 2 个 leaf rehome 到 0 个，`decision_count`
 从 `4→6`，最后一次决策为 `action=rehome reason=cellapp-death`。
 
@@ -314,7 +323,7 @@ Linux / macOS：
 tools/bin/verify_cellappmgr_ha.sh --min-cellapps 2 --min-revivers 2 --timeout-sec 90
 ```
 
-Reviver leader failover 基线：
+Reviver active-monitor failover 基线：
 
 ```powershell
 tools\bin\verify_cellappmgr_ha.bat `
@@ -327,7 +336,7 @@ tools\bin\verify_cellappmgr_ha.bat `
   --timeout-sec 90
 ```
 
-要验证 leader 故障后仍保留一个 standby，可用 3 个 Reviver 启动集群，并执行：
+要验证 active monitor 故障后仍保留一个 standby，可用 3 个 Reviver 启动集群，并执行：
 
 ```powershell
 tools\bin\verify_cellappmgr_ha.bat `
@@ -341,7 +350,7 @@ tools\bin\verify_cellappmgr_ha.bat `
   --timeout-sec 90
 ```
 
-要验证连续两轮 leader 故障且每轮后仍保留一个 standby，可用 4 个 Reviver
+要验证连续两轮 active monitor 故障且每轮后仍保留一个 standby，可用 4 个 Reviver
 启动集群，并执行：
 
 ```powershell
@@ -357,11 +366,12 @@ tools\bin\verify_cellappmgr_ha.bat `
   --timeout-sec 90
 ```
 
-非破坏性巡检可加 `--no-inject`，脚本只验证当前 Reviver、snapshot 和
-CellAppMgr watcher，并执行同一稳定窗口，不会关闭 CellAppMgr。若同时显式传
-`--verify-reviver-failover`，脚本会关闭当前 active Reviver leader，但仍不关闭
-CellAppMgr；它会要求 standby 获取 leader lock，direct heartbeat 重新变新鲜，
-并确认 CellAppMgr pid 与 standby `launch_count` 不变。加
+非破坏性巡检可加 `--no-inject`，脚本只验证当前 Reviver、CellAppMgr watcher、
+recovery window 和 load report 健康，并执行同一稳定窗口，不会关闭 CellAppMgr。
+若同时显式传 `--verify-reviver-failover`，脚本会关闭当前 active Reviver monitor，
+但仍不关闭 CellAppMgr；它会要求 standby 成为 manager 指定的 active monitor，
+direct heartbeat 重新变新鲜，并确认 CellAppMgr pid 与 standby `launch_count`
+不变。加
 `--max-reviver-failover-ms N` 可把 active Reviver 退出到 standby heartbeat /
 health 收敛耗时纳入 SLO 闸门；`--summary-json PATH` 会写出
 `reviver_failovers` 明细和 `reviver_failover_*` latency 汇总；已启用的 SLO /
@@ -376,23 +386,23 @@ gate 未通过时也会先落盘；前置 watcher、拓扑或收尾检查失败�
 这两个首因字段；`failed_gate_names` / `failed_gates`、`overall_healthy` /
 `overall_success_rate` 标识失败 gate 明细和整次验证是否通过所有 gate，供 CI
 直接归档趋势。
-若 Reviver leader failover 未收敛，也会先写入不健康的 `reviver_failovers[]`
+若 Reviver active-monitor failover 未收敛，也会先写入不健康的 `reviver_failovers[]`
 明细，并以 `reviver_failover_health` gate 失败落盘。
-`--max-load-report-age-ms N` 可把 CellApp reattach 后的 load 样本年龄纳入
+`--max-load-report-age-ms N` 可把 CellApp 重注册后 load 样本年龄纳入
 同一 SLO 闸门；超龄会写入 `gates` 后失败，默认 0 表示只要求不 stale。
-`--min-post-failover-standbys N` 会要求 leader 故障后仍保留 N 个 standby，
+`--min-post-failover-standbys N` 会要求 active monitor 故障后仍保留 N 个 standby，
 并在 JSON summary 中记录 `min_surviving_revivers` 和
 `min_post_failover_standbys`。`--reviver-failover-cycles N` 会连续关闭当前
-active Reviver leader，JSON 的每条 `reviver_failovers` 明细都包含 `cycle`。
-脚本也会校验每个 standby Reviver 的 watcher 健康：必须不是 active leader、
+active Reviver monitor，JSON 的每条 `reviver_failovers` 明细都包含 `cycle`。
+脚本也会校验每个 standby Reviver 的 watcher 健康：必须不是 active monitor、
 `reviver/cellappmgr/status=standby`、`launch_pending=false`，且
 `restart_limit_reached=false`。`--summary-json PATH` 的 `current.reviver_topology`
-会在检查完成后重新读取最终 leader、registered / active / standby 数量和
+会在检查完成后重新读取最终 active monitor、registered / active / standby 数量和
 `standby_health_ok`，`current.reviver_topology.standby_health` 会逐个列出 standby
-Reviver 的 pid、leader-active、launch pending、restart limit 和健康结果，方便
+Reviver 的 pid、active-monitor 标记、launch pending、restart limit 和健康结果，方便
 CI 直接读取；最终或 `--no-inject` 巡检中的 standby watcher 不健康会以
 `reviver_standby_health` gate 失败落盘。`current.recovery` 会结构化记录
-reattach、restore gate、reattach registry 和 load report 的最终基础健康状态；
+worker 重注册、BSP 重报、recovery window 和 load report 的最终基础健康状态；
 `current.stability_healthy` 记录最终稳定窗口是否通过，不健康会以
 `stability_health` gate 失败落盘。
 最终或 `--no-inject` 巡检中的 recovery 不健康会以 `recovery_health` gate
@@ -409,24 +419,24 @@ load freshness 趋势归档。若启用 `--max-load-report-age-ms`，summary gat
 `cycle_load_report_health` gate 失败落盘；summary 会聚合 successful / failed
 cycle 数、takeover、stability、recovery / load report 健康检查数、健康 /
 不健康数、load report 记录数、最大 load age 以及 stale / over-age app 总数。
-连续接管基线可加 `--cycles N`；脚本会在每轮异常关闭前等待当前
-CellAppMgr 写出 snapshot，并逐轮验证 Reviver retarget、reattach、独立日志和
-稳定窗口。加 `--summary-json PATH` 可把每轮 PID / generation / launch delta、
-snapshot、reattach 和稳定窗口结果落成机器可读摘要，并在 `parameters` 中记录
+连续接管基线可加 `--cycles N`；脚本会逐轮验证 Reviver restart、worker 重注册 /
+BSP 重报、recovery window 关闭、拓扑 fingerprint 和稳定窗口。加
+`--summary-json PATH` 可把每轮 PID / generation / launch delta、recovery 和
+稳定窗口结果落成机器可读摘要，并在 `parameters` 中记录
 本次 `--min-*`、`--max-*` 和故障注入开关；`gates` 会记录已启用 SLO / 拓扑
 gate 的观察值和通过状态；`--no-inject` 模式也会写出当前 watcher 巡检摘要。
-加 `--max-takeover-ms N` 可要求每轮从 shutdown
-到 revived CellAppMgr 写出 fresh snapshot 的耗时不超过阈值。生产 Reviver HA
-拓扑可加 `--min-revivers 2`，脚本会要求只有一个 active leader，其余 Reviver
+加 `--max-takeover-ms N` 可要求每轮从 shutdown 到 worker-rebuild recovery
+完成的耗时不超过阈值。生产 Reviver HA 拓扑可加 `--min-revivers 2`，脚本会要求
+只有一个 active monitor，其余 Reviver
 保持 standby。
 
 验收：脚本打印 `PASS`，`old_pid != new_pid`，Reviver `active_generation`
-递增，`heartbeat_acks > 0`，`cellappmgr/ha/snapshot_restores > 0`，并且
-`reattach_pending=0`、`reattach_completed=1`、`reattach_stuck=0`、
+递增，`heartbeat_acks > 0`，`cellappmgr/ha/recovery_window_active=false`，
+surviving CellApp 数恢复，`cellappmgr/lb/pending_geometry_broadcasts=0`，
 `cellappmgr/lb/load_report_stale_count=0`，且若设置了
 `--max-load-report-age-ms`，每个 CellApp 的 `load_age_ms` 都必须在阈值内；
 同时 `reviver/cellappmgr/output_path` 指向的本地日志包含新 CellAppMgr pid。脚本
-默认还会等待 5 秒稳定窗口，确认 Reviver 没有再次 retarget、restart、heartbeat
+默认还会等待 5 秒稳定窗口，确认 Reviver 没有再次 relaunch、restart、heartbeat
 timeout 或 forced termination；可用 `--stability-sec` 调整。多轮模式下每轮
 都必须满足同一验收。远程集群或旧配置
 可用 `--allow-empty-output-log` 跳过本地日志文件校验。
@@ -434,14 +444,14 @@ timeout 或 forced termination；可用 `--stability-sec` 调整。多轮模式�
 交接验证时优先保留 `--summary-json` 输出。接手方先确认 `summary.overall_healthy`
 为 true，`failed_gates` 为空，`successful_cycles` 等于 `cycles`，每条
 `cycles[]` 的 `healthy` 为 true 且 `failure_stages` 为空；如果验证了 Reviver
-leader failover，还要确认 `reviver_failovers[]` 全部 healthy，且
+active-monitor failover，还要确认 `reviver_failovers[]` 全部 healthy，且
 `current.reviver_topology.standby_health_ok=true`。脚本级 schema 回归按
 Phase 13 验证基线中的三条命令执行，再进入 live fault injection。
 
-`run_world_stress --with-cellappmgr-reviver` 未显式传 snapshot / lock 路径时，
-会在 `.tmp/world-stress/<timestamp>/ha/` 下创建 CellAppMgr snapshot 和 Reviver
-leader lock。`--cellappmgr-reviver-count N` 会启动 `reviver`、`reviver_01` ...
-并共享同一 snapshot / leader lock；每个 Reviver 使用独立 internal port 和日志。
+`run_world_stress --with-cellappmgr-reviver` 会启动 `reviver`；设置
+`--cellappmgr-reviver-count N` 会启动 `reviver_01` ...，由被监控 CellAppMgr 按
+priority + heartbeat timeout 指定唯一 active monitor。每个 Reviver 使用独立
+internal port 和日志。
 Reviver 拉起的新 CellAppMgr 输出会写到
 `logs/cellappmgr_revived.log`，避免混入 Reviver 自身日志。driver 正常退出时会
 先通过 machined 关闭 revived CellAppMgr，再停止其余已启动进程，避免 Reviver
@@ -496,29 +506,27 @@ tools\bin\verify_baseappmgr_ha.bat `
   --summary-json .tmp\baseappmgr_ha_cycles.json
 ```
 
-验收:脚本打印 `PASS`,`baseappmgr/ha/snapshot_saves` 在重启后增长,
-`baseappmgr/ha/reattach_state=complete`,`reviver/baseappmgr/active_pid` 等于
-新 BaseAppMgr pid,`reviver/baseappmgr/heartbeat_acks > 0`,且无 `last_error`。
+验收:脚本打印 `PASS`,BaseApp 重注册后 `baseappmgr/baseapp_count` 恢复,
+`reviver/baseappmgr/active_pid` 等于新 BaseAppMgr pid,
+`reviver/baseappmgr/heartbeat_acks > 0`,且无 `last_error`。
 
-跨机/多 Reviver lease 模式验证(需 `--revive-leader-lock-mode machined`
-启动至少 2 个 Reviver):
+多 Reviver active-monitor failover 验证(需至少 2 个 Reviver):
 
 ```powershell
 tools\bin\verify_baseappmgr_ha.bat `
   --min-revivers 2 `
-  --check-leader-lock-mode machined `
+  --check-active-reviver `
   --verify-reviver-failover `
   --max-reviver-failover-ms 10000 `
   --no-inject `
-  --summary-json .tmp\baseappmgr_lease_failover.json
+  --summary-json .tmp\baseappmgr_reviver_failover.json
 ```
 
-`--check-leader-lock-mode machined` 会验证 `reviver/baseappmgr/leader/mode=machined`
-且当前确实有一个 leader 持锁。`--verify-reviver-failover` 关掉当前 leader
-Reviver,等待 standby 通过 lease 接管同一 BaseAppMgr(不重启 mgr)。
+`--check-active-reviver` 会验证当前 Reviver 是 BaseAppMgr 指定的 active monitor。
+`--verify-reviver-failover` 关掉当前 active monitor Reviver,等待 standby 接管同一
+BaseAppMgr(不重启 mgr)。
 `--max-reviver-failover-ms` 把 shutdown→standby-active 的耗时纳入 SLO gate。
-summary JSON 的 `current.leader_lock` 和 `current.reviver_failover` 段记录所有
-观测到的指标,适合直接归档到 CI baseline。
+summary JSON 的 `current.reviver_failover` 段记录观测指标,适合直接归档到 CI baseline。
 
 ### 4.8 DBAppMgr HA 验证
 
@@ -591,9 +599,12 @@ tools\bin\run_world_stress.bat `
 - `echo_rtt_p95` < 150 ms（单 CellApp 在 50-client 密度下可承受）
 - 没有 `unexpected_disc` / 服务端 warning
 
-已知缩放边界：**1 CellApp × 1 space 支持到大约 50 实体 × 10 Hz move + 2 Hz echo**。超过 100 实体/space 时 CellApp tick 被 AoI 广播挤爆，第二轮登录会卡在 `inflight`。突破这个边界需要 Space 拆分 / Cell offload。
+历史缩放边界：**1 CellApp × 1 space 支持到大约 50 实体 × 10 Hz move +
+2 Hz echo**。超过 100 实体 / space 时 CellApp tick 曾被 AoI 广播挤爆，
+第二轮登录会卡在 `inflight`。这是留档基线，不是当前容量证明；当前判断
+需重新运行本节命令。突破这个边界需要 Space 拆分 / Cell offload。
 
-### 4.9 真实客户端链路损伤
+### 4.10 真实客户端链路损伤
 
 `--script-clients` 会启动真实 `atlas_client.exe` 子进程；可用
 `--client-transport-impairment-ms` 给这些子进程的 BaseApp RUDP channel
@@ -624,7 +635,7 @@ BaseApp relay 和 CellApp 权威 step 的断点。启用 `--script-verify` 时�
 `seqgap` / `ackstale` / `rptdrop` 和 CellApp `rate` / `invalid` /
 `seqgap` / `overflow` 必须为 0。
 
-### 4.10 Phase14 虚拟客户端移动输入
+### 4.11 Phase14 虚拟客户端移动输入
 
 裸协议客户端默认保留旧 `StressAvatar.ReportPos` 压测路径。要把 50/100/400
 moving entities 压到 Phase14 服务端权威移动链路，使用 `--move-mode input`：
@@ -665,19 +676,20 @@ reorder 时 BaseApp / CellApp `stale` 允许大于 0。BaseApp `rate` /
 `invalid` / `seqgap` 必须为 0；CellApp `rate` / `invalid` / `seqgap` /
 `overflow` 必须为 0。
 
-当前 400 档基线：`spawn_pos_sent=400`、`move_sent=106221`、
-`movement_ack_recv=14242`、`echo_loss=40`；4 个 CellApp 都有 movement input /
-frame / ack 覆盖。BaseApp `rate` / `invalid` / `seqgap` / `ackstale` /
-`rptdrop` 和 CellApp `rate` / `invalid` / `seqgap` / `overflow` 均为 0。
-3 帧冗余短 smoke 基线：`move_sent=118`、`move_frames_sent=348`、CellApp
+留档 400 档基线（当前判断需重新运行本节命令）：`spawn_pos_sent=400`、
+`move_sent=106221`、`movement_ack_recv=14242`、`echo_loss=40`；4 个
+CellApp 都有 movement input / frame / ack 覆盖。BaseApp `rate` /
+`invalid` / `seqgap` / `ackstale` / `rptdrop` 和 CellApp `rate` /
+`invalid` / `seqgap` / `overflow` 均为 0。
+留档 3 帧冗余短 smoke 基线：`move_sent=118`、`move_frames_sent=348`、CellApp
 `stale=230`，BaseApp `rate` / `invalid` / `seqgap` 和 CellApp `rate` /
 `invalid` / `seqgap` / `overflow` 仍为 0。
-50 客户端 10% drop + 10% reorder 短 smoke 基线：`move_sent=4487`、
+留档 50 客户端 10% drop + 10% reorder 短 smoke 基线：`move_sent=4487`、
 `move_client_drop=408`、`move_reordered=424`、`movement_ack_recv=1320`；
 BaseApp `rate` / `invalid` / `seqgap` 和 CellApp `rate` / `invalid` /
 `seqgap` / `overflow` 仍为 0。
 
-### 4.11 P5 短线重登
+### 4.12 P5 短线重登
 
 ```powershell
 tools\bin\run_world_stress.bat `
@@ -718,12 +730,10 @@ tools\bin\run_world_stress.bat `
 | `--space-count` | Cell space 数量（按 session id 取模分配） | 1 |
 | `--cellapp-count` | CellApp 进程数 | 1 |
 | `--with-cellappmgr-reviver` | 启动 Reviver 监督 CellAppMgr | false |
-| `--cellappmgr-reviver-count` | Reviver 进程数；>1 时共享 leader lock 形成 standby | 1 |
+| `--cellappmgr-reviver-count` | Reviver 进程数；>1 时由 manager priority 仲裁 active monitor / standby | 1 |
 | `--reviver-port` | Reviver internal port | 27001 |
 | `--reviver-port-stride` | 多 Reviver internal port 步长 | 1 |
-| `--cellappmgr-snapshot-path` | CellAppMgr HA snapshot 文件；为空时随 Reviver 默认落到 `.tmp` | — |
-| `--cellappmgr-snapshot-interval-ms` | CellAppMgr HA snapshot 周期 | 250 |
-| `--reviver-leader-lock-path` | Reviver leader lock 文件；为空时随 Reviver 默认落到 `.tmp` | — |
+| `--reviver-priority` | ReviverPriority；数值越高越优先成为 active monitor | 255 |
 | `--reviver-restart-delay-ms` | Reviver 异常重启延迟 | 1000 |
 | `--reviver-heartbeat-timeout-ms` | Reviver direct heartbeat 响应超时 | 4000 |
 | `--reviver-max-restarts` | Reviver 连续异常重启预算 | 3 |
@@ -765,13 +775,13 @@ world_stress 断开只做 `network_.reset()`，不发 RUDP FIN。BaseApp 靠 10 
 - `logs/` — 所有进程的 stdout / stderr
 - `db/atlas_world_stress.sqlite3` — DBApp 的 SQLite 库
 - `dbapp.json` — 本次生成的 DBApp 运行配置
-- `ha/` — CellAppMgr HA snapshot 和 Reviver leader lock（仅 Reviver 模式）
+- `ha/` — Reviver 模式下的临时 HA 诊断目录
 - `logs/cellappmgr_revived.log` — Reviver 拉起的新 CellAppMgr stdout/stderr
 
 典型文件：
 
 ```
-.tmp/world-stress/20260421-002500/
+.tmp/world-stress/<timestamp>/
 ├── logs/
 │   ├── baseapp.stdout.log
 │   ├── cellapp.stdout.log
@@ -806,7 +816,7 @@ world_stress 断开只做 `network_.reset()`，不发 RUDP FIN。BaseApp 靠 10 
 | `cell_ready` | 收到 CellReady 通知（cell 已绑定可发 cell RPC） | ≈ entity_transferred |
 | `select_avatar_sent / fail` | SelectAvatar 本地发送结果 | fail = 0 |
 | `echo_sent / received / rtt_{p50,p95,p99}` | 周期 Echo 回环与 RTT | p95 < 10 ms 常规 |
-| `move_sent / fail` | 周期 ReportPos 本地发送 | fail = 0 |
+| `move_sent / fail` | 周期 movement 发送；`report-pos` 为 legacy RPC，`input` 为 Phase14 输入帧 | fail = 0 |
 | `aoi_enter / leave / pos_update / prop_update` | 收到的 AoI 信封分类计数 | 单 space 多 client 时 `aoi_enter` ≫ 0 |
 
 ### 8.3 判读快捷口径
@@ -835,7 +845,7 @@ world_stress 断开只做 `network_.reset()`，不发 RUDP FIN。BaseApp 靠 10 
 
 每次登录/cell/AoI 相关改动后，按序回归：
 
-1. 单元+集成测试：`ctest --build-config Debug`
+1. 单元+集成测试：`ctest --test-dir build\debug -C Debug --output-on-failure`
 2. P2 最小活体（1 客户端）
 3. P3 常规规模（200 客户端）
 4. LB retire-drain 验证

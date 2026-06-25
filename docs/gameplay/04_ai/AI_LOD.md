@@ -4,7 +4,7 @@
 >
 > **读者**：AI 设计（必读）、工程（必读）、战斗策划（§3、§5 必读，理解远距离怪物表现限制）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计。当前尚未落地完整 AI LOD 系统。
 >
 > **前置文档**：`OVERVIEW.md`、`AI_ARCHITECTURE.md`、`DENSITY_ADAPTIVE_NETWORKING.md`、`CELL_ARCHITECTURE.md`
 >

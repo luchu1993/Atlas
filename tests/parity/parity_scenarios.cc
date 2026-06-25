@@ -213,7 +213,7 @@ constexpr float kGiantBoxThickness = 100.0f;
   ParityScenario s;
   s.id = "box_walk_steady";
   // Box wide enough that 5s walk stays interior; edge behaviour is a known
-  // Static-vs-Jolt divergence (see backend_parity_testing §4.4).
+  // Static-vs-Jolt divergence (see backend_parity_testing.md).
   StaticBox box;
   box.min = {-50.0f, -1.0f, -50.0f};
   box.max = {50.0f, 1.0f, 50.0f};

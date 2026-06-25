@@ -1,5 +1,8 @@
 # Component 体系
 
+> **状态**：✅ 当前实现。静态 Synced slot、ServerLocal / ClientLocal 组件与
+> baseline 同步已落地；动态组件 add/remove 尚无独立 wire lifecycle op。
+>
 > 关联：[property_sync_design.md](./property_sync_design.md) · [container_property_sync_design.md](./container_property_sync_design.md) · [BigWorld RPC 参考](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md)
 
 Atlas Entity 用 **三类 Component** 组织模块化逻辑：
@@ -104,15 +107,16 @@ public virtual void WriteOtherDelta(...)
 
 ### 2.3 RPC `rpc_id` 编码
 
-每个组件方法的 `rpc_id`（generator 在 `ReplicatedComponent.SendXxxRpc` / 客户端对偶处合成）：
+每个组件方法的 `rpc_id` 由 generator / mailbox helper 合成：
 
 ```
-[ slot_idx (8 bit) ][ direction (2 bit) ][ TypeId (8 bit) ][ methodIdx (剩余) ]
+[ reply (1 bit) ][ slot_idx (7 bit) ][ direction (2 bit) ][ typeIndex (14 bit) ][ methodIdx (8 bit) ]
 ```
 
-- `slot_idx == 0` 等价 entity 本体方法
+- `reply` 由需要 `EntityRpcReply` 的发送路径置位；注册表做 canonical 匹配时会屏蔽它
+- `slot_idx == 0` 等价 entity 本体方法；用户组件 slot 范围是 1..0x7F
 - `direction`：00=Client / 01=保留 / 10=Cell / 11=Base
-- `TypeId` 让单一组件类可以挂在不同 entity 类型上各走各的 dispatcher
+- `typeIndex` 是所属 entity 类型索引；同一组件类挂到不同 entity 类型时，通过 entity typeIndex + slot 进入各自 dispatcher
 
 ---
 
@@ -223,11 +227,18 @@ public sealed class AnimControlComponent : ClientLocalComponent
 
 ---
 
-## 5. 协议预留：尚未启用的 op
+## 5. 动态增删的当前边界
 
-`Atlas.Observable.OpKind` 枚举里 `AddComponent = 6` / `RemoveComponent = 7` 仍保留为占位 —— 当前组件的 enable / disable 不通过 op-log 投递，而由 entity baseline 与 `_dirtyComponents` 位图静态承载。运行时动态 `AddComponent<QuestComponent>()` 已可用，新观察者进入 AoI 时通过 baseline `kReplicatedBaselineFromCell` 一次性同步所有 Active Synced 组件状态。Lazy slot 在被 RemoveComponent 后会丢弃残留 op（见 §2.2 `ClearDirtyComponents`）。
+`Atlas.Observable.OpKind` 当前只分配了容器 / struct op（0–5），尚未分配
+`AddComponent` / `RemoveComponent` wire op。组件的 enable / disable 当前不通过
+op-log 投递，而由 entity baseline 与 `_dirtyComponents` 位图静态承载。运行时
+动态 `AddComponent<QuestComponent>()` 已可用，新观察者进入 AoI 时通过 baseline
+`kReplicatedBaselineFromCell` 一次性同步所有 Active Synced 组件状态。`AddComponent` /
+`RemoveComponent` 只会留下内部 dirty 标记；若没有 audience-visible 属性变更，
+生成泵不会发送空帧。被移除 slot 的旧组件 payload 不会再进入 component section。
 
-P3 后续若需要"add/remove 在 tick 边界精确事件化"（避免 baseline 抖动），再启用这两个 op kind。
+后续若需要"add/remove 在 tick 边界精确事件化"（避免 baseline 抖动），再分配
+新的 component lifecycle op kind，并同步 C# / UE 解码器。
 
 ---
 
@@ -241,6 +252,5 @@ P3 后续若需要"add/remove 在 tick 边界精确事件化"（避免 baseline 
 | 客户端收到 `slotIdx` 超出已知 slot | sectionMask bit2 段解码越界，触发 `IsCorrupted` 标记 |
 | `local="server"` 组件声明 `<properties>` | DefParser 报 DEF006 |
 | 同一组件属性 Cell/Base 位置不一致 | 实际由 `PropertyScope.IsBase()`/`IsCell()` 互斥保证；不可能跨进程 |
-| Component RPC `exposed ⊄ scope` | DefLinker 在校验阶段拒绝（见 §1.2） |
+| Component RPC 暴露范围 | 当前只应用 entity 同款规则：`client_methods` 禁 `exposed`（DEF002），`base_methods` 禁 `exposed="all_clients"`（DEF003） |
 | Entity 析构 | 按 slot 倒序调 Synced 的 `OnDetached`，再调 `_serverLocal` / `_clientLocal` 的 `OnDetached` |
-

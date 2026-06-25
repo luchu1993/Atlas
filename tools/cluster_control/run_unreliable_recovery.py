@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Validate unreliable-delta recovery under drops; see docs/stress_test/script_client_smoke.md §4."""
+"""Smoke app-layer drop recovery while toggling the reliable metadata bit.
+
+The reliable attribute is retained in descriptors, but current generated
+property deltas all ride the reliable channel. This helper only checks that a
+temporary reliable=false StressAvatar def still builds and survives the same
+drop window used by docs/stress_test/script_client_smoke.md scenario 2.
+"""
 
 from __future__ import annotations
 

@@ -153,7 +153,7 @@ def resolve_unity_project(arg: str | None) -> Path:
         candidate = Path(arg).expanduser().resolve()
     else:
         try:
-            entered = input("UnityProjectRoot (path to your Unity 2022.3 project): ").strip()
+            entered = input("UnityProjectRoot (path to your Unity 2022.3+ project): ").strip()
         except (EOFError, KeyboardInterrupt):
             fail("no project path provided")
         if not entered:
@@ -252,7 +252,7 @@ def main() -> int:
     copy_to_unity_project(unity_project)
 
     info("done.")
-    info(f"open {unity_project} in Unity Hub (2022.3 LTS), wait for refresh,")
+    info(f"open {unity_project} in Unity Hub (2022.3 LTS or Unity 6.x), wait for refresh,")
     info("then add an AtlasNetworkManager MonoBehaviour to a GameObject and Play.")
     return 0
 

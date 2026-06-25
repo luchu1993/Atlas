@@ -9,11 +9,8 @@
 
 namespace atlas {
 
-// Numeric values are the wire encoding; never renumber.
-// kInvalid = 0xFF is reserved as the default-constructed sentinel so a
-// DataTypeRef that was never populated doesn't silently look like a valid
-// kBool. The binary decoder rejects it; any caller that sees kInvalid at
-// runtime holds a bug.
+// Numeric values are the wire encoding; never renumber. kInvalid rejects
+// unpopulated DataTypeRef nodes before they can look like kBool.
 enum class PropertyDataType : uint8_t {
   kBool = 0,
   kInt8 = 1,
@@ -37,11 +34,8 @@ enum class PropertyDataType : uint8_t {
   kInvalid = 0xFF,
 };
 
-// kDict requires `key` to be scalar; other container element positions are
-// unconstrained. shared_ptr children are used instead of unique_ptr so the
-// node stays copyable; PropertyDescriptor is held by std::vector and must
-// remain regular; descriptors are read-only after registration, so sharing
-// is safe.
+// kDict requires scalar keys. shared_ptr keeps descriptors copyable while the
+// tree remains read-only after registration.
 struct DataTypeRef {
   PropertyDataType kind = PropertyDataType::kInvalid;
   uint16_t struct_id = 0;
@@ -75,9 +69,8 @@ struct PropertyDescriptor {
   ReplicationScope scope;
   bool persistent{false};
   bool identifier{false};
-  // Reliable delivery: changes to this property bypass the DeltaForwarder budget
-  // and go out on the reliable channel. Use for semantically critical fields
-  // (HP, state, inventory) where a dropped UDP packet cannot be tolerated.
+  // Retained for schema compatibility; current C# emitters send all property
+  // deltas on the reliable channel.
   bool reliable{false};
   uint8_t detail_level{5};
   uint16_t index{0};
@@ -100,18 +93,13 @@ struct PropertyDescriptor {
 
 struct RpcDescriptor {
   std::string name;
-  // Packed encoding of rpc_id:
-  //   bits 24-31  slot_idx     0 = entity body, >0 = component slot on entity
-  //   bits 22-23  direction    0=Client, 2=Cell, 3=Base
-  //   bits  8-21  typeIndex    entity type
-  //   bits  0-7   methodIdx    1-based per (slot, direction)
-  // Component RPCs share `typeIndex` with the owning entity; SlotIdx() of
-  // 0 means the entity body; component RPCs use the entity's typeIndex.
+  // rpc_id: bit31 reply, bits24-30 slot, bits22-23 dir, bits8-21 type, bits0-7 method.
+  // Component RPCs share the owning entity typeIndex; slot 0 is entity body.
   uint32_t rpc_id;
   std::vector<PropertyDataType> param_types;
   ExposedScope exposed{ExposedScope::kNone};
 
-  [[nodiscard]] uint8_t SlotIdx() const { return static_cast<uint8_t>((rpc_id >> 24) & 0xFF); }
+  [[nodiscard]] uint8_t SlotIdx() const { return static_cast<uint8_t>((rpc_id >> 24) & 0x7F); }
   [[nodiscard]] uint8_t Direction() const { return static_cast<uint8_t>((rpc_id >> 22) & 0x3); }
   [[nodiscard]] uint16_t TypeIndex() const { return static_cast<uint16_t>((rpc_id >> 8) & 0x3FFF); }
   [[nodiscard]] uint8_t MethodIndex() const { return static_cast<uint8_t>(rpc_id & 0xFF); }
@@ -125,27 +113,22 @@ enum class ComponentLocality : uint8_t {
   kClientLocal = 2,
 };
 
-// A reusable component schema. Multiple entity types can reference the same
-// ComponentDescriptor by `component_type_id`, and an entity slot's scope
-// further narrows which clients see the replicated properties.
+// Reusable component schema keyed by component_type_id; entity slot scope
+// further narrows replicated property visibility.
 struct ComponentDescriptor {
   std::string name;
   uint16_t component_type_id{0};
-  // Empty when the component does not extend another. Single inheritance
-  // only; the C# generator enforces this and the C++ side
-  // resolves the chain by name lookup at attach time.
+  // Empty when the component does not extend another; inheritance is single
+  // chain and resolved by name at attach time.
   std::string base_name;
   ComponentLocality locality{ComponentLocality::kSynced};
-  // Properties own to this component; the base's properties are NOT inlined
-  // here; runtime walks `base_name` to flatten when needed. Keeps blobs
-  // small and avoids re-registering inherited fields with new indices.
+  // Own properties only; runtime walks base_name when flattening inherited
+  // fields so binary descriptors stay compact.
   std::vector<PropertyDescriptor> properties;
 };
 
-// A slot reference on an entity names a `component_type_id` and the
-// per-entity attach metadata. The slot's `scope` is the upper bound of
-// visibility for any property in the component; a property with a tighter
-// scope still wins (P.scope ⊆ C.scope is enforced at C# parse time).
+// Per-entity component attachment metadata. Slot scope is the upper bound;
+// tighter property scopes still win and are checked by the C# parser.
 struct EntitySlotDescriptor {
   uint16_t slot_idx{0};   // 1-based; slot 0 reserved for entity body.
   std::string slot_name;  // Accessor name on the entity, e.g. "ability".

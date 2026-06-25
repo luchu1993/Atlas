@@ -18,7 +18,7 @@
 | 模块 | 职责 |
 |---|---|
 | `LoginApp` | 接受客户端 RUDP；速率限制（per-IP + global + trusted CIDR bypass）；用户名去重；驱动主链路；超时与 abandoned login 清理 |
-| `BaseAppMgr` | BaseApp 注册；`app_id` / `EntityID` 区间分配；扩展负载跟踪；带 affinity 的分配；过载保护；Global Bases |
+| `BaseAppMgr` | BaseApp 注册；`app_id` / `EntityID` 区间分配；扩展负载跟踪；带 affinity 的分配；过载保护 |
 | `BaseApp` | `PrepareLogin` 接收；checkout 冲突收敛；detached proxy grace；prepared / pending / deferred login 管理；`Authenticate(session_key)` 认领 |
 | `DBApp` | `AuthLogin` 认证；`auto_create_accounts`；checkout / checkin / abort 协调 |
 
@@ -29,7 +29,7 @@
   PrepareLogin / PrepareLoginResult / CancelPrepareLogin`
 - `LoginStatus` 状态码：`Success / InvalidCredentials / AlreadyLoggedIn /
   ServerFull / RateLimited / ServerNotReady / InternalError /
-  LoginInProgress / ServerBusy`
+  LoginInProgress / ServerBusy / DefMismatch`
 - `PrepareLogin` 字段：`request_id / type_id / dbid / session_key /
   client_addr / blob_prefetched / entity_blob`
 - `BaseAppMgr::InformLoad` 扩展字段：`load / entity_count / proxy_count /
@@ -71,3 +71,4 @@ Prometheus / Grafana 消费，不在 server 进程内做。压测方法见
 - `route_token`
 - `LoginAppMgr` ingress / coordinator 双模式切换
 - 全局排队系统
+- Global Bases / DataDownload 等 BigWorld 扩展能力

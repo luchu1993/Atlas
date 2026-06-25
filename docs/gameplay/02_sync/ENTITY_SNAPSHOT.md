@@ -4,7 +4,9 @@
 >
 > **读者**：网络工程师（必读）、客户端工程（必读）、战斗策划（§4 必读，理解远端实体表现限制）、技术美术（§5 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：部分落地。AOI enter、baseline、property delta、owner / peer
+> AvatarFilter 路径已可用；IDAlias、位置压缩、velocity-backed Hermite、
+> CacheStamps 等仍未实现。
 >
 > **前置文档**：`OVERVIEW.md`、`MOVEMENT_SYNC.md §6`（远端实体插值）、`DENSITY_ADAPTIVE_NETWORKING.md`（订阅分层）
 >
@@ -55,10 +57,10 @@
 
 玩家**正在战斗或非常贴近**这些实体。
 
-数据精度最高：
+目标数据精度最高：
 - 位置精度 ~1 cm
 - 朝向 16-bit（0.0055°）
-- 速度向量
+- 速度向量（当前 wire 尚未传）
 - 当前动画状态简化标识
 
 玩家感受：
@@ -70,9 +72,9 @@
 
 玩家**视线主要焦点之外，但仍参与战斗**。
 
-精度略低：
+目标精度略低：
 - 位置精度 ~10 cm
-- 同样有速度
+- 同样有速度（当前 wire 尚未传）
 - 动画状态
 
 玩家感受：
@@ -131,31 +133,31 @@
 
 ## 3. 平滑插值的细节体验
 
-### 3.1 Cubic Hermite 插值（参见 `MOVEMENT_SYNC.md §6.3`）
+### 3.1 当前 AvatarFilter 路径（参见 `MOVEMENT_SYNC.md §6.3`）
 
-**为什么不用线性 lerp**：
-- 线性 lerp 在拐弯处呈现"折线"——玩家感觉远端角色"机械"
-- Hermite 用速度信息生成弧线——更像真实运动
+当前客户端对 peer 实体使用 `AvatarFilter` ring：按服务端时间戳保存最近
+8 个样本，在目标延迟时间点做位置 / 方向线性插值；如果最新样本之后短暂缺包，
+最多用最近两帧导出的速度外推 50 ms。
 
-玩家感受对比（远端玩家正在跑步转弯）：
-- 线性：角色突然向新方向跳跃
-- Hermite：角色平滑曲线转弯，像真在跑
+这个路径已经覆盖 MVP Unity / UE，可提供稳定、低抖动的远端实体表现。
+Hermite 仍是后续目标：等 velocity 字段、位置压缩和更细的 jitter buffer
+进入 wire contract 后，再用速度切线改善急转 / 急停的观感。
 
 ### 3.2 急停的处理
 
 远端玩家急停（速度从 5 m/s 降到 0）：
-- 一个快照 velocity = 5 m/s
-- 下一快照 velocity = 0
-- Hermite 插值：在 50 ms 内平滑减速
-- 视觉：角色微微"过冲" 然后稳住——和真实物理一致
+- 当前：`AvatarFilter` 在两个服务器 pose 样本之间线性插值；命令型急停 /
+  dash / knockback 由 `MovementCommandEnd` 对齐权威结束状态。
+- 目标：velocity-backed Hermite 在 50 ms 内平滑减速，改善急停曲线。
 
 ### 3.3 急转向
 
 远端玩家突然 180° 转向：
 - 一个快照 yaw = 0°
 - 下一快照 yaw = 180°
-- yaw 插值用最短路径（不会绕远）
-- 视觉：角色快速但平滑转身
+- 当前：方向向量随 `AvatarFilter` 样本线性插值，Unity / UE 视图层再驱动
+  transform / 动画参数。
+- 目标：yaw 最短路径 + Hermite 位置切线，让转身更自然。
 
 ### 3.4 抖动来源（应避免）
 
@@ -164,7 +166,8 @@
 - **未启用 jitter buffer**（直接消费收到的数据）
 - **前后快照的速度大幅波动**
 
-我们的做法：自适应 jitter buffer + Hermite 插值 → 抖动不可见。
+当前做法：`AvatarFilter` 延迟渲染 + ring buffer + 短外推，先把抖动压到
+MVP 可接受范围。自适应 jitter buffer + Hermite 是后续升级目标。
 
 ### 3.5 玩家自己看到自己（主控）
 
@@ -572,7 +575,7 @@ Atlas 不支持移动端（参见 OVERVIEW §2.3）。桌面有线宽带条件�
 
 | 阶段 | 交付 |
 |---|---|
-| P1 末 | 单层全量快照；Hermite 插值；自适应 jitter buffer |
+| P1 末 | 单层全量快照；peer `AvatarFilter` 插值；自适应 jitter buffer / Hermite 后置 |
 | P2 早 | 5 层订阅完整；远端实体 LOD |
 | P2 中 | MovementCommand 远端表现（瞬移 / 击退） |
 | P2 末 | 跨 cell 实体处理；包丢失外推 |

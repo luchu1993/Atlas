@@ -554,7 +554,8 @@ auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
     if (deficit_warn_counter_ == 0) {
       ATLAS_LOG_WARNING(
           "Witness[{}]: bandwidth deficit {}B > per-observer budget {}B; peer catch-up "
-          "will lag. Consider increasing cellapp/witness_per_observer_budget_bytes.",
+          "will lag. Consider increasing cellapp/witness_per_peer_bytes or "
+          "cellapp/witness_max_per_observer_budget_bytes.",
           owner_.Id(), bandwidth_deficit_, max_packet_bytes);
     }
     if (++deficit_warn_counter_ >= kDeficitWarnEveryNTicks) deficit_warn_counter_ = 0;

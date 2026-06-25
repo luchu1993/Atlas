@@ -1,18 +1,25 @@
 # 已锁决策
 
+> 状态: 当前 UE MVP 决策记录。这里记录仍然有效的选择；剩余问题集中在
+> [open_questions.md](open_questions.md)。
+>
 ## D1 — 客户端 SDK 路径
 
 **选 B**:C++ 重写 `Atlas.Client` 等价物,不在 UE 寄宿 CoreCLR。
 
 理由:UE Shipping 带 CoreCLR 长期是债(~30MB,AOT 集成空白);Unity 已独占 C# 路径,UE 走 C++ 让 codegen 输出对称(server C++ + UE C++ + Unity C#);调试链路单语言更简单。
 
-## D2 — 共享移动仿真
+## D2 — 共享移动仿真 / owner 预测
 
-**延期**。详见 [open_questions.md](open_questions.md)。
+**已接入当前 MVP 路径**。UE 通过 `atlas_net_client` 复用 `movement_sim`
+predict step,C++ 侧 `FOwnerMovementPredictor` 处理输入历史、ack replay、
+visual offset 和 MovementCommand start / end。
 
 ## D3 — UE 版本
 
-**5.7**
+**UE 5.x source build, not pinned to a minor version.** `UEClient.uproject`
+records the local source-build association, and wrappers resolve the active
+engine from `UE_ROOT` or `--ue-root`.
 
 ## D4 — Entity ↔ Actor 关系
 
@@ -32,8 +39,8 @@ Entity 拥有 View,View 持有 Actor 弱引用。Actor 是 Entity 的渲染句�
 
 **Registry-driven decode + 类型化 accessor**。
 
-- `FClientEntityBase::ApplyDelta` 通用一份,通过 `EntityDefRegistry` 查表逐字段 decode
-- 但 codegen 生成类型化 `Avatar.gen.h`,对外是 `E->Health()` 风格 API
+- `ClientEntity::ApplyDelta` 通用一份,通过 `EntityDefRegistry` 查表逐字段 decode
+- 但 codegen 生成类型化 `Avatar.gen.h`,对外是 `E->Hp()` 风格 API
 
 理由:`EntityDefRegistry`(ATDF)已是 C++ 端唯一元数据来源,decode 逻辑只维护一份;新增 entity 类型不需要 C++ 重编。
 
@@ -48,18 +55,22 @@ Entity 拥有 View,View 持有 Actor 弱引用。Actor 是 Entity 的渲染句�
 
 不用:NetDriver / Replication / `UFUNCTION(Server,Client,NetMulticast)` / GAS / Iris / Mass / `CharacterMovementComponent` 的网络部分。
 
-可用:Enhanced Input(转发到 Atlas RPC)、Blueprint / UMG、动画系统(以 Atlas 字段为驱动)。
+可用:Enhanced Input(转成 Atlas movement input frame 或低频 RPC)、Blueprint / UMG、
+动画系统(以 Atlas 字段为驱动)。
 
 ## D10 — 战斗代码共享
 
-**本期不实现**(UE 端只插值不预测)。等当前 UE MVP 表现层缺口收敛后,
-再按实测手感决策路径 A 或 B+下沉。详见 [open_questions.md](open_questions.md)。
+**本期不实现战斗预测共享**。UE 已接入移动预测；战斗数值 kernel 是否下沉或
+寄宿仍等当前 UE MVP 表现层缺口收敛后,再按实测手感决策路径 A 或 B+下沉。
+详见 [open_questions.md](open_questions.md)。
 
 ## D11 — Port parity 约束
 
 从 `Atlas.Client` C# 移植到 UE C++ 的逻辑(AvatarFilter、envelope decoder、ClientEntityManager 等)**不得修改 C# 端源码**,且必须在每次 port 完成时验证:
 
-- `dotnet test tests/csharp` 全部通过
+- `dotnet test tests/csharp/Atlas.Runtime.Tests/Atlas.Runtime.Tests.csproj --configuration Debug` 通过
+- `dotnet test tests/csharp/Atlas.Generators.Tests/Atlas.Generators.Tests.csproj --configuration Debug` 通过
+- `dotnet test tests/csharp/Atlas.Client.Tests/Atlas.Client.Tests.csproj --configuration Debug` 通过
 - Unity 客户端登录 + 基本同步行为不退化
 
 C# 端是单一来源,C++ port 是"只读对照实现",任何行为差异(浮点、wire 字段顺序、状态机)以 C# 为准修改 C++。
@@ -68,7 +79,7 @@ C# 端是单一来源,C++ port 是"只读对照实现",任何行为差异(浮点
 
 ## D12 — Layer 1 严格项目风格,Layer 2/3 走 UE 惯例
 
-`AtlasCore/`(Layer 1,引擎无关 C++)严格遵循 `CLAUDE.md` 项目风格:
+`AtlasCore/`(Layer 1,引擎无关 C++)严格遵循仓库项目风格:
 
 - 2-space 缩进、attached braces、`namespace atlas::`
 - PascalCase 函数、snake_case 变量、trailing `_` 成员
@@ -82,4 +93,5 @@ C# 端是单一来源,C++ port 是"只读对照实现",任何行为差异(浮点
 
 **理由**:Layer 1 要保持可移植(未来 Unity-C++ port、独立 CLI 测试),严格项目风格;Layer 2/3 与 UE 生成代码、社区示例共存,偏离 UE 惯例只换来摩擦,不换回可移植性。
 
-边界以目录划分:`Source/AtlasUE/Public/AtlasCore/` 和 `Private/AtlasCore/` 是 Layer 1,其余 UE 风格。
+边界以目录划分:`Plugins/AtlasUE/Source/AtlasUE/Public/AtlasCore/` 和
+`Plugins/AtlasUE/Source/AtlasUE/Private/AtlasCore/` 是 Layer 1,其余 UE 风格。

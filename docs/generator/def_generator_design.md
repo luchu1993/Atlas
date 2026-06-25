@@ -3,7 +3,7 @@
 > 状态：已实现
 > 关联：[BigWorld RPC 参考](../bigworld_ref/BIGWORLD_RPC_REFERENCE.md) · [Entity Mailbox](../scripting/entity_mailbox_design.md) · [Property Sync](../property_sync/property_sync_design.md) · [Component Design](../property_sync/component_design.md)
 
-`.def` 文件是 Atlas 实体的唯一真相来源。`Atlas.Generators.Def` 是仓库中唯一的实体相关 Source Generator，负责把 `.def` 加用户的 `[Entity("Name")] partial class` 编织成所有进程的实体代码（属性、序列化、RPC、Mailbox、Dispatcher、Component、TypeRegistry）。C++ 侧不解析 `.def`，而是消费 Generator 在 `[ModuleInitializer]` 时刻发往 native 的二进制描述符（`ATDF` 文件格式）。
+`.def` 文件是 Atlas 实体的唯一真相来源。`Atlas.Generators.Def` 是仓库中唯一的实体相关 Source Generator，负责把 `.def` 加用户的 `[Entity("Name")] partial class` 编织成所有进程的实体代码（属性、序列化、RPC、Mailbox、Dispatcher、Component、TypeRegistry）。C++ 侧不解析 `.def`，而是消费 `DefBootstrap.g.cs` 在单一 `[ModuleInitializer]` 中发往 native 的二进制描述符（`ATDF` 文件格式）。
 
 ---
 
@@ -76,13 +76,13 @@
 
 `scope="all_clients"` 等含 Ghost 同步的取值意味着属性会通过 cell 之间的 ghost 通道复制 —— BigWorld 的设计规律：Other 客户端可见 ⊆ Ghost 同步必需。
 
-### 1.2 RPC 标记
+### 1.2 RPC 与属性标记
 
 | 属性 | 取值 | 适用 | 说明 |
 |---|---|---|---|
 | `exposed` | `own_client` / `all_clients` / `true` | cell_methods, base_methods | 客户端是否可调；`true` ≡ `own_client`（比 BigWorld 默认更严） |
 | `reply` | 类型字串 | cell_methods, base_methods | 声明 RPC 有应答；省略 = fire-and-forget |
-| `reliable` | `true` / `false` | property | 改值走可靠通道，绕过 DeltaForwarder 字节预算 |
+| `reliable` | `true` / `false` | property | 保留到描述符；当前 emitter 不据此分流，所有 property delta 都走 reliable 通道 |
 | `persistent` | `true` / `false` | property | 进入持久化集 |
 
 `client_methods` 不允许 `exposed`、`reply`，由 generator 报错（DEF002 / DEF018）。`base_methods` 不允许 `exposed="all_clients"`（架构禁止跨实体 base RPC，DEF003）。
@@ -104,7 +104,8 @@
 
 `<components>` 内每个 `<component>` 是一个槽：`name=` 是 C# 槽名（脚本访问入口），`type=` 是组件类名。`scope` 沿用 8 值表，`local="server" | "client"` 切换为本进程私有（无网络存在），`lazy="true"` 推迟实例化。组件类型也可独立成 `<component>` 根 `.def` 文件并 `extends="..."` 形成单继承链，由 `DefLinker` 跨文件解析。
 
-属性 scope 必须 ⊆ 组件 scope（observer 子集关系）。组件 RPC 也走 cell/base/client 三段式分类，`rpc_id` 高 8 位放 `slot_idx` 区分入口。
+属性 scope 必须 ⊆ 组件 scope（observer 子集关系）。组件 RPC 也走
+cell/base/client 三段式分类，`rpc_id` 的 bits 24–30 放 `slot_idx` 区分入口。
 
 ### 1.5 ATLAS_DEF008：保留属性名 `position`
 
@@ -206,15 +207,19 @@ public partial class Avatar : ClientEntity
 | `{Class}.Mailboxes.g.cs` | Mailbox 结构体 + 属性入口 | |
 | `{Class}.Components.g.cs` | 槽访问器（`Combat` 属性等）+ `SyncedSlotCount` / `ResolveSyncedSlot`；服务端额外 `WriteOwnerComponentSection` / `HasOwnerDirtyComponent` / `ClearDirtyComponents`，客户端 `ApplyComponentSection` | 组件→槽映射稳定 1-based，槽 0 留给实体本体 |
 
-全局：
+全局 / 非实体产物：
 
 | 文件 | 内容 |
 |---|---|
-| `EntityFactory.g.cs` | `[ModuleInitializer]` 注册 typeId → factory（服务端 `EntityFactory.Register`；客户端 `Atlas.Client.ClientEntityFactory.Register`） |
-| `RpcIds.g.cs` | RPC id 常量；rpc_id 编码：方向(2 bit) + typeIndex(8 bit) + slotIdx(8 bit) + methodIdx(剩余) |
-| `DefRpcDispatcher.g.cs` | switch dispatch；客户端在 `[ModuleInitializer]` 调 `RegisterInto(Atlas.Client.ClientCallbacks.DefaultSession)`，host 可对自有 `ClientSession` 再调用 `RegisterInto(session)` |
+| `SpaceDataKeys.g.cs` | 合并所有 `<space_data>` key 并生成全局 registry |
+| `EntityFactory.g.cs` | 暴露 `DefEntityFactoryRegistrations.RegisterAll`；由 `DefBootstrap.g.cs` 注册 typeId → factory（服务端 `EntityFactory.Register`；客户端 `Atlas.Client.ClientEntityFactory.Register`） |
+| `RpcIds.g.cs` | RPC id 常量；rpc_id 编码：reply(1 bit) + slotIdx(7 bit) + direction(2 bit) + typeIndex(14 bit) + methodIdx(8 bit) |
+| `DefRpcDispatcher.g.cs` | switch dispatch；由 `DefBootstrap.g.cs` 调 `RegisterDefDispatchers()`，host 可对自有 `ClientSession` 再调用 `RegisterInto(session)` |
 | `DefStructRegistry.g.cs` | 把每个 struct 注册到 native 之前的 entity types |
-| `DefEntityTypeRegistry.g.cs` | 串成 ATDF 二进制 buffer，`[ModuleInitializer]` 时刻交给 `Atlas.Runtime` / `Atlas.Client` 的 bridge 喂给 C++ `EntityDefRegistry::RegisterFromBinaryBuffer` |
+| `DefComponentRegistry.g.cs` | 把 synced standalone component 描述符注册到 native；`component_ids.xml` 分配 `component_type_id` |
+| `DefEntityTypeRegistry.g.cs` | 串成 ATDF 二进制 buffer，`DefBootstrap.g.cs` 调用时交给 `Atlas.Runtime` / `Atlas.Client` 的 bridge 逐个喂给 C++ `EntityDefRegistry::RegisterType` |
+| `EntityDefDigest.g.cs` | 生成 entity / struct / component surface digest；登录阶段用于 def mismatch 拒绝 |
+| `DefBootstrap.g.cs` | 单一 `[ModuleInitializer]`，按 struct → component → entity → factory → dispatcher 顺序注册，并写入 `EntityDefDigest` |
 | `{Component}.Component.g.cs` | 每个 synced 组件类型一份；服务端 `ReplicatedComponent` 派生，客户端 `ClientReplicatedComponent` 派生 |
 | `{Struct}.Struct.g.cs` | 用户态 struct + Serialize/Deserialize；可由 `sync="whole" | "field"` 选择整块还是字段级 op-log，`Auto` 时由 `StructEmitter.DecideSyncMode` 启发式决定（DEF014 Info 透传选择） |
 
@@ -222,7 +227,7 @@ public partial class Avatar : ClientEntity
 
 ## 5. 客户端 RPC 安全校验链路
 
-C++ 侧不解析 `.def`；`EntityDefRegistry` 的 RPC / 属性 / scope 信息都来自 generator 通过 `DefEntityTypeRegistry.g.cs` 在 `[ModuleInitializer]` 写入的 ATDF buffer。校验链分两段：
+C++ 侧不解析 `.def`；`EntityDefRegistry` 的 RPC / 属性 / scope 信息都来自 generator 通过 `DefBootstrap.g.cs` 调用 `DefEntityTypeRegistry.RegisterAll()` 写入的 ATDF buffer。校验链分两段：
 
 ### 5.1 Client → Base（自身）
 
@@ -277,8 +282,8 @@ Client                     BaseApp                          CellApp
 | ATLAS_DEF001 | Error | `[Entity("X")]` 找不到匹配 `.def` |
 | ATLAS_DEF002 | Error | `client_methods` 标了 `exposed` |
 | ATLAS_DEF003 | Error | `base_methods` 用了 `exposed="all_clients"` |
-| ATLAS_DEF006 | Error | `.def` XML 解析失败 |
-| ATLAS_DEF007 | Error | 重复 type_id |
+| ATLAS_DEF006 | Error | `.def` 解析或结构校验失败，包括 XML 错误、非法根节点、local component 声明网络字段、组件属性 scope 超出组件 scope 等 |
+| ATLAS_DEF007 | Error | 保留诊断；当前 manifest 路径不触发，manifest id 冲突走 DEF021 |
 | ATLAS_DEF008 | Warning | 属性名 `position` 与 volatile 通道撞车，已自动跳过 |
 | ATLAS_DEF009 | Error | type 表达式语法错误 |
 | ATLAS_DEF010 | Error | type 表达式嵌套超深 |
@@ -290,6 +295,13 @@ Client                     BaseApp                          CellApp
 | ATLAS_DEF016 | Error | struct 与 alias 名冲突 |
 | ATLAS_DEF017 | Error | alias 引用链超深或成环 |
 | ATLAS_DEF018 | Error | `client_methods` 声明了 `reply` |
+| ATLAS_DEF019 | Error | 缺少 `entity_ids.xml`，或 manifest entry 缺 id；standalone synced component 缺 `component_ids.xml` entry 时也复用此码 |
+| ATLAS_DEF020 | Error | manifest id 超出范围；entity type id 为 `[1, 16383]`，component type id 为 `[1, 65535]` |
+| ATLAS_DEF021 | Error | manifest 内 id 重复，或多个实体解析到同一 type id |
+| ATLAS_DEF023 | Error | 实体命中了 `deprecated="true"` 的 `entity_ids.xml` entry |
+| ATLAS_DEF024 | Error | `.def` 实体未列入 `entity_ids.xml` |
+| ATLAS_DEF025 | Error | `entity_ids.xml` / `component_ids.xml` XML 结构错误，或同一编译中出现多个同名 manifest |
+| ATLAS_DEF026 | Error | manifest 内 name 重复 |
 | ATLAS_RPC001 | Warning | `RpcReply<T>.Value` 未先检查 `IsOk` 就访问（Roslyn analyzer，运行期会抛） |
 
 ---
@@ -309,9 +321,11 @@ Client                     BaseApp                          CellApp
 
 ```bash
 dotnet build src/csharp/Atlas.Generators.Def/      # 构建 generator
-dotnet test  tests/csharp                          # generator + 运行时测试
+dotnet test tests/csharp/Atlas.Generators.Tests/Atlas.Generators.Tests.csproj --configuration Debug
+dotnet test tests/csharp/Atlas.Runtime.Tests/Atlas.Runtime.Tests.csproj --configuration Debug
+dotnet test tests/csharp/Atlas.Client.Tests/Atlas.Client.Tests.csproj --configuration Debug
 cmake --build build/debug --config Debug           # C++ 构建
-ctest --build-config Debug -L unit                  # C++ 单元测试
+ctest --test-dir build/debug -C Debug -L unit --output-on-failure
 ```
 
 落到磁盘的 `.g.cs` 在 `obj/<config>/<tfm>/generated/Atlas.Generators.Def/Atlas.Generators.Def.DefGenerator/` 下；diff 这个目录是审计 generator 行为最直接的方式。

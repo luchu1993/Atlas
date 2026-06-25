@@ -1,5 +1,9 @@
 # Atlas Client SDK — Unity Integration Guide
 
+**Status:** Current user guide for `Atlas.Client.Unity` plus the native
+`atlas_net_client` SDK. Mobile native artifacts are produced by CI; local
+setup stages host binaries through `tools/bin/setup_unity_client.{bat,sh}`.
+
 User guide for game developers integrating Atlas's client SDK into a
 Unity 2022.3 LTS+ project. Sibling to the architecture-focused
 [`UNITY_NATIVE_DLL_DESIGN.md`](UNITY_NATIVE_DLL_DESIGN.md); this doc
@@ -21,17 +25,17 @@ is the practical "what do I do" view.
 
 | | Requirement |
 |---|---|
-| **Unity** | 2022.3 LTS or 6.x (≤ 6.5 — see below). API Compatibility = .NET Standard 2.1 (Project Settings → Player → Other Settings). |
+| **Unity** | 2022.3 LTS or the current MVP Unity 6 editor version (`6000.0.43f1-lilith-2`). API Compatibility = .NET Standard 2.1 (Project Settings → Player → Other Settings). |
 | **Atlas repo** | This tree, with `ATLAS_BUILD_NET_CLIENT=ON` enabled when configuring CMake. |
 | **.NET SDK** | 10.0.202+ (`dotnet --version`, matching `global.json`). |
-| **Native toolchain** | Host build only: MSVC 2022 (Windows) / Clang or GCC (Linux) / Xcode CLT (macOS). Mobile builds (Android arm64 / iOS arm64) come from CI artefacts — see [Mobile targets](#mobile-targets). |
+| **Native toolchain** | Host build only: Visual Studio 2026 or Visual Studio 2022 17.14+ with MSVC (Windows) / Clang or GCC (Linux) / Xcode CLT (macOS). Mobile builds (Android arm64 / iOS arm64) come from CI artefacts — see [Mobile targets](#mobile-targets). |
 
-Unity 2022 → 6.5 are the **Pattern B** range — `[MonoPInvokeCallback]`
-+ delegate is required because `[UnmanagedCallersOnly]` isn't recognised
-by the embedded Mono / old .NET 4.x runtime. Unity 6.6+ (planned to
-embed .NET 10) will support Pattern A; the SDK source has the
-`#if UNITY_5_3_OR_NEWER` attribute guard ready and the migration is
-mechanical (see [`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)
+Unity 2022.3 LTS and the current MVP Unity 6 editor version use the
+**Pattern B** bridge — `[MonoPInvokeCallback]` + delegate is required because
+`[UnmanagedCallersOnly]` is not recognised by the embedded runtime. Treat any
+other Unity 6.x or future runtime as a new validation target: re-run the
+IL2CPP callback probe on the exact target Unity version before changing the bridge (see
+[`docs/spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)
 §Forward compatibility).
 
 ## Quick start
@@ -49,10 +53,12 @@ tools/bin/setup_unity_client.sh --unity-project ~/path/to/YourUnityProject
 The tool builds the host-platform native (`atlas_net_client.{dll,so,bundle}`)
 + managed (`Atlas.Shared.dll`, `Atlas.Client.dll`) binaries, stages them
 into `src/csharp/Atlas.Client.Unity/Plugins/<platform>/` (in this repo),
-and copies the entire `src/csharp/Atlas.Client.Unity/` folder into your
-project's `Assets/Atlas.Client.Unity/`. Open the project in Unity Hub
-and the SDK appears under **Assets/Atlas.Client.Unity/** in the Project
-window; the asmdef compiles automatically.
+copies the Windows / Linux mimalloc runtime dependency when needed, and
+syncs the runtime SDK contents into your project's
+`Assets/Atlas.Client.Unity/`. The sync excludes IDE-only and build-output
+paths (`Atlas.Client.Unity.csproj`, `bin/`, `obj/`, `.gitkeep`). Open the
+project in Unity Hub and the SDK appears under **Assets/Atlas.Client.Unity/**
+in the Project window; the asmdef compiles automatically.
 
 Useful flags:
 
@@ -73,8 +79,15 @@ non-default flow:
 ### 1. Build the binaries
 
 ```bash
-# Native (host platform)
-cmake --preset release -DATLAS_BUILD_NET_CLIENT=ON
+# Native (host platform, matching setup_unity_client)
+# Windows
+tools\bin\build.bat release --config-only
+cmake -S . -B build/release -DATLAS_BUILD_NET_CLIENT=ON
+cmake --build build/release --target atlas_net_client --config Release
+
+# Linux / macOS
+tools/bin/build.sh release --config-only
+cmake -S . -B build/release -DATLAS_BUILD_NET_CLIENT=ON
 cmake --build build/release --target atlas_net_client --config Release
 
 # Managed
@@ -100,10 +113,12 @@ src/csharp/Atlas.Client.Unity/
     ├── Atlas.Shared.dll                     # managed, any platform
     ├── Atlas.Client.dll                     # managed, any platform
     └── Windows/x86_64/atlas_net_client.dll  # native, per platform
+        Windows/x86_64/mimalloc.dll          # mimalloc-debug.dll for Debug
         Linux/x86_64/libatlas_net_client.so
+        Linux/x86_64/libmimalloc.so          # libmimalloc-debug.so for Debug
         macOS/atlas_net_client.bundle
         Android/arm64-v8a/libatlas_net_client.so
-        iOS/libatlas_net_client.a
+        iOS/libatlas_net_client_static.a
 ```
 
 Create the platform subdirectories as needed; Unity infers platform
@@ -129,10 +144,12 @@ or you'll see `DllNotFoundException` at runtime:
 | `Atlas.Shared.dll` | Tick **Any Platform**. Untick **Auto Reference** (asmdef references it explicitly). |
 | `Atlas.Client.dll` | Same as above. |
 | `Plugins/Windows/x86_64/atlas_net_client.dll` | Platform: **Standalone Windows** only. CPU = **x86_64**. |
+| `Plugins/Windows/x86_64/mimalloc.dll` / `mimalloc-debug.dll` | Same as the Windows native plugin. |
 | `Plugins/Linux/x86_64/libatlas_net_client.so` | Platform: **Standalone Linux** only. CPU = **x86_64**. |
+| `Plugins/Linux/x86_64/libmimalloc.so` / `libmimalloc-debug.so` | Same as the Linux native plugin. |
 | `Plugins/macOS/atlas_net_client.bundle` | Platform: **Standalone macOS** only. CPU = **AnyCPU** (or **ARM64** if Apple Silicon-only). |
 | `Plugins/Android/arm64-v8a/libatlas_net_client.so` | Platform: **Android** only. CPU = **ARM64**. |
-| `Plugins/iOS/libatlas_net_client.a` | Platform: **iOS** only. Add to Embedded Binaries (Unity does this automatically when the file is under `Plugins/iOS/`). |
+| `Plugins/iOS/libatlas_net_client_static.a` | Platform: **iOS** only. Add to Embedded Binaries (Unity does this automatically when the file is under `Plugins/iOS/`). |
 
 Apply each change. Unity will recompile the asmdef.
 
@@ -157,14 +174,19 @@ OnDestroy → AtlasNetDestroy() + clear filters
 | `Login(username, passwordHash)` | `int` (rc) | Any time after Awake; legal only in `Disconnected`. |
 | `Authenticate()` | `int` | Inside `LoginFinished` handler when status == `Success`. |
 | `Logout()` | `int` | Any time; idempotent. |
+| `SetTransportImpairment(oneWayLatencyMs, lossPermyriad, seed)` | `int` | Before login or during a session, for movement / RUDP validation only. |
 | `SendBaseRpc(entityId, rpcId, payload)` | `int` | After `AuthFinished(success=true)`. |
 | `SendCellRpc(entityId, rpcId, payload)` | `int` | Same. |
+| `SendMovementInput(targetEntityId, frames)` | `int` | Owner prediction path; normally called through `ClientHost.SendMovementInputHandler`. |
+| `SendMovementCorrectionReport(targetEntityId, ackedInputSeq, serverTick, distanceM, correctionFlags)` | `int` | Owner replay telemetry; normally called by `ClientSession` / predictor glue. |
+| `PredictMovement(previous, input, serverTick, out state)` | `int` | Static helper for Unity-side native predictor parity. |
 | `TryGetInterpolatedTransform(entityId, out pos, out dir, out onGround)` | `bool` | Per-frame, after the entity exists in `Session.EntityManager`. Returns `false` if no samples yet. |
 | `TryGetStats(out stats)` | `bool` | Anytime after Awake. |
 | `Configure(host, port)` | `void` | Before `Login`, to override the Inspector defaults. |
 | `ConfigureSession(session)` | `void` | Before login if you need a custom `ClientSession` / generated registry. |
 | `Session` | `ClientSession` | Access to entity, space-data, RPC, and BSP events decoded from `on_deliver`. |
 | `State` | `AtlasNetState` | Anytime. |
+| `RpcOutCount` | `uint` | Debug counter for Base / Cell RPC sends through this manager. |
 
 ### Events
 
@@ -265,7 +287,7 @@ tools/bin/run_mvp_cluster.sh
 ```
 
 That brings up machined / loginapp / dbapp / baseappmgr / baseapp /
-cellappmgr / cellapp from `build/debug` with the MVP assemblies and
+cellappmgr / cellapp from the `bin/debug` artifacts with the MVP assemblies and
 parks LoginApp on `127.0.0.1:20018`, matching the
 `AtlasNetworkManager` Inspector default. Stop the cluster with Ctrl+C
 in that terminal.
@@ -310,18 +332,19 @@ Console should then show the login → auth → entity-creation chain.
   ```
   Drop `libatlas_net_client_static.a` into `Plugins/iOS/`.
 
-### Pattern A migration (Unity 6.6+, future)
+### Pattern A migration (future runtime)
 
-When Unity 6.6 ships with embedded .NET 10, re-run the spike to
-verify `[UnmanagedCallersOnly]` works:
+When a target Unity runtime provides compatible function-pointer support,
+re-run the IL2CPP callback probe to verify `[UnmanagedCallersOnly]` works:
 
 ```bash
-tools\bin\build.bat release -DATLAS_BUILD_IL2CPP_PROBE=ON
-# Drop atlas_il2cpp_probe.dll/.so/.bundle into a Unity test project
-# under Assets/Plugins/IL2CPPProbe/, attach ProbeComponent.
+cmake --preset debug -DATLAS_BUILD_IL2CPP_PROBE=ON
+cmake --build --preset debug --target atlas_il2cpp_probe --config Debug
+# Drop atlas_il2cpp_probe.dll/.so/.a/.bundle into a Unity test project
+# under Assets/Plugins/IL2CPPProbe/, enable unsafe code, attach ProbeComponent.
 ```
 
-If both Pattern A and B fire on all four targets, follow the
+If both Pattern A and B fire on all target platforms, follow the
 mechanical migration in [`spike_il2cpp_callback.md`](../spike_il2cpp_callback.md)
 §Forward compatibility (3 lines per handler, no DLL change, no ABI
 bump).
@@ -383,8 +406,8 @@ existing build outputs without recompiling.
 
 ### Pattern A throws `EntryPointNotFoundException` at runtime
 
-- You're on Unity ≤ 6.5; Pattern B is the only supported path. The
-  source uses `[MonoPInvokeCallback]` automatically when
+- You're on a validated Pattern B Unity runtime; Pattern B is the only
+  supported path. The source uses `[MonoPInvokeCallback]` automatically when
   `UNITY_5_3_OR_NEWER` is defined — verify the asmdef is being
   compiled by Unity (not a side-loaded netstandard project).
 

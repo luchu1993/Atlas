@@ -57,7 +57,7 @@ enum class BaseApp : uint16_t {
   kReplicatedReliableDeltaFromCell = 2017,
   // CellApp -> BaseApp opaque CELL_DATA snapshot for DB writes and recovery.
   kBackupCellEntity = 2018,
-  // CellApp -> BaseApp owner baseline for reliable=false client properties.
+  // CellApp -> BaseApp owner-scope baseline refresh.
   kReplicatedBaselineFromCell = 2019,
   kAuthenticate = 2020,
   kAuthenticateResult = 2021,

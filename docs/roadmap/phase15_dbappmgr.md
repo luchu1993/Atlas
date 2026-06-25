@@ -2,7 +2,7 @@
 
 **Status:** ✅ P15.2 主线 — DBAppMgr 进程骨架、DBApp 注册、range shard
 table、GetShardTable / ShardTableUpdate、watcher、DBApp 注册接入和单元测试
-已起步；BaseApp shard cache 与 dbid 路由、LoginApp shard cache 与 username
+已接入；BaseApp shard cache 与 dbid 路由、LoginApp shard cache 与 username
 auth shard 路由、DBApp request version 校验和 request idempotency cache 已接入，
 DBApp range-scoped explicit DBID create allocation 已接入；allocator recovery /
 XML duplicate guard、duplicate retry、BaseApp WriteToDB death retry、
@@ -15,14 +15,16 @@ Reviver dbappmgr target、HA verify 脚本已接入。
 
 ## 0. 为什么
 
-当前 Atlas 只有单 DBApp:
+P15 前的 Atlas 基线只有单 DBApp:
 
 - BaseApp / LoginApp 通过 machined registry 找到唯一一台 DBApp 直接发
   `CheckoutEntity` / `WriteEntity`。
-- DBApp 持有 `database_`(SQLite/MySQL backend)、`id_allocator_`、
+- DBApp 持有 `database_`（当前已落地 SQLite / XML，MySQL 仅预留接口）、
+  `id_allocator_`、
   `checkout_mgr_`、`pending_checkout_requests_` —— 全是单点。
 - 单 DBApp 写吞吐 / 容量 / 故障域都是单点。
-- `src/server/dbappmgr/CMakeLists.txt` 只是占位空文件。
+- P15 之前 `src/server/dbappmgr/` 只是占位；当前已经落地 DBAppMgr 进程、
+  消息面、watcher、worker 重报恢复和 Reviver 监督。
 
 DBAppMgr 在 BigWorld 里负责:
 1. **多 DBApp 注册表** — 多台 DBApp 各自服务一段 dbid 范围。
@@ -36,20 +38,20 @@ worker 重建恢复框架。
 
 ## 1. 范围
 
-本 RFC 把 DBAppMgr 拆成两个阶段:
+Phase 15 已按两个里程碑交付:
 
-- **P15.1 — DBAppMgr 本体(无 HA)**:实现 mgr 进程 + DBApp 注册 + 路由
+- **P15.1 — DBAppMgr 本体(无 HA)**:DBAppMgr 进程 + DBApp 注册 + 路由
   查询 + 简单分片。让客户端 query "dbid → DBApp",但 mgr 自身 crash
   仍丢全部状态。
-- **P15.2 — DBAppMgr HA**:加 worker 重建恢复,接入 Reviver
+- **P15.2 — DBAppMgr HA**:worker 重建恢复,接入 Reviver
   multi-target 框架和 verify 脚本。镜像 Phase 13 的 CellAppMgr /
   BaseAppMgr 模式,不引入 manager snapshot。
 
-本文档定义 P15.1 + P15.2 的目标设计,并记录当前实现状态。
+本文档记录 P15.1 + P15.2 的目标设计和当前实现状态。
 
-## 2. 数据流变化(对比当前)
+## 2. 数据流变化
 
-当前路径:
+P15 前路径:
 
 ```
 LoginApp / BaseApp  ──── machined query DBApp ────→ DBApp
@@ -57,7 +59,7 @@ LoginApp / BaseApp  ──── machined query DBApp ────→ DBApp
        └──────── CheckoutEntity / WriteEntity ────────┘
 ```
 
-P15 之后:
+当前主线:
 
 ```
 LoginApp / BaseApp  ────────→ DBAppMgr  ────route────→ DBApp_shard_K
@@ -87,27 +89,29 @@ BaseAppMgr 的 `FindLeastLoaded`)。
 
 ### 3.2 DBApp 注册:走 DBAppMgr 而非 machined
 
-新增 `RegisterDbApp` 消息(DBApp → DBAppMgr),DBApp 启动后**先**
+已新增 `RegisterDbApp` 消息(DBApp → DBAppMgr),DBApp 启动后**先**
 注册到 DBAppMgr,DBAppMgr 在 ack 里返回它的 `dbapp_id` 和初始 shard
 范围。machined registry 仍保留 DBApp 的存在,但路由权威在 DBAppMgr。
 
-`dbapp_id` 编码进 dbid 的高 16 位(类似 cellapp app_id 编码在 EntityID
-高位),这样客户端拿到一个 dbid 立刻知道默认 owner;DBAppMgr 只在
-shard rebalance 时偏离这个 owner。
+`dbapp_id` 是 shard table 中的稳定 app id,通过 `known_app_id` 在 recovery
+窗口保留。dbid 保持完整 64 位键;客户端按 `[low, high) → DBApp` 路由表查
+owner,LoginApp 对 username 使用 `DbShardRouteKey` 映射到同一 range 表。
 
-### 3.3 客户端 shard table 一致性:lease + invalidate
+### 3.3 客户端 shard table 一致性:version + invalidate
 
 客户端(BaseApp / LoginApp)的 shard table 是缓存,生命周期由 DBAppMgr
-租约 (`shard_table_version`) 控制:
+版本号 (`shard_table_version`) 控制:
 
 - 客户端首次连 DBAppMgr,发 `GetShardTable(known_version=0)`,拿到
   完整表 + 版本号 V。
 - 之后每次客户端发 checkout/write 给 DBApp,DBApp 检查请求里携带的
-  `shard_table_version`:不匹配则回 `InvalidShardTable(current=V')`,
-  客户端重新拉表。`CheckinEntity` / `AbortCheckout` 是 cleanup 路径,
-  不按版本拒绝,避免旧路由表下的释放请求被丢弃后留下 checkout 锁。
-- DBAppMgr 也可以主动 broadcast `ShardTableUpdate(new_version, deltas)`,
-  按 BaseAppMgr / CellAppMgr 已有的 broadcast 模式实现。
+  `shard_table_version`:不匹配则在 `CheckoutEntityAck` / `WriteEntityAck`
+  中返回 `error=invalid_shard_table` 和 `current_shard_table_version`,客户端
+  重新拉表。`CheckinEntity` / `AbortCheckout` 是 cleanup 路径,不按版本拒绝,
+  避免旧路由表下的释放请求被丢弃后留下 checkout 锁。
+- DBAppMgr 主动 broadcast `ShardTableUpdate(new_version, entries)`,
+  携带当前全量 shard table，按 BaseAppMgr / CellAppMgr 已有的 broadcast
+  模式实现。
 
 ### 3.4 Pending request 恢复:DBApp 自己负责 retry,不是 DBAppMgr
 
@@ -131,15 +135,16 @@ recovery 窗口内等存活 DBApp 重注册并重报权威状态,从 worker 报�
 | 步骤 | 内容 |
 |---|---|
 | P15.2-S1 | ✅ DBApp `RecoverDBAppState` 重报 shard ranges；DBAppMgr recovery window 内冻结恢复注册 split |
-| P15.2-S2 | ✅ `RegisterDBApp.known_app_id` echo 保留 dbapp_id |
+| P15.2-S2 | ✅ `RegisterDbApp.known_app_id` echo 保留 dbapp_id |
 | P15.2-S3 | ✅ Reviver 多 target 加 dbappmgr |
-| P15.2-S4 | ✅ verify_dbappmgr_ha.py + docs |
+| P15.2-S4 | ✅ `tools/bin/verify_dbappmgr_ha.{bat,sh}` + docs |
 
 worker 重报的权威状态:
 - DBApp 表(addr, dbapp_id, shard ranges, is_retiring, last_load_at)——由重注册
   + `RecoverDBAppState` 重建
 - Shard table 版本号(用于客户端缓存失效)——取存活 DBApp 报告的最高版本
-- pending shard migration——由 DBApp 重报续做(无 snapshot 续航)
+- pending shard migration 当前未实现；Phase 15 不需要重报该状态，未来
+  rebalance / migration 若落地，应由 DBApp worker 重报续做。
 
 `next_dbapp_id_` 从重报的 dbapp_id 推回(取 max + 1),`known_app_id` 保留原 id。
 
@@ -151,18 +156,17 @@ Reviver multi-target 已接入 `dbappmgr_target_`，支持
 - **跨 DBApp 事务** — checkout 一个 entity 涉及多个 shard 的场景。
   Atlas 当前 entity 模型每个 entity 一个 dbid,不跨行;不需要分布式
   事务。
-- **DBApp 副本(replication)** — Phase 15 不做主从复制,DBApp 内部
-  仍是 SQLite/MySQL 自己的 storage。replication 由 DB 层(MySQL
-  cluster / Postgres streaming)解决,Atlas 上层不关心。
-- **shard auto-rebalance** — 自动按负载迁移 shard。先实现"手动 ops
-  触发 rebalance" + "DBApp 死亡时 reassign",auto-rebalance 推到
-  Phase 16+。
+- **DBApp 副本(replication)** — Phase 15 不做主从复制；当前 DBApp 内部
+  仍是 SQLite / XML 存储，MySQL 接入后 replication 也应由 DB 层
+  (MySQL cluster / Postgres streaming)解决，Atlas 上层不关心。
+- **shard rebalance** — DBApp 死亡时 reassign 已接入；手动 ops 触发
+  rebalance 和按负载自动迁移 shard 均推到 Phase 16+。
 - **历史数据迁移工具** — 从单 DBApp 升到多 DBApp 的迁移脚本。当前
-  Atlas 还在开发期,deferr 到生产部署前。
+  Atlas 还在开发期,推迟到生产部署前。
 
-## 5. 消息协议草案
+## 5. 消息协议
 
-新增 message_id 段。Login 已占 5000-5999,DBAppMgr 使用 8000-8099:
+已新增 message_id 段。Login 已占 5000-5999,DBAppMgr 使用 8000-8099:
 
 ```cpp
 enum class DBAppMgr : uint16_t {
@@ -172,6 +176,7 @@ enum class DBAppMgr : uint16_t {
   kGetShardTable = 8010,
   kShardTableResponse = 8011,
   kShardTableUpdate = 8012,
+  kRecoverDBAppState = 8013,
   kHealthProbe = 8020,
   kHealthProbeAck = 8021,
 };
@@ -187,7 +192,7 @@ ShardTableResponse {
 ShardEntry {
   uint64_t low_dbid;
   uint64_t high_dbid;    // exclusive
-  uint16_t dbapp_id;
+  uint32_t dbapp_id;
   Address dbapp_addr;
   bool is_retiring;
 }
@@ -195,45 +200,41 @@ ShardEntry {
 
 ## 6. 与 Phase 13 follow-up 的关系
 
-Phase 13 follow-up 列表里的 #4 就是本文档。完成 P15.1 + P15.2 后,
-Phase 13 的 "Manager HA 三件套" 才齐(CellAppMgr / BaseAppMgr / DBAppMgr
-都靠 worker-重建恢复 + Reviver supervision,无 snapshot)。
+Phase 13 follow-up 列表里的 #4 就是本文档。P15.1 + P15.2 完成后,
+Phase 13 的 "Manager HA 三件套" 已齐:CellAppMgr / BaseAppMgr / DBAppMgr
+都靠 worker-重建恢复 + Reviver supervision,无 snapshot。
 
-## 7. 工作量估计
+## 7. 交付状态
 
-| 阶段 | 内容 | 估计 |
+| 阶段 | 内容 | 状态 |
 |---|---|---|
-| P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已起步，含 DBApp 注册接入；runtime new DBID range allocation、allocator recovery、XML duplicate guard 与 duplicate retry 已接入 |
-| P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已起步 |
+| P15.1-D1 | DBAppMgr 进程骨架 + RegisterDbApp + InformLoad | 已接入，含 DBApp 注册接入；runtime new DBID range allocation、allocator recovery、XML duplicate guard 与 duplicate retry 已接入 |
+| P15.1-D2 | Shard table + 客户端 GetShardTable + broadcast invalidate | 已接入 |
 | P15.1-D3 | BaseApp / LoginApp 接入 shard table 缓存,dual-path 兼容 (旧 single-dbapp 仍工作) | BaseApp dbid 路由与 LoginApp username auth 路由已接入；single-dbapp fast path 保留 |
 | P15.1-D4 | DBApp 端 request version 校验 + idempotency cache + request retry on death | version 校验、completed ack idempotency cache、BaseApp WriteToDB death retry、BaseApp login checkout death retry、LoginApp auth death retry 与 BaseApp logoff death retry 已接入 |
 | P15.2-S1 | DBApp worker shard 重报 + recovery window | 已接入 |
 | P15.2-S2 | `known_app_id` echo 保留 dbapp_id | 已接入 |
 | P15.2-S3 | Reviver dbappmgr target | 已接入 |
 | P15.2-S4 | HA verify/docs | 已接入 |
-| 单测 + 集成测试 | | ~1500 行 |
-| 文档 | phase15 主文档 + verify 脚本 + ops 指南 | ~800 行 |
-| **总计** | | **~7600 行** |
 
 ## 8. 不会做的事(明确归档)
 
-- 不会在 Phase 15 里替换 SQLite/MySQL 后端为分布式 DB(如 TiDB)。
+- 不会在 Phase 15 里把当前 SQLite / XML 后端或未来 MySQL 后端替换为
+  分布式 DB(如 TiDB)。
 - 不会改 Phase 7 已经稳定的 DBApp <-> DB 接口。
 - 不会强制 LoginApp 必须经过 DBAppMgr — LoginApp 直连唯一 DBApp 的
   fast path 在单 DBApp 部署下保留;multi-DBApp 部署强制走 DBAppMgr。
 - 不会让 DBAppMgr 持有任何 entity 数据 — DBAppMgr 只是路由表 + 健康
   状态,不接触 entity blob。
 
-## 9. 决策检查清单(实现前需要确认)
+## 9. 决策记录
 
-- [x] dbid 编码方案:`dbapp_id` 进高位还是用独立路由表? → 当前倾向
-      独立路由表(留出 dbid 全 64 位空间)。
-- [x] machined 是否要新增 ProcessType::kDBAppMgr,还是复用 kDBApp? →
-      新增 kDBAppMgr 与其他 mgr 一致。
-- [ ] Reviver 是否同时启动 DBAppMgr cold start? → 是,加
-      `--revive-dbappmgr-on-start` 与 cellappmgr / baseappmgr 对齐。
-- [x] Shard table 是否在 watcher 中暴露(便于 ops debug)? → 是,
-      `dbappmgr/shards/table` 摘要 + `shards/version`。
-- [x] verify_dbappmgr_ha.py 覆盖 DBAppMgr restart / worker shard rebuild /
-      Reviver monitor failover；当前先 copy BaseAppMgr verify 的通用结构,
-      等第三个 mgr verify 后再抽共享模块(参考 second-use 原则)。
+- dbid 不编码 `dbapp_id` 高位；DBApp owner 由独立 shard table 决定，保留
+  dbid 全 64 位空间。
+- machined 新增 `ProcessType::kDbAppMgr`，与其他 manager 进程一致。
+- Reviver 支持 DBAppMgr cold start：`--revive-dbappmgr-on-start` 与
+  CellAppMgr / BaseAppMgr 对齐。
+- Shard table 经 watcher 暴露：`dbappmgr/shards/table` 摘要 +
+  `dbappmgr/shards/version`。
+- `tools/bin/verify_dbappmgr_ha.{bat,sh}` 覆盖 DBAppMgr restart、worker shard rebuild 和
+  Reviver monitor failover。

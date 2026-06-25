@@ -211,7 +211,7 @@ class BaseApp : public EntityApp {
   void FlushClientDeltas();
 
   // Reliable full-state snapshot per client-bound entity every
-  // kBaselineInterval ticks; recovers the unreliable delta path from loss.
+  // kBaselineInterval ticks; refreshes owner-scope state after resync gaps.
   void EmitBaselineSnapshots();
 
   void RegisterInternalHandlers();

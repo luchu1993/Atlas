@@ -1,4 +1,4 @@
-# Profiler Infrastructure (Tracy + OpenTelemetry)
+# Profiler Infrastructure (Tracy)
 
 **Status:** ✅ Shipped (Tracy native + managed; OpenTelemetry bridge
 deferred).
@@ -58,7 +58,7 @@ ATLAS_PROFILE_LOCKABLE(type, var)
 ATLAS_PROFILE_LOCK_MARK(var)
 
 #ifndef ATLAS_PROFILE_ENABLED
-#  define ATLAS_PROFILE_ENABLED 1
+#  define ATLAS_PROFILE_ENABLED 0
 #endif
 ```
 
@@ -81,12 +81,13 @@ Atlas.Shared boots with NullProfilerBackend.
   └─ Atlas.Client.Desktop  → keeps NullProfilerBackend
 ```
 
-Two backends cannot coexist — `Profiler.Install` rejects the second
-call. Unity backend caches `ProfilerMarker` per literal name in a
-thread-static dictionary; per-call cost is one dictionary lookup +
-`marker.Begin()`. `Plot` routes to `ProfilerCounterValue<T>` on Unity
-2022.2+ and falls back to `Profiler.EmitFrameMetaData` on older
-versions.
+Two backends cannot coexist — `Profiler.SetBackend` rejects the second
+non-null backend. Unity backend caches `ProfilerMarker` per literal name
+in a `ConcurrentDictionary`; its thread-static stack only tracks open
+zones so `EndZone` can close the right marker. `Plot` is currently a
+no-op in Unity because the engine bundle does not include a name/value
+plot API; wire Unity's optional counter API when the first Unity plot
+callsite needs it.
 
 ## Build modes
 
@@ -120,10 +121,10 @@ fine-grained zones to plot counters.
 
 ## Caveats
 
-- **Tracy wire-protocol drift** — native and managed must match. The
-  managed P/Invoke (`Atlas.Runtime/Diagnostics/TracyNative.cs`) is
-  pinned to the same Tracy tag as the C++ submodule; CI must fail on
-  mismatch.
+- **Tracy ABI / wire-protocol drift** — native and managed must match.
+  `Atlas.Runtime/Diagnostics/TracyNative.cs` owns direct P/Invoke
+  bindings into the native `TracyClient`; every Tracy bump must verify
+  those symbols and structs against `TracyC.h`.
 - **Sampling stack gaps** — `[UnmanagedCallersOnly]` thunks have no
   PDB, so sampling profilers may show `[unknown]` between native and
   managed zones. Atlas's primary mode is **explicit zones**; sampling
@@ -132,9 +133,10 @@ fine-grained zones to plot counters.
   envelope `traceparent` must be cleared at session boundaries
   (login handoff, channel rebuild) to keep unrelated requests out of
   the same span tree.
-- **Unity domain reload** — `UnityProfilerBackend` subscribes to
-  `AssemblyReloadEvents.beforeAssemblyReload` to flush its marker
-  cache; stale marker IDs across a play-session crash IL2CPP.
+- **Unity domain reload** — `UnityProfilerBackend` keeps only managed
+  `ProfilerMarker` instances and thread-local open stacks. Unity
+  integration should reinstall the backend after reload rather than
+  preserving backend state across play sessions.
 - **Production exposure** — Tracy's listener port reveals hot-path
   code structure to anyone who can connect. machined must keep the
   port range bound to the cluster-internal interface.

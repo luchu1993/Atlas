@@ -4,7 +4,8 @@
 >
 > **读者**：工程（必读）、策划（§3、§7、§9 必读）、工具开发（必读）、运维（§10 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计。当前已落地 `.def` parser / generator / runtime
+> 元数据链路；Excel 驱动的 gameplay 数据管线尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`DETERMINISM_CONTRACT.md`
 >
@@ -63,7 +64,7 @@
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────────┐
-│  Build Pipeline (DataBuild.exe)                             │
+│  Build Pipeline (目标 DataBuild.exe)                         │
 │  ├── Excel Reader (EPPlus)                                  │
 │  ├── Validator (外键 / 范围 / 类型)                          │
 │  ├── DSL Compiler (text → bytecode)                         │
@@ -97,7 +98,7 @@
 | 角色 | 工具 | 产出 |
 |---|---|---|
 | **策划** | Excel | `.xlsx` 文件 |
-| **DataBuild.exe** | C# console app | 校验 + 转换 |
+| **DataBuild.exe（目标）** | C# console app | 校验 + 转换 |
 | **运行时** | 服务端 + Unity | 加载 `.bytes` 用 |
 
 ---
@@ -202,12 +203,12 @@ data/source/
 
 ---
 
-## 4. DataBuild Pipeline
+## 4. 目标 DataBuild Pipeline
 
 ### 4.1 入口与流程
 
 ```csharp
-// tools/DataBuild/Program.cs
+// planned DataBuild project
 public static int Main(string[] args) {
   var config = LoadBuildConfig();
   var collector = new ExcelCollector(config.SourceDir);
@@ -435,7 +436,7 @@ FlatBuffers 优势：
 
 ### 7.2 schema 文件
 
-`tools/DataBuild/schemas/skills.fbs`:
+计划中的 DataBuild schema `skills.fbs`：
 
 ```
 namespace Atlas.CombatCore.Fbs;
@@ -613,13 +614,13 @@ DSL 编译期严格执行（参见 `COMBAT_ACTIONS.md §8.4`）：
 
 ---
 
-## 9. 策划工作流
+## 9. 目标策划工作流
 
-### 9.1 日常迭代
+### 9.1 DataBuild 落地后的日常迭代
 
 ```
 1. 策划在 Excel 改技能数值/添加新 buff
-2. 本地跑 ./tools/build_data.bat
+2. 本地跑 DataBuild wrapper
    → DataBuild 校验 + 生成
    → 失败：错误信息明确指出问题
    → 成功：data/generated/*.bytes 更新
@@ -628,27 +629,32 @@ DSL 编译期严格执行（参见 `COMBAT_ACTIONS.md §8.4`）：
 5. 推到 git，CI 自动跑 DataBuild + 单元测试 + 上传到测试服
 ```
 
-### 9.2 CI 集成
+当前仓库尚未提供 DataBuild 项目或 wrapper，因此以上是目标工作流，不是
+现有可执行步骤。
+
+### 9.2 目标 CI 集成
 
 ```yaml
-# .gitlab-ci.yml 示例
-stages:
-  - data_build
-  - test
+# .github/workflows/data-build.yml 示例
+name: Data Build
 
-data_build:
-  stage: data_build
-  script:
-    - dotnet run --project tools/DataBuild
-    - git diff --exit-code data/generated/  # 确保提交者已更新
-  artifacts:
-    paths:
-      - data/generated/
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
 
-test:
-  stage: test
-  script:
-    - dotnet test
+jobs:
+  data-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - run: dotnet run --project <DataBuild project>
+      - run: git diff --exit-code data/generated/
+      - run: dotnet test
 ```
 
 ### 9.3 多人协作
@@ -792,7 +798,7 @@ ScriptableObject 仅在 Unity Editor 作为**编辑包装层**（可选）：策
 - 表结构合理时（窄表，每行一个独立实体）冲突少
 - 极端情况用 csv 中间格式手动 diff
 
-工具支持：`tools/excel_diff.exe` 把两版 .xlsx diff 成可读格式。
+目标工具支持：把两版 `.xlsx` diff 成可读格式；当前仓库尚未提供该工具。
 
 ### Q5: 上线后改装备数值玩家会感知吗？
 
@@ -857,7 +863,7 @@ DataBuild 输出二进制后计算 SHA-256：
 
 ---
 
-## 13. 里程碑
+## 13. 目标里程碑
 
 | 阶段 | 交付 |
 |---|---|
@@ -878,8 +884,8 @@ DataBuild 输出二进制后计算 SHA-256：
   - `OVERVIEW.md`
   - `SKILL_SYSTEM.md`、`BUFF_SYSTEM.md` 等所有引用 Excel schema 的文档
   - `COMBAT_ACTIONS.md`（DSL 编译规范）
-  - `09_tools/FRAME_DATA_EDITOR.md`（编辑工具）
-  - `10_liveops/HOTFIX_PLAYBOOK.md`（热更操作手册，待写）
+  - [`09_tools/FRAME_DATA_EDITOR.md`](../09_tools/FRAME_DATA_EDITOR.md)（编辑工具）
+  - 当前尚无独立 liveops hotfix playbook；热更操作流程随 liveops 落地后补。
 
 ---
 

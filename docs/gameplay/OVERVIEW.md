@@ -6,13 +6,15 @@
 >
 > **更新节奏**：每次重大架构决策后更新；小迭代季度复核一次。
 >
-> **状态**：草案 v0.1 — 待团队评审确认。
+> **状态**：目标设计 / 北极星文档。当前引擎状态以
+> `docs/roadmap/README.md` 为准；本目录中除移动同步外，多数战斗、AI、
+> 数据与工具文档仍是待实现的玩法方案。
 
 ---
 
 ## 1. 项目定位
 
-Atlas 是一款 **MMOARPG**（动作 MMO 角色扮演游戏），服务端由本仓库的分布式多进程框架驱动，客户端使用 Unity。
+Atlas 是一款 **MMOARPG**（动作 MMO 角色扮演游戏），服务端由本仓库的分布式多进程框架驱动。主 gameplay 目标客户端是 Unity；当前仓库也保留 UE MVP C++ 插件 / 客户端接入路径，用于验证同一 wire contract 的纯渲染前端。
 
 **参考对标**：
 - **黑色沙漠（Black Desert Online, BDO）** — **PvE / 战斗手感**核心对标，目标超越
@@ -28,7 +30,7 @@ Atlas 是一款 **MMOARPG**（动作 MMO 角色扮演游戏），服务端由本
 | PvP 形态 | **实例化竞技场**（session-based），1v1 / 2v2 / 4v4 |
 | 目标平台 | **桌面**（Windows / Linux Server），不支持移动端 |
 | 服务端语言 | C++ 20（核心框架） + C#（CoreCLR 脚本） |
-| 客户端引擎 | Unity（C#） |
+| 客户端引擎 | Unity（C#，主目标）；UE MVP C++ 客户端已接入同一协议 |
 
 ---
 
@@ -108,16 +110,16 @@ MMO 独有问题                ARPG 独有问题
 | **服务端 tick（副本/竞技场）** | 30 Hz（33 ms/tick） |
 | **时间基准** | `int64` tick 序号（从 session 启动为 0 单调递增） |
 | **RNG 源** | `xoshiro256**`，种子 = hash(session_id, entity_id, tick, counter) |
-| **世界坐标** | `float3`，世界原点居中，单图上限 16 km |
-| **Cell 内坐标** | entity.position 存"cell 内相对坐标 + cell_id"，避免远离原点精度丢失 |
-| **实体 ID** | `int64`（32 位会耗尽） |
+| **世界坐标** | 当前引擎使用 `float3` 世界坐标；单图 16 km 与原点 / 分块精度策略仍是目标边界 |
+| **Cell 内坐标** | 当前实体位置仍是 Space 内 `Vector3`；"cell 内相对坐标 + cell_id" 属于未来大地图精度扩展 |
+| **实体 ID** | 当前引擎 `EntityID = uint32_t`，服务端只分配 `[1, 0x7F000000)`；持久实体身份使用 `DatabaseID = int64_t` |
 | **技能 ID 空间** | `int32`，按职业分段 |
-| **网络协议版本** | 每 packet 带 `proto_ver` byte，握手协商 |
+| **网络协议版本** | 目标协议需要显式版本协商；当前引擎已覆盖 machined / mesh 控制协议版本、client ABI 与 entity-def digest，普通游戏消息尚无统一每包 `proto_ver` |
 | **保存 schema** | FlatBuffers + 强制版本字段 + 前向兼容规则 |
 | **线程模型** | CellApp 单线程 + IO 线程池；cell 内实体访问无锁串行 |
 | **C#/C++ 边界** | 移动仿真 C++（native plugin），战斗/技能/buff/AI C#，跨边界调用尽量批处理 |
 
-详细规约见 `00_foundations/DETERMINISM_CONTRACT.md`（待写）。
+详细规约见 `00_foundations/DETERMINISM_CONTRACT.md`。
 
 ---
 
@@ -157,7 +159,7 @@ MMO 独有问题                ARPG 独有问题
 └─────────┬──────────────────────────────────────────┬─────────────┘
           │                                          │
 ┌─────────▼──────────┐              ┌─────────────── ▼─────────────┐
-│  CLIENT (Unity)    │              │  SERVER (Atlas)              │
+│  CLIENT (Unity/UE) │              │  SERVER (Atlas)              │
 │                    │              │                              │
 │  ┌──────────────┐  │  ◄──协议──►  │  ┌──────────────┐           │
 │  │输入预测+和解  │  │              │  │CellApp:       │           │
@@ -202,12 +204,13 @@ MMO 独有问题                ARPG 独有问题
 
 ## 7. 七个关键技术难点
 
-按项目杀伤力排序，每个对应未来独立详细文档。
+按项目杀伤力排序；已有专题文档只覆盖当前正在设计或已落地的部分。
 
 ### 难点一：网络延迟下的手感保持
 - **本质**：玩家感知的"延迟"不等于 RTT，是"预测失败时的反馈质量"
 - **Atlas 策略**：视觉立即响应、数值服务端权威、hit spark 预播、伤害数字等 ack
-- **相关文档**：`03_combat/COMBAT_FEEL.md`, `05_client/CLIENT_PREDICTION.md`
+- **相关文档**：`03_combat/COMBAT_FEEL.md`、`02_sync/MOVEMENT_SYNC.md`、
+  `05_client/UNITY_INTEGRATION.md`
 
 ### 难点二：PvE 热点密度 与 PvP 竞技公平性（双重挑战）
 - **范围修订**：原先考虑的"200v200 大规模 PvP"已从项目范围移除（见 §2.3）。此难点现在聚焦两个具体场景：
@@ -225,12 +228,15 @@ MMO 独有问题                ARPG 独有问题
 ### 难点四：经济系统 dupe 防御
 - **本质**：任何竞态都是通胀源，不能消灭但必须能侦测+回滚
 - **Atlas 策略**：高价值操作走强一致通道、item uuid 唯一、审计日志不可删、5 分钟对账
-- **相关文档**：`07_persistence/TRANSACTION_MODEL.md`, `07_persistence/AUDIT_AND_RECONCILIATION.md`
+- **当前覆盖**：gameplay 目录尚无经济 / 审计专题；数据库与分片状态见
+  `../roadmap/phase07_dbapp.md`、`../roadmap/phase15_dbappmgr.md`。
 
 ### 难点五：帧数据时代的内容产能
 - **本质**：工具产能决定项目产能，25 职业 × 60 技能的规模硬碰硬
 - **Atlas 策略**：Unity Editor 帧数据编辑器 + 战斗回放 + 相似技能模板复用 + CI 自动化 QA
-- **相关文档**：`09_tools/FRAME_DATA_EDITOR.md`, `06_data/DATA_PIPELINE.md`
+- **相关文档**：
+  [`09_tools/FRAME_DATA_EDITOR.md`](09_tools/FRAME_DATA_EDITOR.md),
+  [`06_data/DATA_PIPELINE.md`](06_data/DATA_PIPELINE.md)
 
 ### 难点六：Cell 边界与跨进程一致性
 - **本质**：开放世界最 bug 多的地方，BigWorld 有基础方案但需要加强
@@ -240,7 +246,8 @@ MMO 独有问题                ARPG 独有问题
 ### 难点七：Action PvP 反作弊
 - **本质**：是持续战争而非一次任务，必须配专职团队长期运营
 - **Atlas 策略**：服务端权威一切 + 行为异常 ML + 蜜罐 + 审计回滚 + Ban wave
-- **相关文档**：`08_security/ANTI_CHEAT_STRATEGY.md`, `10_liveops/BAN_WAVE_PROCESS.md`
+- **当前覆盖**：尚无独立 anti-cheat / liveops gameplay 专题；移动与命中侧红线见
+  `02_sync/MOVEMENT_SYNC.md`、`03_combat/HIT_VALIDATION.md`。
 
 ---
 
@@ -266,9 +273,12 @@ MMO 独有问题                ARPG 独有问题
 
 ---
 
-## 9. 分期路线图
+## 9. Gameplay 目标交付顺序
 
-### P0：地基（1–2 月）
+本节是玩法目标的依赖顺序，不是当前工程状态或承诺排期。当前实现进度以
+[`docs/roadmap/README.md`](../roadmap/README.md) 为准。
+
+### P0：地基
 **交付物**：空世界两人移动同步能跑通。
 - 确定性契约文档 + 代码实现
 - 网络协议 + 版本化
@@ -276,14 +286,14 @@ MMO 独有问题                ARPG 独有问题
 - Entity 模型骨架
 - Native plugin 骨架 + P/Invoke 接口
 
-### P1：移动全栈（2–3 月）
+### P1：移动全栈
 **交付物**：4 人在封闭房间里互相看到对方流畅移动 + 0 延迟手感。
-- 输入预测、和解、远端 Hermite 插值
+- 输入预测、和解、peer AvatarFilter；Hermite 是后续表现层升级目标
 - Lag compensation 原型
 - 延迟/丢包模拟框架
 - 基础 UI（能操作即可）
 
-### P2：战斗核心（3–4 月）
+### P2：战斗核心
 **交付物**：一个测试职业 + 5 个技能；能打怪、能 PK、数值正确。
 - Timeline + State Machine 运行时
 - Buff 系统
@@ -302,7 +312,7 @@ MMO 独有问题                ARPG 独有问题
   - PvP：1v1 arena 对战
 - **未达标不进入 P4，宁可推迟 3 个月继续打磨**
 
-### P4：规模（2–3 月）
+### P4：规模
 **交付物**：500 实体（100 玩家 + 400 AI）同图流畅。
 - Cell 动态分裂
 - AI 架构 + LOD
@@ -315,8 +325,6 @@ MMO 独有问题                ARPG 独有问题
 - 持久化 / 经济 / 交易 / 社交
 - 任务 / 剧情 / 升级曲线
 - 反作弊 / live ops / 运营工具
-
-**总时长**：P0–P4 合计 10–15 个月，P5 持续。
 
 ---
 
@@ -338,78 +346,18 @@ MMO 独有问题                ARPG 独有问题
 
 所有详细设计文档放在 `docs/gameplay/` 下，按主题目录组织：
 
-```
-docs/gameplay/
-├── OVERVIEW.md                          ← 本文（北极星）
-├── MILESTONE_COMBAT_FEEL.md             ← P3 手感验证细则（next）
-├── 00_foundations/
-│   ├── DETERMINISM_CONTRACT.md          ★ 早期必写
-│   ├── NETWORK_PROTOCOL.md
-│   ├── COORDINATE_AND_TIME.md
-│   └── ENTITY_MODEL.md
-├── 01_world/
-│   ├── CELL_ARCHITECTURE.md
-│   ├── GHOST_ENTITY.md
-│   └── DENSITY_ADAPTIVE_NETWORKING.md
-├── 02_sync/
-│   ├── MOVEMENT_SYNC.md
-│   ├── ENTITY_SNAPSHOT.md
-│   └── LAG_COMPENSATION.md
-├── 03_combat/
-│   ├── COMBAT_ACTIONS.md
-│   ├── SKILL_SYSTEM.md
-│   ├── BUFF_SYSTEM.md
-│   ├── STAT_AND_DAMAGE.md
-│   ├── HIT_VALIDATION.md
-│   ├── COMBAT_FEEL.md                   ★ BDO 超越的秘密
-│   └── COMBAT_EVENT_ORDERING.md
-├── 04_ai/
-│   ├── AI_ARCHITECTURE.md
-│   ├── AI_LOD.md
-│   └── BOSS_AI.md
-├── 05_client/
-│   ├── UNITY_INTEGRATION.md
-│   ├── ANIMATION_INTEGRATION.md
-│   └── CLIENT_PREDICTION.md
-├── 06_data/
-│   ├── DATA_PIPELINE.md
-│   ├── LOCALIZATION.md
-│   └── CONTENT_STANDARDS.md
-├── 07_persistence/
-│   ├── DB_ARCHITECTURE.md
-│   ├── TRANSACTION_MODEL.md
-│   ├── AUDIT_AND_RECONCILIATION.md
-│   └── SAVE_SCHEMA.md
-├── 08_security/
-│   ├── ANTI_CHEAT_STRATEGY.md
-│   ├── AUTH_AND_SESSION.md
-│   └── DATA_VALIDATION.md
-├── 09_tools/
-│   ├── FRAME_DATA_EDITOR.md             ★ 产能关键
-│   ├── COMBAT_REPLAY.md
-│   ├── TELEMETRY_AND_METRICS.md
-│   └── LOAD_TESTING.md
-└── 10_liveops/
-    ├── DEPLOYMENT.md
-    ├── AB_TESTING.md
-    ├── HOTFIX_PLAYBOOK.md
-    └── BAN_WAVE_PROCESS.md
-```
+当前已存在的下游文档覆盖八类：foundations、world、sync、combat、AI、client、
+data 与 tools。尚未出现的 persistence / security / liveops 玩法专题不在当前
+`docs/gameplay/` 中占位；等工程或内容制作开始时再新增。
 
-**★ 标记** 是超越 BDO 级别的关键文档，其他 MMO 也有同类但这些是 Atlas 核心差异化投入。
+**重点文档**：`MILESTONE_COMBAT_FEEL.md`、`03_combat/COMBAT_FEEL.md`、
+[`09_tools/FRAME_DATA_EDITOR.md`](09_tools/FRAME_DATA_EDITOR.md)
+是玩法体验差异化投入；当前均为目标设计或验收标准。
 
-### 11.1 写作顺序
+### 11.1 维护顺序
 
-初期 3 人团队，按依赖关系推进：
-
-1. `OVERVIEW.md`（本文）
-2. `MILESTONE_COMBAT_FEEL.md`（P3 go/no-go 判定细则）
-3. `00_foundations/DETERMINISM_CONTRACT.md`（技术硬核基础）
-4. `03_combat/SKILL_SYSTEM.md`（前几轮讨论已成熟）
-5. `03_combat/BUFF_SYSTEM.md`
-6. `02_sync/MOVEMENT_SYNC.md`
-7. 并行启动 `09_tools/FRAME_DATA_EDITOR.md`（工具规划）
-8. 其他按实现阶段展开
+实现状态变化时先更新对应专题文档顶部状态，再同步本文的目标边界。新增玩法专题
+必须先说明是否已有工程落点；不要在本文保留未创建文件的占位清单。
 
 ### 11.2 文档规范
 
@@ -453,7 +401,8 @@ docs/gameplay/
 - 所有游戏逻辑时间单位用 **server tick**，不用 wall clock
 - 所有随机必须走项目 RNG 接口，不用 `rand()` / `System.Random`
 - 所有物品操作必须写**审计日志**（持久化 + 不可删）
-- 所有新协议包必须带 **proto_ver**
+- 新增 gameplay wire contract 如需跨版本兼容，必须显式带协议版本或纳入现有
+  ABI / digest gate；当前普通游戏消息还没有统一每包 `proto_ver`
 - 所有跨 cell 交互必须走 **Ghost entity 机制**，不直接跨进程读写
 
 ### 禁区
@@ -466,14 +415,10 @@ docs/gameplay/
 
 ---
 
-## 14. 下一步
+## 14. 当前入口
 
-本文确认后，**顺序推进**：
-
-1. `MILESTONE_COMBAT_FEEL.md` — 定义 P3 "盲测 4.0/5.0" 是如何度量的，测试流程、场景、评分标准
-2. `00_foundations/DETERMINISM_CONTRACT.md` — 锁定浮点/RNG/时间/坐标的技术细节
-3. `03_combat/SKILL_SYSTEM.md` — 把前几轮讨论的 Timeline + State Machine 正式化
-4. 并行工作：工具团队起步 `09_tools/FRAME_DATA_EDITOR.md`
+当前工程状态和下一步开发顺序以 [`docs/roadmap/README.md`](../roadmap/README.md)
+为准。本目录用于保存 gameplay 目标设计、验收标准和已落地能力的玩法侧说明。
 
 ---
 

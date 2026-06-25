@@ -287,7 +287,7 @@ Client        LoginAppMgr        LoginApp-X        DBApp     BaseAppMgr   BaseAp
 
 ### 8.1 Message ID 范围
 
-在 `src/lib/network/message_ids.hpp` 中新增:
+计划在 `src/lib/network/message_ids.h` 中新增:
 
 ```cpp
 // 9000 - 9099  LoginAppMgr
@@ -315,7 +315,7 @@ enum class LoginAppMgr : uint16_t
 
 ### 8.2 Register / load 协议
 
-新增文件: `src/server/loginappmgr/loginappmgr_messages.hpp`
+计划新增文件（planned, not implemented）: `src/server/loginappmgr/loginappmgr_messages.h`
 
 | ID | 消息 | 方向 | 字段 |
 |----|------|------|------|
@@ -681,17 +681,17 @@ private:
 
 ```text
 src/server/loginappmgr/
-├── loginappmgr.hpp / .cpp
-├── loginappmgr_messages.hpp
-├── loginappmgr_ingress.hpp / .cpp
-└── main.cpp
+├── loginappmgr.h / .cc
+├── loginappmgr_messages.h
+├── loginappmgr_ingress.h / .cc
+└── main.cc
 ```
 
 模块职责:
 
-- `loginappmgr.cpp`
+- `loginappmgr.cc`
   - register / validate / claim / release / load aggregation
-- `loginappmgr_ingress.cpp`
+- `loginappmgr_ingress.cc`
   - external RUDP listener
   - `ResolveLoginApp`
   - route lease 管理

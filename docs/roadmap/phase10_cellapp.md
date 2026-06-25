@@ -7,7 +7,7 @@ cellapp_messages / intercell_messages / cellapp_native_provider /
 cell_aoi_envelope / cell_bounds。RangeList / RangeTrigger / Controllers
 共享库位于 `src/lib/space/`。Phase 11 的 Real/Ghost/Offload 已回填到本
 阶段代码（见下文）。Witness 性能优化（distance LOD、demand-based
-bandwidth、priority heap）持续在 `docs/optimization/` 跟踪。
+bandwidth、per-band ranking）持续在 `docs/optimization/` 跟踪。
 **前置依赖:** Phase 8 (BaseApp)、Phase 9 (BaseAppMgr)、DefGenerator
 （按受众过滤的 delta API）
 **BigWorld 参考:** `server/cellapp/cellapp.hpp`, `entity.hpp`, `witness.hpp`
@@ -30,7 +30,7 @@ CellApp : EntityApp                  — 与 BaseApp 同级
   │     └── (real_channel)             — Ghost 专属：指向 Real 所在 CellApp
   ├── RangeList / RangeTrigger         — `src/lib/space/`，完全对齐 BigWorld
   ├── AoITrigger                       — RangeTrigger 子类，驱动 Witness
-  ├── Witness                          — AoI 复制管理：LOD + priority heap + 带宽预算
+  ├── Witness                          — AoI 复制管理：LOD + per-band ranking + 带宽预算
   ├── Controllers                      — MoveTo / Timer / Proximity（`src/lib/space/`）
   ├── GhostMaintainer                  — 每 tick 检查跨边界，diff haunt 列表
   ├── OffloadChecker                   — Real 跨 Cell 边界时发起 OffloadEntity
@@ -85,16 +85,17 @@ tick 比对 BSP 边界生成 haunt diff，`OffloadChecker` 在 Real 跨 Cell 时
 `SendClientRpc()` 在两个进程中行为不同：
 
 - **BaseApp** — 直接发送到 Proxy 的客户端 Channel
-- **CellApp** — 按观察者逐个展开；属性 delta 经 `SelfRpcFromCell`
-  (Reliable) 回送，Volatile 位置经 `ReplicatedDeltaFromCell` (Unreliable)
-  回送
+- **CellApp** — 按观察者逐个展开；属性 delta 经
+  `ReplicatedReliableDeltaFromCell` (Reliable) 回送，Volatile 位置经
+  `ReplicatedDeltaFromCell` (Unreliable) 回送
 
 同一 C# `entity.Client.ShowDamage()` 在不同进程自动路由到正确路径。
 
 ### EntityID 全集群唯一
 
-`EntityID` 由 DBApp `IDClient` 在集群范围分配（CellAppMgr 通过 `app_id`
-高字节避开冲突），不区分 base / cell 局部 ID。CellApp 单一索引
+`EntityID` 由 DBApp 的 ID 分配器在集群范围分配；BaseApp 和 CellApp 都通过
+本地 `IDClient` 批量缓存 `GetEntityIds` 结果，不区分 base / cell 局部 ID。
+CellApp 单一索引
 `entity_population_: EntityID → CellEntity*` 即为生命周期与 RPC 路由的
 共同入口；offload 后 ID 不变。
 
@@ -121,16 +122,18 @@ Ghost 透明转发到 Real。
 
 | 段 | 用途 |
 |---|---|
-| `3000–3023` | CellApp 自有消息：`CreateCellEntity` (3000) / `DestroyCellEntity` (3002) / `ClientCellRpcForward` (3003) / `InternalCellRpc` (3004) / `CreateSpace` (3010) / `DestroySpace` (3011) / `AvatarUpdate` (3020) / `EnableWitness` (3021) / `DisableWitness` (3022) / `SetAoIRadius` (3023) |
-| `3100–3111` | Inter-CellApp Real/Ghost 复制与 offload：`CreateGhost` (3100) / `DeleteGhost` (3101) / `GhostPositionUpdate` (3102) / `GhostDelta` (3103) / `GhostSetReal` (3104) / `GhostSetNextReal` (3105) / `GhostSnapshotRefresh` (3106) / `OffloadEntity` (3110) / `OffloadEntityAck` (3111) |
+| `3000–3023` | CellApp 自有消息：`CreateCellEntity` (3000) / `SpawnLocalEntity` (3001) / `DestroyCellEntity` (3002) / `ClientCellRpcForward` (3003) / `InternalCellRpc` (3004) / `CreateSpace` (3010) / `DestroySpace` (3011) / `AvatarUpdate` (3020) / `EnableWitness` (3021) / `DisableWitness` (3022) / `SetAoIRadius` (3023) |
+| `3100–3111` | Inter-CellApp Real/Ghost、ClientRpc、movement command 与 offload：`CreateGhost` (3100) / `DeleteGhost` (3101) / `GhostPositionUpdate` (3102) / `GhostDelta` (3103) / `GhostSetReal` (3104) / `GhostSetNextReal` (3105) / `GhostSnapshotRefresh` (3106) / `ClientRpcBroadcast` (3107) / `MovementCommandStartBroadcast` (3108) / `MovementCommandEndBroadcast` (3109) / `OffloadEntity` (3110) / `OffloadEntityAck` (3111) |
+| `3120 / 3130–3134` | Cell cleanup、SpaceData 与 movement 转发：`DestroyCellEntityAck` (3120) / `SpaceDataUpdate` (3130) / `SpaceDataDelete` (3131) / `SpaceDataSnapshotRequest` (3132) / `SpaceDataSnapshot` (3133) / `ClientMovementInputForward` (3134) |
 | `2010–2019` | 复用现有 `BaseApp` 入站消息：`CellEntityCreated` (2010) / `CellEntityDestroyed` (2011) / `CurrentCell` (2012) / `CellRpcForward` (2013) / `ReplicatedDeltaFromCell` (2015) / `BroadcastRpcFromCell` (2016) / `ReplicatedReliableDeltaFromCell` (2017) / `BackupCellEntity` (2018) / `ReplicatedBaselineFromCell` (2019)。**2014 已废弃保留**（曾为 `SelfRpcFromCell`） |
-| `2022–2027` | BaseApp 外部接口：`ClientBaseRpc` (2022) / `ClientCellRpc` (2023) / `EntityTransferred` (2024) / `CellReady` (2025) / `CellAppDeath` (2026) / `ClientEventSeqReport` (2027) |
+| `2020–2038` | BaseApp 认证、客户端入口、调试 / HA / movement 控制：`Authenticate` (2020) / `AuthenticateResult` (2021) / `ClientBaseRpc` (2022) / `ClientCellRpc` (2023) / `EntityTransferred` (2024) / `CellReady` (2025) / `CellAppDeath` (2026) / `ClientEventSeqReport` (2027) / `ForceLogoff` (2030) / `ForceLogoffAck` (2031) / `SpaceBspGeometry` (2032) / `CellEntityCreateFailed` (2033) / `ClientMovementInput` (2034) / `MovementStateAckFromCell` (2035) / `MovementCorrectionReport` (2036) / `MovementCommandStartFromCell` (2037) / `MovementCommandEndFromCell` (2038) |
 
 **传输可靠性约束：**
 
-- `ReplicatedReliableDeltaFromCell` (2017) — **Reliable**：有序属性 delta、owner 基线、reliable=false 字段的快照补包
+- `ReplicatedReliableDeltaFromCell` (2017) — **Reliable**：AoI enter / leave 与有序 property delta
 - `ReplicatedDeltaFromCell` (2015) — **Unreliable**：Volatile 位置 / 朝向（latest-wins）
-- `BroadcastRpcFromCell` (2016) — **Unreliable**：广播 ClientRpc
+- `ReplicatedBaselineFromCell` (2019) — **Reliable**：周期 owner-snapshot 重同步
+- `BroadcastRpcFromCell` (2016) — **Reliable**：广播 ClientRpc
 - `CellRpcForward` (2013) — **Reliable**：BaseApp ↔ CellApp 服务端 RPC
 
 属性 delta 必须按 `event_seq` 有序到达，**必须走 Reliable**。
@@ -146,22 +149,31 @@ enum class CellAoIEnvelopeKind : uint8_t {
     kEntityLeave = 2,           // empty
     kEntityPositionUpdate = 3,  // pos/dir/on_ground + server_time
     kEntityPropertyUpdate = 4,  // event_seq + audience-filtered delta bytes
+    kSpaceDataInit = 5,         // full space-data snapshot
+    kSpaceDataUpdate = 6,       // one key update
+    kSpaceDataDelete = 7,       // one key delete
+    kEntityPositionBatch = 8,   // packed latest-wins position batch
 };
 ```
 
 | Wire id | 可靠性 | 承载内容 |
 |---|---|---|
-| `kClientDeltaMessageId` (`0xF001`) | Unreliable | volatile 位置 / 朝向（`kEntityPositionUpdate`） |
-| `kClientBaselineMessageId` (`0xF002`) | Reliable | owner 基线快照（兜底 UDP 丢包） |
-| `kClientReliableDeltaMessageId` (`0xF003`) | Reliable | 有序属性 delta、enter/leave 信封（`kEntityEnter` / `kEntityLeave` / `kEntityPropertyUpdate`） |
+| `kClientDeltaMessageId` (`0xF001`) | Unreliable | volatile 位置 / 朝向（`kEntityPositionUpdate` / `kEntityPositionBatch`） |
+| `kClientBaselineMessageId` (`0xF002`) | Reliable | 周期 owner-snapshot 重同步 |
+| `kClientReliableDeltaMessageId` (`0xF003`) | Reliable | 有序属性 delta、enter/leave、SpaceData 信封（`kEntityEnter` / `kEntityLeave` / `kEntityPropertyUpdate` / `kSpaceDataInit` / `kSpaceDataUpdate` / `kSpaceDataDelete`） |
 | `kClientRpcMessageId` (`0xF004`) | Reliable | client-bound RPC envelope |
+| `kClientMovementStateAckMessageId` (`0xF005`) | Unreliable | owner movement ack / correction flags |
+| `kClientMovementCommandStartMessageId` (`0xF006`) | Reliable | movement command start |
+| `kClientMovementCommandEndMessageId` (`0xF007`) | Reliable | movement command completion / cancellation |
 
 **路径：** Volatile 位置走 `ReplicatedDeltaFromCell` (2015) →
-`DeltaForwarder`（latest-wins）→ `0xF001`；属性 delta 与 enter/leave
-信封走 `ReplicatedReliableDeltaFromCell` (2017) → BaseApp 直达 client
-channel（不经 `DeltaForwarder`）→ `0xF003`；owner 基线走
-`ReplicatedBaselineFromCell` (2019) → `0xF002`。client `on_deliver` 按
-wire id 直接分派到 `ClientSession.DeliverFromServer`。
+`DeltaForwarder`（latest-wins，可合批为 `kEntityPositionBatch`）→
+`0xF001`；属性 delta、enter/leave 与 SpaceData 信封走
+`ReplicatedReliableDeltaFromCell` (2017) → BaseApp 直达 client channel
+（不经 `DeltaForwarder`）→ `0xF003`；owner 基线走
+`ReplicatedBaselineFromCell` (2019) → `0xF002`；movement ack / command 由
+BaseApp 对应 handler 转成 `0xF005–0xF007`。client `on_deliver` 按 wire id
+直接分派到 `ClientSession.DeliverFromServer`。
 
 ## Tick 内并发 / 重入约束
 
@@ -203,8 +215,9 @@ Controller 可改变位置 → `RangeList::Shuffle` → `AoITrigger::OnEnter/OnL
 
 `max_packet_bytes` 测度位置：Witness 构造 `ReplicatedReliableDeltaFromCell::payload`
 的**内层**字节数（即 `CellAoIEnvelope` 序列序列），不含 header 与网络 frame；
-deficit 以"溢出字节"计，下 tick 扣预算。压测用例放在
-`tests/integration/test_cellapp_perf.cpp`（默认不跑）。
+deficit 以"溢出字节"计，下 tick 扣预算。压测入口见
+[`../stress_test/WORLD_STRESS_TESTING.md`](../stress_test/WORLD_STRESS_TESTING.md)
+和 `tools/bin/run_world_stress.{bat,sh}`。
 
 ## AvatarUpdate 安全策略
 
@@ -215,8 +228,8 @@ Phase 10 采取**不做复杂反作弊但保留安全上限**：
 | 位置源合法性 | BaseApp 只接受该 Proxy 持有实体的上行（`FindProxyByChannel()`） |
 | 单 tick 位移上限 | CellApp 在 `OnAvatarUpdate` 中按 `delta.length() > kMaxSingleTickMove` 拒绝并 WARN；`kMaxSingleTickMove = max_speed × dt × 2`，默认 50m/tick |
 | NaN/Inf | 反序列化后立即 `std::isfinite()` 三分量校验，失败 drop + WARN |
-| 权威性 | 客户端位置直接信任（除上限）；服务端权威移动见 Phase 14 |
-| 频次限制 | Phase 10 不做；统一 rate limiter 走 machined 层（Phase 11+） |
+| 权威性 | Phase 10 legacy `AvatarUpdate` 路径只做上限校验；当前 MVP 主路径已由 Phase 14 输入帧 + 服务端权威移动替代 |
+| 频次限制 | ClientBaseRpc / ClientCellRpc 已在 BaseApp 入口用每客户端 token bucket 限速；移动输入另有 BaseApp 入口与 CellApp per-entity limiter；尚无跨进程统一预算 |
 
 ## 待跟进 follow-up
 
@@ -227,22 +240,23 @@ Phase 10 采取**不做复杂反作弊但保留安全上限**：
 - `ClientCellRpcForward` 信任边界：信封带 `source_forwarding_cellapp` +
   machined peer 白名单
 - `Space::Tick` silent compaction 已移除
-- EntityID 跨 CellApp 唯一：CellAppMgr 分配 `app_id` 作为高字节
+- EntityID 跨 CellApp 唯一：BaseApp / CellApp 均从 DBApp 获取 ID range
 - `SelfRpcFromCell` (2014) 已删除；reliable owner 流统一走
   `ReplicatedReliableDeltaFromCell` (2017)
 - `SerializeReplicatedDelta*` legacy API 已移除；只剩
   `BuildAndConsumeReplicationFrame`
+- `DeltaSyncEmitter` 已按 owner / other audience mask 计算 `hasEvent`；所有
+  audience mask 都没命中且无 volatile 时，`BuildAndConsumeReplicationFrame`
+  直接 `return false`
 
 ### 仍待处理
 
-- 客户端 RPC 速率预算尚无统一 rate limiter（建议走 machined 层）
-- `Witness::HandleAoIEnter` 在 `try_emplace` 时不覆盖刚设的 `kGone` flag
-  （peer 同 tick 内 leave-then-re-enter 的冗余 Enter，无害但浪费带宽）
-- `EntityRangeListNode::owner_data_` 用 `void*` + `reinterpret_cast`；契约
-  由注释维护，可换为 `IRangeListOwner*` 强类型接口
-- `Witness::Update` priority heap 每 tick `std::make_heap`，AoI 极大
-  （数千 peers）时考虑 incremental 维护（详见
+- 客户端 RPC 已有 BaseApp per-client token bucket；尚无跨 BaseApp / CellApp
+  聚合的全局 RPC 预算或动态配置面
+- `Witness::HandleAoIEnter` 在 `try_emplace` 命中已有 `kGone` cache 时
+  仍会覆盖成 `kEnterPending`；peer 同 tick 内 leave-then-re-enter 会产生
+  冗余 Enter，无害但浪费带宽
+- `Witness::Update` 每 tick 重建各 LOD band 的排序 scratch，AoI 极大
+  （数千 peers）时考虑 incremental ranking（详见
   [optimization/incremental_priority_queue.md](../optimization/incremental_priority_queue.md)，
-  当前 0.40 % CPU，未达触发线）
-- `DeltaSyncEmitter` 在所有 audience mask 都没命中脏位时仍写 1-byte
-  flags 头；short-circuit `if flags == 0 return` 跳过整段序列化
+  当前未达触发线）

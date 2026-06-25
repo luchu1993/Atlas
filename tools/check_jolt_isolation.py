@@ -12,6 +12,7 @@ from common.paths import resolve_repo_root
 ALLOWED_DIR = Path("src") / "lib" / "physics_jolt"
 SOURCE_EXTS = {".h", ".hh", ".hpp", ".cc", ".cpp", ".cxx", ".c"}
 SCAN_ROOTS = ("src", "tests", "samples")
+GENERATED_PARTS = {"Binaries", "Intermediate", "Library", "obj", "bin"}
 JOLT_INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]\s*Jolt/')
 
 
@@ -21,6 +22,8 @@ def iter_sources(repo_root: Path):
         if not base.is_dir():
             continue
         for path in base.rglob("*"):
+            if any(part in GENERATED_PARTS for part in path.relative_to(repo_root).parts):
+                continue
             if path.suffix.lower() not in SOURCE_EXTS:
                 continue
             yield path

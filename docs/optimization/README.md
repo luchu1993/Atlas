@@ -1,14 +1,19 @@
 # Optimization Roadmap
 
+**Status:** Current optimization index. Individual pages are either shipped,
+deferred, or open; refresh a Tracy baseline before reopening any deferred item.
+
 Per-subsystem optimization docs for Atlas Engine. Each doc describes
 the current shipped design (or a deferred future-work proposal) and
 the trigger for revisiting it.
 
 > **Read this first.** Numbers in this doc drive priority. Before
-> opening any task in this directory, re-run `tools/bin/run_baseline_profile.sh`
-> and confirm the bottleneck the doc claims is *still* visible. Most
-> of the originally-prioritised items have shipped; do not pick from
-> the list and run — drive from a fresh capture.
+> opening any task in this directory, re-run `tools/bin/run_baseline_profile.{bat,sh}`
+> and confirm the bottleneck the doc claims is *still* visible. The wrapper's
+> default is 200 clients; pass explicit `--clients` / `--account-pool` overrides
+> when refreshing one of the retained larger baselines below. Most of the
+> originally-prioritised items have shipped; do not pick from the list and run —
+> drive from a fresh capture.
 
 ## Target scenario
 
@@ -19,12 +24,15 @@ is **5 000 concurrent clients** across 13–20 BaseApps + 1–3
 CellApps; per-Space scaling is bounded by the single-Space target,
 not by load.
 
-## Current baseline (`3ab62ca`, 2026-04-30, 500 cli × 120 s, 1-BA / 1-CA)
+## Last Recorded Baseline (500 cli × 120 s, 1-BA / 1-CA)
 
-Captures in `.tmp/prof/baseline/{baseapp,cellapp,…}_3ab62ca_*.tracy`.
-Single-baseapp / single-cellapp / single-Space, deliberately above
-the comfortable per-baseapp ceiling so cluster-scale bottlenecks
-surface.
+These numbers are retained as the last recorded optimization baseline.
+The default `tools/bin/run_baseline_profile.{bat,sh}` preset runs 200 clients;
+to refresh this exact 500-cli baseline, run it with
+`--clients 500 --account-pool 500` and use the new local captures under
+`.tmp/prof/baseline/`. The scenario is single-baseapp / single-cellapp /
+single-Space, deliberately above the comfortable per-baseapp ceiling so
+cluster-scale bottlenecks surface.
 
 ### CellApp (10 Hz, 100 ms tick budget)
 
@@ -32,9 +40,9 @@ surface.
 |---|---|---|---|---|
 | Tick | 9.2 ms | 28.2 ms | 18.0 s | 9.2 % |
 | CellApp::TickWitnesses | 7.6 ms | 17.5 ms | 14.8 s | 7.6 % |
-| Witness::Update::Pump | 5.2 µs | 670 µs | 5.6 s | 2.9 % |
+| Witness::Update::PerBandPump | 5.2 µs | 670 µs | 5.6 s | 2.9 % |
 | Witness::Event::Send | 322 ns | 652 µs | 2.54 s | 1.3 % |
-| Witness::Update::PriorityHeap | 3.3 µs | 3.8 ms | 3.54 s | 1.8 % |
+| Witness ranking (historical zone) | 3.3 µs | 3.8 ms | 3.54 s | 1.8 % |
 | NetworkInterface::OnRudpReadable | 244 µs | 10.7 ms | 18.8 s | 9.6 % |
 
 Tick mean 9 % of budget; max 28 % — comfortable headroom. Per-call
@@ -89,7 +97,7 @@ Status legend: ✅ shipped · 🔵 deferred (future scale) · ⚪ open
 | [script_publish_gc.md](script_publish_gc.md) | C# replication GC pressure | ✅ (round 1) |
 | [channel_send_batching.md](channel_send_batching.md) | RUDP send-side coalescing | ✅ |
 | [witness_channel_cache.md](witness_channel_cache.md) | Witness send-path channel cache | ✅ |
-| [incremental_priority_queue.md](incremental_priority_queue.md) | Witness priority heap incremental update | 🔵 |
+| [incremental_priority_queue.md](incremental_priority_queue.md) | Witness per-band ranking incremental update | 🔵 |
 | [lazy_baseline.md](lazy_baseline.md) | Compact / lazy baseline snapshot | 🔵 |
 | [rangelist_grid.md](rangelist_grid.md) | Spatial grid overlay on RangeList | 🔵 |
 | [adaptive_ghost_throttle.md](adaptive_ghost_throttle.md) | Velocity-adaptive ghost interval | 🔵 |
@@ -108,8 +116,8 @@ project target. The shape is **straightforward horizontal scaling**:
   read path.
 - 5 000-client target → 13–20 BaseApps + 1–3 CellApps. Per-Space
   cellapp count is bounded by the single-Space target, not by load.
-- BaseAppMgr already round-robins logins with least-loaded selection
-  (`baseappmgr.cc:500`); no orchestration code needs to change.
+- BaseAppMgr already balances logins through `FindLeastLoaded` /
+  `ChooseBaseAppForDbid`; no orchestration code needs to change.
 - Single-instance LoginApp / BaseAppMgr / DBApp run at < 1.5 % CPU
   with 50–60× headroom for the steady-state 5 000-cli reconnect
   rate. Single-instance is an HA concern (failover / hot-spare),

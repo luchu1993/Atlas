@@ -15,10 +15,10 @@
 |---|---|---|
 | 属性同步 | C# → `byte[]` → C++ 网络层 → 客户端 | C++ 透传,客户端可读 |
 | RPC / Mailbox | C# → `byte[]` → C++ Bundle → TCP/UDP → 对端 C# | 双端 C# 格式一致 |
-| 数据库持久化 | C# → `byte[]` → C++ DBApp → MySQL BLOB | C++ 可选读,C# 可读写 |
+| 数据库持久化 | C# → `byte[]` → C++ DBApp → SQLite/XML blob（MySQL 仍是未来后端） | 后端切换不改变 C# bytes 语义 |
 | 实体迁移 | C# → `byte[]` → C++ 进程间传输 → 对端 C# | C++ 透传,C# 可读写 |
 | 热重载快照 | C# → `byte[]` → 内存 → C# | 纯 C# 闭环 |
-| 空间管理 | C# 属性变更 → C++ 需读取 Position | C++ 需能解析特定字段 |
+| 位置与空间数据 | 位置走 `CellEntity` / volatile envelope，SpaceData 走 typed bytes | `position` 不进入普通复制属性；DEF008 保留该字段名 |
 
 ## 1. 分层
 
@@ -113,8 +113,12 @@ C++ 网络层将 C# 产出的 `byte[]` 视为不透明 payload,仅负责封帧�
 
 - `DefGenerator` 的 `SerializationEmitter` / `DeltaSyncEmitter` 基于
   `.def` 属性列表生成 `Serialize(ref SpanWriter)` /
-  `Deserialize(ref SpanReader)` /
-  `SerializeReplicatedDelta` / `ApplyReplicatedDelta` / `ClearDirty`。
+  `Deserialize(ref SpanReader)`；服务端 `DeltaSyncEmitter` 生成
+  `SerializeOwnerDelta` / `SerializeOtherDelta` /
+  `SerializeForOwnerClient` / `SerializeForOtherClients` /
+  `BuildAndConsumeReplicationFrame`，客户端生成 `ApplyOwnerSnapshot` /
+  `ApplyOtherSnapshot` / `ApplyReplicatedDelta`。`ClearDirty` 只保留在
+  dirty-tracking 辅助面，旧 `SerializeReplicatedDelta*` API 已删除。
 - `ServerEntity` 基类声明抽象 `Serialize` / `Deserialize`,由生成代码
   实现;`SerializeForOwnerClient` / `SerializeForOtherClients` 默认
   no-op,生成代码按需 override。
@@ -129,4 +133,5 @@ C++ 网络层将 C# 产出的 `byte[]` 视为不透明 payload,仅负责封帧�
   `ListSyncTests / DictSyncTests / NestedContainerSyncTests / ContainerReuseTests / FieldStructSyncTests / StructSyncTests / ComponentReplicationFrameTests` 等覆盖。
 - 跨语言:C++ `test_clr_marshal.cpp` 覆盖 marshal 层,
   `test_clr_callback.cpp` 覆盖 NativeApi 往返;
-  `test_clr_script_engine.cpp` 覆盖实体序列化 + 热重载状态迁移。
+  `test_clr_script_engine.cpp` 覆盖 CLR 生命周期入口;热重载 native glue 由
+  `tests/integration/test_hot_reload.cpp` 覆盖。

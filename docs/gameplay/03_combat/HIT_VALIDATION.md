@@ -4,7 +4,9 @@
 >
 > **读者**：工程（必读）、战斗策划（§3、§7 必读，决定 hitbox 形状与窗口）、网络工程（§5、§6 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，当前已有 `MovementPositionHistoryStore`、
+> `ComputeRewindTick`、`RewindSphereHit` 与 `PhysicsQuery` 查询基础件；
+> 完整 hitbox runtime、iframe 状态回溯和 PvP 命中验证策略尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`MOVEMENT_SYNC.md`、`SKILL_SYSTEM.md`、`COMBAT_ACTIONS.md`、`BUFF_SYSTEM.md`
 >
@@ -36,14 +38,16 @@
 
 - **不追求 CS:GO 子弹级精度**（200ms 已足够 ARPG）
 - **不做客户端权威命中**（速度挂、神准挂会失控）
-- **不做物理 raycast**（用自研形状扫描）
-- **不做物体阻挡判定**（AoE 穿墙是设计选择，简化网络模型）
+- **不把命中真相交给客户端或 Unity Physics**——服务端 Combat 系统裁决命中；
+  候选查询、阻挡和地形事实可按技能配置走 Atlas `PhysicsQuery`
+- **不默认让所有 AoE 做动态刚体 contact**——是否穿墙、是否受阻挡由技能数据的
+  layer / mask / filter 明确表达
 
 ---
 
 ## 2. 总体流程
 
-### 2.1 命中流程概览
+### 2.1 目标命中流程概览
 
 ```
 玩家释放技能
@@ -351,7 +355,7 @@ public:
 };
 ```
 
-### 5.4 LagCompCheck 实现
+### 5.4 目标 LagCompCheck 实现
 
 ```csharp
 bool LagCompCheck(HitboxInstance hb, float3 origin, EntityRef target, CombatContext ctx) {
@@ -685,7 +689,7 @@ void ResolveHit(HitboxInstance hb, EntityRef target, CombatContext ctx) {
 - B 的位置历史依然按其 real cell 维护
 - 跨 cell 事件**不重复**（attacker 一 tick 内同 hitbox 同 target 只发一次）
 
-详见 `01_world/GHOST_ENTITY.md`（待写）。
+详见 `../01_world/GHOST_ENTITY.md`。
 
 ---
 
@@ -824,7 +828,8 @@ struct HitAuditLog {
 - 端同破坏（PhysX 内部浮点不一致）
 - 服务端没有 Unity 运行时
 - 性能不可控（PhysX overhead）
-- 自研 ~1000 行代码完全可控
+- Atlas 服务端只通过 `PhysicsQuery` 消费碰撞事实，Combat hitbox 过滤和
+  lag compensation 仍由服务端确定性逻辑控制
 
 ### Q2: 200ms lag comp 上限是不是太严格？
 
@@ -943,7 +948,7 @@ if (hb.def.is_unblockable) {
   - `COMBAT_FEEL.md`（命中事件触发的反馈）
   - `COMBAT_EVENT_ORDERING.md`（同 tick 多命中排序）
   - `01_world/GHOST_ENTITY.md`（跨 cell 实体）
-  - `08_security/ANTI_CHEAT_STRATEGY.md`（命中作弊检测）
+  - 本文 §13（命中作弊检测目标设计）
 
 ---
 

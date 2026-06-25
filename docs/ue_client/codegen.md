@@ -1,5 +1,8 @@
 # Codegen 设计
 
+> 状态: 当前 UE C++ codegen 设计。`Atlas.Tools.CppEmitter` 与
+> `tools/bin/cpp_emit.{bat,sh}` 已接入；Blueprint 表面仍由游戏侧 view 层手写。
+>
 ## 现状
 
 - `.def` 是 XML(`entity_defs/*.def`)
@@ -30,7 +33,8 @@ UE 引擎层(UCLASS / UPROPERTY / USTRUCT / BlueprintCallable / 任何 BP 暴露
 - C# 写,`dotnet run` 调用
 - 直接读 `.def` XML,复用从 `Atlas.Generators.Def` 抽出的 `Atlas.Defs.Parser` lib
 - 输出到 `samples/mvp/UEClient/Source/UEClient/gen/`(游戏模块本地,gitignored;跟 `Atlas.Mvp.Client` 在 C# 那侧对称)
-- 由 `tools/bin/build_mvp_ue.bat` 在 UBT 之前自动调用;手工运行用 `tools/bin/cpp_emit.bat`
+- 由 `tools/bin/build_mvp_ue.{bat,sh}` 在 UBT 之前自动调用;手工运行用
+  `tools/bin/cpp_emit.{bat,sh}`
 
 为什么用 C#:`DefParser` / `DefTypeExprParser` / `DefLinker` 已在 C# 侧成熟(2000+ 行),Python 重写=双份维护。
 
@@ -81,7 +85,7 @@ BP 暴露走游戏侧手写 view(参考 `samples/mvp/UEClient/Source/UEClient/At
 
 | 决策 | 取值 | 备注 |
 |------|------|------|
-| Position 字段 | 走 volatile envelope `0xF001`,不参与 `ApplyReplicatedDelta` | 沿用 `ATLAS_DEF008`,与 C# 端一致 |
+| Position 字段 | 走 volatile envelope `0xF001`,不参与 `ClientEntity::ApplyDelta` | 沿用 `ATLAS_DEF008`,与 C# 端一致 |
 | 命名空间 | `atlas::mvp::Avatar`(对应 C# `Atlas.Mvp.Client.Avatar`) | 多 game project 时各自起 namespace |
 | RPC reply(`trace_id + reply_bit`) | 生成 stub 但不实现 request-response 同步等待 | 真有 async-RPC 需求时再做 |
 | 输出位置 | `samples/mvp/UEClient/Source/UEClient/gen/` | 游戏模块本地;不是 plugin 的事 |
@@ -103,4 +107,8 @@ samples/mvp/UEClient/Source/UEClient/gen/*.gen.h
                 └─ entity_defs.bin (DefDump 从 Atlas.Mvp.Client.dll 提取)
 ```
 
-入口脚本 `tools/bin/build_mvp_ue.bat` 一条命令跑完:CMake → DefDump → CppEmitter → stage → UBT。每段都有 `--skip-*` 跳过。
+入口脚本 `tools/bin/build_mvp_ue.{bat,sh}` 一条命令跑完:CMake → DefDump →
+CppEmitter → stage → UBT。当前 sample plugin 的 ThirdParty 链接与运行时 DLL
+加载只接 Win64；非 Win64 UE build 需要先扩展 `AtlasUE.Build.cs` 和
+`AtlasUE.cpp`。分段跳过用 `--skip-native` / `--skip-defs` /
+`--skip-codegen` / `--skip-stage` / `--skip-ue`。

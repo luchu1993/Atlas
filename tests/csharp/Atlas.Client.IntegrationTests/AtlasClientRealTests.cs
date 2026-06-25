@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 using Atlas.Client;
 using Atlas.Client.Desktop;
 using Atlas.Client.Native;
@@ -38,13 +39,13 @@ public sealed class AtlasClientRealTests
     }
 
     [Fact]
-    public void ConnectAsync_AgainstRealCluster_ReachesConnected()
+    public async Task ConnectAsync_AgainstRealCluster_ReachesConnected()
     {
         using var client = new AtlasClient();
         var task = client.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, FreshUser(), "pwd-hash");
         DriveUntil(client, () => task.Status != AtlasTaskStatus.Pending);
         Assert.Equal(AtlasTaskStatus.Succeeded, task.Status);
-        task.GetAwaiter().GetResult();
+        await task;
         Assert.Equal(AtlasNetState.Connected, client.State);
         Assert.NotNull(client.LastLogin);
         Assert.NotEqual(0u, client.LastAuth!.Value.EntityId);

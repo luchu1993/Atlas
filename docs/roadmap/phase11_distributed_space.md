@@ -7,8 +7,8 @@ split / merge、retire handoff / drain、geometry 广播、`ShouldOffload`
 freeze/unfreeze 和 CellApp 死亡 rehome。Phase 13 已把 CellAppMgr
 HA 收敛为 worker 重建：manager 被 Reviver 重启后,存活 CellApp
 重新注册并用 `RecoverCellAppState` 主动重报 BSP。
-剩余工作集中在更大规模连续 rebalance / retire / crash 基线、
-完整 `EntityBoundLevels` 等价能力和 Phase 15 的 DBAppMgr HA。
+剩余工作集中在更大规模连续 rebalance / retire / crash 基线和完整
+`EntityBoundLevels` 等价能力；DBAppMgr HA 已由 Phase 15 按同一 worker-重建模式补齐。
 **前置依赖:** Phase 10 (CellApp 单机)、Phase 9 (BaseAppMgr)
 **BigWorld 参考:** `server/cellapp/real_entity.hpp`,
 `entity_ghost_maintainer.cpp`, `server/cellappmgr/`
@@ -82,7 +82,8 @@ tick-cost bucket 估算新边界，late join split 也优先使用 tick-cost buc
 CellAppMgr 只负责拓扑 rehome：死亡 leaf 被 sibling subtree 吸收，或被重新
 指向幸存 CellApp。Real 恢复由 BaseApp 根据 `BackupCellEntity` 缓存的
 `cell_backup_data` 发起。当前仍存在备份窗口和 rehome target 不可达导致的
-Real lost 场景，完整故障恢复会在本 Phase 的后续里程碑和 Phase 13 一起收敛。
+Real lost 场景；这些失败由 BaseApp / CellApp watcher 计数，manager 级恢复
+语义见 Phase 13。
 
 ## 协议
 
@@ -116,8 +117,9 @@ Real lost 场景，完整故障恢复会在本 Phase 的后续里程碑和 Phase
 | `CreateSpaceRequest` | 7003 | BaseApp / 脚本 → Mgr | 创建 Space |
 | `AddCellToSpace` / `AddCellToSpaceAck` | 7004 / 7008 | 双向 | 分配 Cell，并确认 receiver 已建好本地 Cell |
 | `RemoveCellFromSpace` | 7009 | Mgr → CellApp | 删除已 drain 为空的本地 Cell |
-| `RequestCellAppState` | 7010 | Mgr → CellApp | 要求 CellApp 立即用 `InformCellLoad` 回报 load 和本地 geometry version |
 | `HealthProbe` / `HealthProbeAck` | 7011 / 7012 | Reviver ↔ Mgr | Reviver 直接二进制 heartbeat；Ack 携带 game time、reviver priority 和 active-monitor 判定 |
+| `RecoverCellAppState` | 7013 | CellApp → Mgr | Manager 重启 / CellApp 重注册后由 worker 主动重报本地 Space BSP |
+| `ResolveSpaceHostRequest` / `ResolveSpaceHostReply` | 7014 / 7015 | CellApp ↔ Mgr | 跨 Space 传送前按 `(space_id, position)` 查询目标 primary host |
 | `UpdateGeometry` | 7005 | Mgr → CellApp | BSP 树 / Cell 边界更新 |
 | `ShouldOffload` | 7006 | Mgr → CellApp | geometry 广播前后 freeze / unfreeze 本 Cell 的 offload |
 | `SpaceCreatedResult` | 7007 | Mgr → 请求方 | 创建结果回包 |
@@ -340,8 +342,7 @@ Space BSP 和 cell→app 归属。
   仍缺更大规模实体恢复成功率基线。
 - CellAppMgr HA 当前走 Phase 13 worker 重建：mgr 重启后表为空,存活
   CellApp 重新注册并重报 BSP；recovery 窗口冻结拓扑推进,避免在局部视图上
-  split / merge / retire。BaseAppMgr 已用同一模式接入 Reviver；DBAppMgr
-  仍归 Phase 15。
+  split / merge / retire。BaseAppMgr 与 DBAppMgr 已用同一模式接入 Reviver。
 - `EntityRangeListNode` owner 已改为强类型 `CellEntity*`；RangeList 节点
   仍只保存非拥有指针，空间库通过前置声明避免反向依赖 CellApp 实现。
 

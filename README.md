@@ -1,5 +1,8 @@
 # Atlas Engine
 
+> Status: Current project entry point. For detailed phase status, see
+> [`docs/roadmap/README.md`](docs/roadmap/README.md).
+>
 Atlas is a distributed MMO server framework built with **C++20** and **C# (.NET)**. It uses a BigWorld-style split between login, base, cell, database, and manager processes, while gameplay logic runs in managed code through embedded CoreCLR.
 
 **[中文文档](README_CN.md)**
@@ -14,11 +17,15 @@ Atlas is aimed at large, long-running online worlds where the server must scale 
 - Base/Cell entity model with mailbox RPC and generated C# entity code.
 - CellApp spatial simulation with witness-based AoI, ghost entities, BSP partitioning, and offload coordination.
 - Embedded .NET runtime for server-side gameplay scripting.
-- C# client runtime with desktop and Unity integration surfaces.
+- C# client runtime with desktop and Unity integration surfaces, plus the UE MVP
+  C++ plugin/client path.
 - Runtime-loaded XML and SQLite database plugins.
+- DBAppMgr range sharding, worker-rebuilt manager HA, and Reviver supervision for
+  CellAppMgr, BaseAppMgr, and DBAppMgr.
 - Tracy instrumentation, baseline stress drivers, and trace comparison tools.
 
-MySQL, DBAppMgr, and Reviver are represented in the tree, but they are not complete production features yet.
+The MySQL backend is still a placeholder. DB replication, shard auto-rebalance,
+and full session resume remain out of the current production baseline.
 
 ## MVP Unity Demo
 
@@ -40,7 +47,7 @@ tools\bin\setup_mvp_unity.bat
 tools\bin\run_mvp_cluster.bat
 ```
 
-Open `samples/mvp/UnityClient` in Unity Hub and hit Play. Its client code is split into `Assets/Scripts/Runtime` and `Assets/Scripts/Editor` asmdefs, with runtime modules for app, world, views, UI, input, projectiles, and debug overlays. To build a standalone player, run `tools\bin\build_mvp_unity.bat`; it can auto-discover an installed Unity editor if the Unity project version file is absent.
+Open `samples/mvp/UnityClient` in Unity Hub and hit Play. Its client code is split into `Assets/Scripts/Runtime` and `Assets/Scripts/Editor` asmdefs, with runtime modules for app, camera, world, views, UI, input, projectiles, and debug overlays. To build a standalone player, run `tools\bin\build_mvp_unity.bat`; it resolves the Unity editor from `ProjectSettings/ProjectVersion.txt`, or use `--unity` / `UNITY_EXE` to override the editor path.
 
 ![Atlas MVP Unity demo](docs/mvp/mvp_unity.gif)
 
@@ -51,21 +58,24 @@ Client
   │
   ▼
 LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
-                         │               │
-                         ▼               ▼
-                       DBApp         CellAppMgr
-                         │
-                    XML / SQLite
+   │                         │             │
+   └──────────────┐          │             ▼
+                  ▼          ▼         CellAppMgr
+                DBAppMgr ─► DBApp
+                              │
+                         XML / SQLite
 ```
 
 | Process | Responsibility |
 |---|---|
 | `machined` | Local service registry, heartbeat target, and Birth/Death notification hub. |
+| `Reviver` | Supervises manager processes and restarts them through worker-rebuild recovery. |
 | `LoginApp` | Client-facing login gateway. |
 | `BaseAppMgr` | BaseApp registration, selection, and cluster coordination. |
 | `BaseApp` | Base entity ownership, client proxy state, mailbox routing, persistence handoff, and scripting. |
 | `CellAppMgr` | CellApp registration, space geometry, BSP partitioning, and offload coordination. |
 | `CellApp` | Spatial entities, movement, witness updates, AoI, ghosting, and scripting. |
+| `DBAppMgr` | DBApp registration, range shard table ownership, and shard-table recovery. |
 | `DBApp` | Asynchronous entity persistence through configured database backends. |
 
 Server processes share a small framework hierarchy:
@@ -166,16 +176,17 @@ Override the build dir with `ATLAS_LINUX_BUILD_DIR` if you want it elsewhere.
 ## Test
 
 ```bash
-cd build/debug
-ctest --build-config Debug --label-regex unit --output-on-failure
-ctest --build-config Debug --label-regex integration --output-on-failure
-ctest --build-config Debug -R test_math --output-on-failure
+ctest --test-dir build/debug -C Debug --label-regex unit --output-on-failure
+ctest --test-dir build/debug -C Debug --label-regex integration --output-on-failure
+ctest --test-dir build/debug -C Debug -R test_math --output-on-failure
 ```
 
 C# tests:
 
 ```bash
-dotnet test tests/csharp
+dotnet test tests/csharp/Atlas.Runtime.Tests/Atlas.Runtime.Tests.csproj --configuration Debug
+dotnet test tests/csharp/Atlas.Generators.Tests/Atlas.Generators.Tests.csproj --configuration Debug
+dotnet test tests/csharp/Atlas.Client.Tests/Atlas.Client.Tests.csproj --configuration Debug
 ```
 
 Before committing C++ changes, run unit tests and clang-format on changed C++ files:
@@ -276,7 +287,7 @@ Entities are declared in `entity_defs/<Name>.def`. The generator turns each defi
 </entity>
 ```
 
-Property `scope` controls who sees a write: `all_clients`, `own_client`, `other_clients`, `cell_public`, `cell_public_and_own`, `base`, `base_and_client`. `persistent="true"` opts a field into DBApp persistence; `reliable="true"` routes the delta on the reliable channel.
+Property `scope` controls who sees a write: `all_clients`, `own_client`, `other_clients`, `cell_public`, `cell_public_and_own`, `base`, `base_and_client`. `persistent="true"` opts a field into DBApp persistence; `reliable="true"` is retained in the descriptor, while property deltas currently all use the reliable channel.
 
 Server side — assigning to a generated property emits a delta to every observer in scope; `Client.<Method>(...)` is a typed stub that fans out to the matching client RPC.
 
@@ -312,13 +323,24 @@ The `profile` preset enables Tracy instrumentation and profiling helpers. The de
 
 ```bash
 tools\bin\build.bat profile
+tools\bin\run_baseline_profile.bat
+```
+
+```bash
+tools/bin/build.sh profile
 tools/bin/run_baseline_profile.sh
 ```
 
 Compare CellApp captures:
 
 ```bash
-python tools/profile/compare_tracy.py \
+tools\bin\compare_tracy.bat ^
+  .tmp\prof\baseline\cellapp_<old>.tracy ^
+  .tmp\prof\baseline\cellapp_<new>.tracy
+```
+
+```bash
+tools/bin/compare_tracy.sh \
   .tmp/prof/baseline/cellapp_<old>.tracy \
   .tmp/prof/baseline/cellapp_<new>.tracy
 ```

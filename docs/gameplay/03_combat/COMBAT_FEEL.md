@@ -4,7 +4,8 @@
 >
 > **读者**：工程（必读）、战斗策划（必读）、动画师（§5、§7 必读）、特效美术（§6 必读）、音效设计（§9 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，当前仅有客户端 SDK / UE / Unity 表现层基础；完整
+> hit pause、camera shake、伤害反馈管线尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`MILESTONE_COMBAT_FEEL.md`、`SKILL_SYSTEM.md`、`COMBAT_ACTIONS.md`
 >
@@ -356,7 +357,7 @@ PvP 1v1 / 2v2 / 4v4 中，**每个玩家相机独立**：
 
 1. 动画师在 Maya / Blender 制作动画，包含 root bone 位移
 2. 导入 Unity，配置 AnimationClip 的 root motion
-3. 运行 `tools/extract_root_motion.py`：
+3. 运行目标 root-motion 提取工具（当前仓库尚未提供）：
    - 输入：AnimationClip + 关键帧采样率
    - 输出：`MovementCurve` 数据（每帧位移采样）
 4. 数据写入 `MovementCurves.xlsx`，分配 `curve_id`
@@ -479,7 +480,8 @@ HitReactions.xlsx
 | Ultimate active | 6-12 | 200-400 |
 | Ultimate recovery | 20-40 | 670-1300 |
 
-**纪律**：所有数据存 `SkillFrameData.xlsx`，**Frame Data Editor 工具**可视化展示（见 `09_tools/FRAME_DATA_EDITOR.md`）。
+**纪律**：所有数据存 `SkillFrameData.xlsx`，**Frame Data Editor 工具**可视化展示（见
+[`09_tools/FRAME_DATA_EDITOR.md`](../09_tools/FRAME_DATA_EDITOR.md)）。
 
 ### 7.3 动画师与策划协作流程
 
@@ -799,7 +801,7 @@ Hit Pause 期间收到"切到下一招" 输入：
   - `BUFF_SYSTEM.md`（CC 反馈的状态来源）
   - `HIT_VALIDATION.md`（命中事件源头）
   - `MOVEMENT_SYNC.md §8`（动画驱动位移）
-  - `09_tools/FRAME_DATA_EDITOR.md`（动画数据编辑工具）
+  - [`09_tools/FRAME_DATA_EDITOR.md`](../09_tools/FRAME_DATA_EDITOR.md)（动画数据编辑工具）
 
 ---
 

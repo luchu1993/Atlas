@@ -4,7 +4,8 @@
 >
 > **读者**：战斗策划（必读）、AI 设计（必读）、工程（§3、§5、§7 必读）、技术美术（§4 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计。当前 MVP 只有随机游走 / NavMoveTo 等基础行为，
+> 完整 AI 架构尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`SKILL_SYSTEM.md`、`BUFF_SYSTEM.md`、`COMBAT_FEEL.md`
 >
@@ -478,7 +479,7 @@ PvE 副本中玩家组队，AI 应**意识到群体威胁**：
 
 ### 9.2 BT 编辑器
 
-未来工具（参见 `09_tools/` 待写）：
+未来工具（当前尚无独立 AI 工具文档）：
 - 可视化 BT 编辑器
 - 实时调试（看哪个分支被命中）
 - 参数调整 + 预览
@@ -507,7 +508,7 @@ P0–P2 用 YAML / Excel 配置；P3+ 上工具。
 - 怪物等级分布
 - 资源 / 怪物比例
 
-详见 `world/MapDesign.md`（待写）。
+当前尚无独立地图设计文档；地图密度规则先在本 AI 目标设计中保留。
 
 ---
 
@@ -525,7 +526,7 @@ Editor 内开启时：
 
 ### 10.2 AI 录像
 
-战斗回放工具（参见 `09_tools/COMBAT_REPLAY.md`，待写）：
+战斗回放工具（当前尚无独立 combat replay 工具文档）：
 - 录制 AI 决策流
 - 可看到每次 BT tick 选了哪个分支
 - 可看到为什么没攻击（cd? out of range? no LOS?）
@@ -666,7 +667,7 @@ PvP arena **不混入 AI 怪物**——保持纯玩家对战。
   - `BUFF_SYSTEM.md`（AI 受 CC 影响决策）
   - `MOVEMENT_SYNC.md`（AI 移动）
   - `ANIMATION_INTEGRATION.md`（AI 动画 telegraph）
-  - `09_tools/COMBAT_REPLAY.md`（AI 录像调试，待写）
+  - 当前尚无独立 combat replay 工具文档（AI 录像调试）
 
 ---
 

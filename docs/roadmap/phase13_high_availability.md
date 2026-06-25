@@ -10,7 +10,8 @@ priority+timeout 仲裁（被监控 Manager 端裁决，M3 落地），**不再�
 machined-lease**。M4（machined → per-host UDP 广播网格）**已落地**：mesh 默认开、成为唯一
 规范模型（M4-5 不可逆切换已跨过）；中心 TCP 单例不再是默认部署。Phase 13 HA 迁移完成。
 **前置依赖:** Phase 11（分布式空间完整可用）
-**BigWorld 参考:** `server/reviver/`, `server/dbappmgr/`
+**BigWorld 参考:** `server/reviver/`, `server/cellappmgr/`,
+`server/baseappmgr/`, `server/dbmgr/`
 
 ## 目标
 
@@ -37,88 +38,23 @@ machined-lease**。M4（machined → per-host UDP 广播网格）**已落地**�
   活跃；无显式 fencing token，靠死地址 + 新端点 + 注册表收敛。
 
 **已采纳目标：完全对齐 BigWorld 实现**（不保留偏离）。**已知代价**：UDP 广播
-machined 在 k8s / 云 overlay 网络通常不可路由——完成 machined 去中心化（M4）后
+machined 在 k8s / 云 overlay 网络通常不可路由；machined 去中心化（M4）已经完成，
 Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重启"时丢失 manager
 态（与 BigWorld 同）。
 
-### 迁移进度（每阶段独立可 build + 测试；M4 = 不可逆点）
+### 当前迁移基线
 
-- **M1 worker 重建** ✅（commit `63ca552` `efc76ff` `d101231` `3632e34`）：CellApp
-  注册后经 `RecoverCellAppState` 上报它持有的整树（每 space 的 `bsp_blob` +
-  geometry_version），mgr 取最高版本反序列化重建 partition；启动 recovery 窗口
-  （`recovery_deadline_`，复用 startup 收敛窗口）内冻结 LB/grow/split/retire，
-  等 worker 报告到齐；`RegisterCellApp` 携带 `known_app_id`，保留原 app_id
-  （EntityID 高字节路由不破）。
-- **M2 删 snapshot + epoch + 回放残留** ✅（commit `4885158` `a589e8b` 及 M2c）：
-  - **M2a**：删 `mgr_generation` epoch——BigWorld 无 fencing，靠端点身份拒绝
-    旧 mgr 消息（`AcceptCellAppMgrMessage` 按 channel identity，
-    `cellappmgr_stale_drops` 计数）。
-  - **M2b**：删整个 manager snapshot 子系统（`Snapshot`/`Restore`/snapshot
-    文件 / 周期与 dirty flush / ~40 个 snapshot watcher / config / CLI）。
-    snapshot 是 reattach 机制的唯一种子，所以 reattach watchdog / registry
-    对账 / force-resolve 一并移除；restore gate 坍缩为 M1 recovery 窗口
-    （`cellappmgr/ha/recovery_window_active` + `recovery_window_status`）。
-  - **M2c**：删 mgr→worker 回放残留（`ReplayCellAppTopology` /
-    `RequestCellAppState`）——worker 重注册后主动重报 BSP 并恢复周期 InformLoad，
-    mgr 无需回放或轮询；补 BaseApp `known_app_id` echo（对称于 CellAppMgr）。
-- **M3 Reviver priority+timeout 仲裁** ✅：被监控 Manager 的 `ReviverSubject` 按
-  priority + 心跳超时裁决唯一活跃 Reviver（HealthProbe 带 priority、Ack 回传
-  is_active_reviver），监督动作门控其上；subject 死后 active monitor 立即重启，
-  active Reviver 自己也死时 standby 按 priority-scaled grace + 注册表 dedup 经
-  `AuditRevive` 接管。**删除 leader lock（本地文件锁 + machined-lease）、machined
-  LeaseStore + lease wire 消息 + MachinedClient lease API + lease config**。
-- **M4 machined → per-host UDP 广播网格** ✅（不可逆点）：每台机一个
-  machined，UDP 广播发现 + ring/buddy，单例 manager 靠"广播查询 → first-found"，
-  删单地址 TCP 中心模型。依赖 M3。分片：
-  - **M4-1**（commit `5383521`，纯增量可逆）：UDP 广播传输原语——`Socket::SetBroadcast`
-    （SO_BROADCAST）+ `network/broadcast.h`（limited 255.255.255.255 / directed
-    `ip|~mask` 广播地址，网络字节序）。
-  - **M4-2**（commit `4ba9e96`，纯逻辑无 I/O 可逆）：`MachinedMesh`——按 HELLO 学习
-    peer、按地址排成全节点一致的 ring，每节点只监控其 ring 后继（buddy）；
-    `ScanFailures` 返回自身后继方向连续超时的 peer（自身负责对外宣告的死亡，一次故障
-    一次宣告）并本地剪除所有超时 peer；`RecordHeartbeat` 按 incarnation 判定 new/restarted。
-  - **M4-3**（commit `25b2acb`，纯 wire 无 I/O 可逆）：mesh gossip 协议——`MeshHello`
-    发现数据报（裸 UDP 广播，自带 `MeshMessageType` 帧头，载 mesh 端点 + incarnation）
-    + `PeekMeshType`（收包侧先窥探帧头再派发）。
-  - **M4-4a**（commit `7d56170`，增量可逆 I/O）：`MeshTransport`——自持广播 UDP socket
-    （SO_REUSEADDR + SO_BROADCAST），向 dispatcher 注册自己的 fd（不复用 NetworkInterface
-    的 channel 机制）；`Open`/`Close`、`BroadcastHello`/`SendHelloTo`、`OnReadable` 解析
-    `MeshHello` 回调（每回调限额防 timer 饿死）。集成测试驱动 live dispatcher。
-  - **M4-4b-1**（commit `c1ee083`，增量可逆，仍不碰中心 TCP 路径）：`MachinedMeshNode`
-    运行时——组合 `MeshTransport` + `MachinedMesh`，按间隔重广播本机 HELLO、把收到的 HELLO
-    折进 ring、对自身认领的死亡 buddy 触发 death 回调。收到的 HELLO 在 `Tick(now)` 内统一
-    打时间戳，故双节点集成测试完全确定（发现 → 静默 → 前驱在受控时刻报死；重启同身份新
-    incarnation → kRestarted）。`MeshTransport` 加 `SetBroadcastTarget`。
-  - **M4-4b-2**（commit `9520847`，增量可逆，gate 在 `mesh_enabled` config 默认 off）：
-    MachinedApp 持一个 `MachinedMeshNode`——Init 在 UDP `internal_port+2` 开 mesh、boot
-    incarnation 取 system clock ms、self 身份由 `machined_address` 派生（退回 loopback）；
-    OnTickComplete `Tick`；watcher `machined/mesh/{enabled,incarnation,peers,dead_buddies}`。
-    death 回调本片仅可观测（log+计数）——远端 machined 死亡影响远端进程，本机注册表尚不跟踪，
-    待 M4-4b-3 跨机注册表/查询落地才有可驱逐对象。验证：build + machined 注册集成（默认 off
-    无回归）；mesh 运行时由 M4-4b-1 单测覆盖。
-  - **M4-4b-3a**（commit `669c644`，纯逻辑无 I/O）：`MeshRegistry`——按拥有者 machined 缓存
-    远端进程（`UpdateOwner`/`DropOwner`/`FindByType` 跨拥有者合并）。远端进程无本地 channel
-    （不能本地 shutdown），故与本地 `ProcessRegistry` 分开，查询时合并。5 单测。
-  - **M4-4b-3b**（commits `a8fe9b1` wire · `7138002` transport 泛化 · `984b69e` node 路由 ·
-    `15dd3ac` MachinedApp 集成）：跨机可见性打通——`MeshRegistryMsg`（周期广播本机进程表）+
-    `MeshProcessDeath`（owner 广播，`ScanFailures` 现返回 `{owned 广播, pruned 全部本地驱逐}`
-    保证漏播也能清缓存）；`MeshTransport` 泛化成按类型派发的 datagram pipe；`MachinedMeshNode`
-    路由三类消息 + `BroadcastRegistry`；MachinedApp `OnQuery` 合并本地+远端、死亡 → `TakeOwner`
-    + 给监听者发 `DeathNotification`。watcher `machined/mesh/remote_processes`。
-  - **M4-4b-3b 余项**（已落地）：`922c281` registry-diff 发远端 `Birth`/`DeathNotification`
-    （监听者看到远端 birth + 单进程 death，不止 query）；`79850b8` `--mesh-advertise-ip` 多机
-    self-IP；`da7f828` mesh-enabled 集成测试（gossip 远端进程 → TCP 查询解析）。
-  - **M4-4b-4**（约定满足）：进程连本地 machined——`machined_address` 默认 `127.0.0.1:20018`
-    即本地，mesh 部署不指向远端中心即可，无代码改动。
-  - **M4-4b 小结**：per-host mesh 已功能完整且可逆（opt-in `--mesh-enabled`）——发现、ring/buddy
-    监控、跨机注册表 gossip、查询聚合、birth/death 传播全通，单测 + 节点级 + 集成测试覆盖。
-  - **M4-5 已落地（不可逆切换）**：`b00f6a0` `--mesh-broadcast-ip`（默认 loopback，防 dev/CI
-    泄漏 LAN——为测试安全有意偏离 BigWorld 默认 LAN 广播）；`bbffb5c` `mesh_enabled` 默认 true，
-    per-host mesh 成为**唯一规范模型**，中心 TCP 单例不再是默认。**调研结论**：中心与 mesh 共用
-    同一 machined 二进制（mesh 纯附加），无"中心专属代码"可删；launcher 无需改（mesh 默认 on +
-    单机 loopback-contained，run_world_stress 一个 machined 自动 mesh、进程连本地）。**部署**：
-    多机每机一个 machined，设 `--mesh-advertise-ip <本机IP>` + `--mesh-broadcast-ip 255.255.255.255`
-    （或子网广播）。**代价（已认可）**：UDP 广播在 k8s/云 overlay 不可路由 → 弃容器/云部署。
+- **Worker 重建**：CellAppMgr / BaseAppMgr 崩溃后由存活 worker 重新注册并重报
+  权威状态，manager 不保存 snapshot，也不回放旧拓扑。
+- **端点身份防护**：旧 manager channel 上的残留 control-plane 消息由 worker
+  按当前 channel identity 丢弃；没有额外 generation / fencing token。
+- **Reviver 仲裁**：被监控 manager 按 priority + heartbeat timeout 选出唯一活跃
+  Reviver，监督动作只由 active Reviver 执行。
+- **per-host machined mesh**：每台机器运行本地 machined，通过 UDP 广播、ring /
+  buddy 监控、registry gossip、远端 birth/death 通知和查询聚合替代中心
+  machined 模型；单机默认使用 loopback-contained mesh。
+- **运维边界**：多机部署需要设置 `--mesh-advertise-ip` 与合适的
+  `--mesh-broadcast-ip`；UDP 广播在 k8s / 云 overlay 网络通常不可路由。
 
 ## 当前已落地能力
 
@@ -144,19 +80,22 @@ Atlas 不再支持容器 / 云部署；纯 worker 重建在"全集群同时重�
   （同 channel）幂等 re-ack；同 pid / 地址的 birth replay 被忽略，新 pid 或
   新地址会触发重连。
 - **Reviver 监督全局唯一 Manager**：Reviver 重构为 multi-target，持有
-  `cellappmgr_target_` 和 `baseappmgr_target_`，各自独立 priority、heartbeat、
-  launch 预算、watcher 路径（`reviver/cellappmgr/*`、`reviver/baseappmgr/*`，
-  CellAppMgr 兼容 legacy `reviver/leader/*` alias）。订阅 machined birth / death
+  `cellappmgr_target_`、`baseappmgr_target_` 和 `dbappmgr_target_`。每个
+  target 有独立进程配置、priority、launch 预算和 watcher 路径
+  （`reviver/cellappmgr/*`、`reviver/baseappmgr/*`、`reviver/dbappmgr/*`；
+  CellAppMgr 兼容 legacy `reviver/leader/*` alias）；heartbeat / health /
+  audit 的时间参数当前复用 CellAppMgr 配置项。订阅 machined birth / death
   按进程名匹配目标，启动先查 registry 避免与已存在 manager 重复 cold-start。
 - **Reviver cold-start / restart**：`--revive-cellappmgr-on-start` /
-  `--revive-baseappmgr-on-start` 可在 machined 中无目标时拉起新进程；abnormal
-  death 通知后延迟重启，默认最多 3 次连续尝试，新 manager direct heartbeat ack
-  后重置预算；`revive-restart-backoff-cap-ms` > 0 时按 attempts 指数退避并 cap
-  截断。启动后未在 `revive-cellappmgr-launch-timeout-ms` 内注册按失败重试，预算
-  耗尽后经 watcher 暴露报警状态。
+  `--revive-baseappmgr-on-start` / `--revive-dbappmgr-on-start` 可在 machined
+  中无目标时拉起新进程；abnormal death 通知后延迟重启，默认最多 3 次连续尝试，
+  新 manager direct heartbeat ack 后重置预算；`revive-restart-backoff-cap-ms` >
+  0 时按 attempts 指数退避并 cap 截断。目标未在各自
+  `--revive-*-launch-timeout-ms` 内注册时按失败重试，预算耗尽后经 watcher
+  暴露报警状态。
 - **Reviver direct heartbeat**：主 Reviver 通过 manager 二进制 `HealthProbe` /
   `HealthProbeAck`（nonce + game_time）验证目标 RUDP 控制面仍响应；heartbeat
-  超时独立配置、连续失败独立计数，不被 watcher health 成功掩盖。
+  连续失败计数独立于 watcher health，不被 watcher health 成功掩盖。
 - **Reviver manager health / liveness / registry audit**：主 Reviver 通过 machined
   watcher forwarding 查 `app/uptime_seconds` 确认事件循环响应；对本地目标检查
   PID liveness；周期查 machined registry，活跃目标连续缺失即走异常重启路径。
@@ -193,22 +132,23 @@ CellAppMgr / BaseAppMgr HA 当前是同机 HA MVP 和 CI / 压测基线：Revive
 重注册 + BSP 重报收敛，recovery 窗口期间冻结 topology 推进。
 
 后续接手先跑脚本级 + 单测回归，再跑 live fault injection（见下"验证基线"）。
-live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha.py` / `verify_baseappmgr_ha.py`
+live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha` / `verify_baseappmgr_ha`
 校验 worker-重建恢复（recovery 窗口收敛、worker BSP 重报、`cellapp_count` /
 `baseapp_count` 回升）+ priority 仲裁接管（`reviver/.../active_reviver`、
-`--check-active-reviver`、priority failover）；`run_world_stress.py` 用
+`--check-active-reviver`、priority failover）；`run_world_stress` 用
 `--reviver-priority` 配置多 Reviver。
 
 ## 当前边界
 
-- Reviver 监督 CellAppMgr 和 BaseAppMgr（multi-target）；DBAppMgr 拆到
-  Phase 15（`phase15_dbappmgr.md`）。
+- Reviver 监督 CellAppMgr、BaseAppMgr 和 DBAppMgr（multi-target）；DBAppMgr
+  的分片管理与 HA 状态见 `phase15_dbappmgr.md`。
 - **Reviver 仲裁（priority + timeout，无 leader lock）**：被监控 Manager 的
   `ReviverSubject` 收集 ping 它的 Reviver `{addr→(priority, last_ping)}`，超时窗口
   （默认 3s）外老化，指定最高优先级存活 Reviver 为唯一 active monitor（同优先级按
   最低地址 tie-break，所有 subject 收敛一致），在 HealthProbeAck 回传
-  `is_active_reviver`。`--revive-cellappmgr-priority` / `--revive-baseappmgr-priority`
-  （默认 255 最高）设优先级，降低 standby 的值让它延后接管。无 fencing token——靠
+  `is_active_reviver`。`--revive-cellappmgr-priority` /
+  `--revive-baseappmgr-priority` / `--revive-dbappmgr-priority`（默认 255 最高）
+  设优先级，降低 standby 的值让它延后接管。无 fencing token——靠
   端点身份 + 注册表收敛（BigWorld reviver_subject 模型）。watcher：
   `reviver/{slug}/priority`、`/active_reviver`、`reviver/leader/active`
   （legacy alias = is_active_reviver）。
@@ -228,12 +168,12 @@ live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha.py` / `verify_basea
 - Manager 重启后始终不重连的 CellApp：mgr 表里本就不存在
   "待重连"的 ghost（表为空、靠 worker 主动重报），所以无需 force-resolve；machined
   registry 是 CellApp 是否存活的真相来源。
-- DBAppMgr 多 DBApp、分片迁移和 DBApp 故障转移仍未实现（Phase 15）。
+- DBAppMgr 多 DBApp 分片管理和 manager HA 已由 Phase 15 接入同一
+  worker-重建 + Reviver 监督模式；DBApp 副本和 shard auto-rebalance 仍不在当前范围。
 - BaseApp crash 后的客户端 session resume 尚未实现；当前仍走重新登录路径。
-- Reviver multi-target 目前由 cellappmgr_process 集成测试 + baseappmgr in-process
-  单测 + baseappmgr_messages round-trip 三层覆盖，无真实 process 级 multi-target
-  端到端验证；F1 multi-target 重构后两 target 走同一 `ManagedTarget` 参数化路径，
-  回归风险低，留待 Phase 15 三 target 一起补 process 级集成测试。
+- Reviver multi-target 目前由 CellAppMgr process 集成测试、BaseAppMgr in-process
+  单测、DBAppMgr 配置 / 消息单测和 live verifier 脚本覆盖；三 target 同跑的
+  更大规模 process 级基线仍归后续 HA 验证。
 
 ## BaseAppMgr HA
 
@@ -255,8 +195,8 @@ live 工具已随 M2+M3 改写到位：`verify_cellappmgr_ha.py` / `verify_basea
 
 ## 后续工作
 
-1. **DBAppMgr 多 DBApp registry + HA** — 详见 `phase15_dbappmgr.md`，按 worker-重建
-   原则实现（不再用 snapshot）。
+1. **更大规模 HA 基线** — CellAppMgr / BaseAppMgr / DBAppMgr 三 target 均已接入；
+   后续重点是连续故障注入和跨机器运行记录。
 
 ## 验证基线
 

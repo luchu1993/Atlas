@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using System.Threading.Tasks;
 using Atlas.Client;
 using Atlas.Client.Desktop;
 using Atlas.Client.IntegrationTests.Native;
@@ -37,13 +38,12 @@ public sealed class AtlasClientFakeTests : IDisposable
     }
 
     [Fact]
-    public void ConnectAsync_HappyPath_ReachesConnectedState()
+    public async Task ConnectAsync_HappyPath_ReachesConnectedState()
     {
         var task = _client.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, "alice", "pwd-hash");
         DriveUntil(() => task.Status != AtlasTaskStatus.Pending, timeoutMs: 8000);
-        var awaiter = task.GetAwaiter();
         Assert.Equal(AtlasTaskStatus.Succeeded, task.Status);
-        awaiter.GetResult();
+        await task;
         Assert.Equal(AtlasNetState.Connected, _client.State);
         Assert.NotNull(_client.LastLogin);
         Assert.Equal((uint)42, _client.LastAuth!.Value.EntityId);
@@ -51,28 +51,28 @@ public sealed class AtlasClientFakeTests : IDisposable
     }
 
     [Fact]
-    public void LoginAsync_RejectInvalidCreds_ThrowsLoginFailedException()
+    public async Task LoginAsync_RejectInvalidCreds_ThrowsLoginFailedException()
     {
         _cluster.SetLoginPolicy(FakeLoginPolicy.RejectInvalidCreds);
         var task = _client.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, "alice", "bad");
         DriveUntil(() => task.Status != AtlasTaskStatus.Pending, timeoutMs: 5000);
         Assert.Equal(AtlasTaskStatus.Faulted, task.Status);
-        var ex = Assert.Throws<LoginFailedException>(() => task.GetAwaiter().GetResult());
+        var ex = await Assert.ThrowsAsync<LoginFailedException>(async () => await task);
         Assert.Equal(AtlasLoginStatus.InvalidCredentials, ex.Status);
     }
 
     [Fact]
-    public void AuthenticateAsync_Reject_ThrowsAuthFailedException()
+    public async Task AuthenticateAsync_Reject_ThrowsAuthFailedException()
     {
         _cluster.SetAuthPolicy(FakeAuthPolicy.Reject);
         var task = _client.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, "alice", "pwd-hash");
         DriveUntil(() => task.Status != AtlasTaskStatus.Pending, timeoutMs: 8000);
         Assert.Equal(AtlasTaskStatus.Faulted, task.Status);
-        Assert.Throws<AuthFailedException>(() => task.GetAwaiter().GetResult());
+        await Assert.ThrowsAsync<AuthFailedException>(async () => await task);
     }
 
     [Fact]
-    public void ConnectAsync_CtCancelled_BeforeReply_ResultIsCanceled()
+    public async Task ConnectAsync_CtCancelled_BeforeReply_ResultIsCanceled()
     {
         _cluster.SetLoginPolicy(FakeLoginPolicy.NeverReply);
         var cts = new AtlasCancellationSource();
@@ -82,7 +82,7 @@ public sealed class AtlasClientFakeTests : IDisposable
         cts.Cancel();
         DriveUntil(() => task.Status != AtlasTaskStatus.Pending, timeoutMs: 2000);
         Assert.Equal(AtlasTaskStatus.Canceled, task.Status);
-        Assert.Throws<OperationCanceledException>(() => task.GetAwaiter().GetResult());
+        await Assert.ThrowsAsync<OperationCanceledException>(async () => await task);
     }
 
     [Fact]

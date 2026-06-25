@@ -43,7 +43,7 @@ class ClientSession {
   // Legal only in LOGIN_SUCCEEDED. Reads cached SessionKey + BaseApp addr.
   auto StartAuthenticate(AtlasAuthResultFn callback, void* user_data) -> int32_t;
 
-  // Idempotent. LOGOUT fires on_disconnect with reason=3; USER is silent.
+  // Idempotent. LOGOUT fires on_disconnect with callback reason=3; USER is silent.
   auto Disconnect(AtlasDisconnectReason reason) -> int32_t;
 
   auto SetTransportImpairment(uint32_t one_way_latency_ms, uint32_t loss_permyriad,

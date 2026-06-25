@@ -1,5 +1,7 @@
 # Atlas MVP — UE 客户端
 
+> 状态：当前 UE MVP 运行说明。登录、SpaceData、Avatar view、移动输入 / 预测、MovementCommand playback 与 generated RPC 已接入；剩余表现层缺口见下文。
+>
 `samples/mvp/UnityClient` 的 Unreal 对应实现。相同的 wire 协议（RUDP + ATDF）
 和相同的 MVP 功能集（Account 登录 → SelectAvatar → AoI / NPCs），由
 `AtlasUE` plugin（`Plugins/AtlasUE/`）和精简的 game module
@@ -12,22 +14,29 @@
 - **Unreal Engine** 5.x source build。Plugin 由 UBT 针对 `UEClient.uproject`
   指向的引擎编译；设环境变量 `UE_ROOT`（或传 `--ue-root`）到引擎根目录
   （含 `Engine/Build/BatchFiles/` 的那个）。
+- **Windows / Win64** —— 当前完整 UE Editor 本地 loop 只验证到 Win64。`.sh`
+  wrapper 保留脚本对称性，但 sample plugin 目前只链接并加载
+  `ThirdParty/*/Win64`。
 - **.NET 10 SDK** —— C# 服务端 / codegen / DefDump 流水线用。
 - **Python 3.10+**（仅 stdlib）—— build 与启动 wrapper 用。
-- **Visual Studio 2022/18 + MSVC C++ 工具链** —— native client SDK 编译。
+- **Visual Studio 2026 或 Visual Studio 2022 17.14+，并安装 MSVC C++
+  工具链** —— native client SDK 编译。
 
 ## 一键本地开发循环
 
-```sh
+```text
 # 构建 cluster + plugin + ATDF，启动 cluster 并打开 UE Editor。
-python tools/run_mvp_ue.py            # 默认 --config Release
+tools\bin\run_mvp_ue.bat              # Windows / Win64，默认 --config Release
 ```
 
+`tools/bin/run_mvp_ue.sh` 只保留 wrapper 对称性。非 Windows UE Editor build
+需要先扩展 `AtlasUE.Build.cs` 与 `AtlasUE.cpp`，接入非 Win64 ThirdParty 路径。
+
 Wrapper 流程：
-1. 跑 `tools/build_mvp_ue.py`（build atlas_net_client.dll + ATDF +
+1. 跑 `tools/bin/build_mvp_ue.{bat,sh}`（build atlas_net_client.dll + ATDF +
    校验 digest 对比 `bin/<config>/Atlas.Mvp.Cell.dll`，再 build UEClientEditor）。
-2. 后台启 MVP cluster（5 个服务端进程在 127.0.0.1，log 落
-   `.tmp/world-stress/<时间戳>/logs/`）。
+2. 后台启 MVP cluster（标准 world-stress 栈 + 1 个 BaseApp 和 1 个 CellApp，
+   跑在 127.0.0.1，log 落 `.tmp/world-stress/<时间戳>/logs/`）。
 3. 用 UnrealEditor 打开 `UEClient.uproject` —— 点 **PIE** 即可游玩。
 4. 关闭 UnrealEditor（或 Ctrl+C）后自动收 cluster。
 
@@ -35,10 +44,13 @@ Wrapper 流程：
 
 ## 仅构建（不启动）
 
-```sh
+```text
 # Native + ATDF + UE plugin 重编；默认 config = Release。
-python tools/build_mvp_ue.py
+tools\bin\build_mvp_ue.bat             # Windows / Win64
 ```
+
+`tools/bin/build_mvp_ue.sh` 可以驱动同一 Python pipeline，但 sample plugin
+尚未链接或加载非 Win64 ThirdParty 产物。
 
 此阶段触发的不匹配守护：
 
@@ -50,7 +62,10 @@ python tools/build_mvp_ue.py
   被拒；UE Editor (Development) 不能加载 Debug-CRT DLL。
 
 如果出 def_mismatch fail，错误信息已经给出修复命令：
-`python tools/build.py <preset>` 然后不带 `--skip-defs` 重跑 `build_mvp_ue.py`。
+- Windows：`tools\bin\build.bat <preset>`
+- Linux/macOS：`tools/bin/build.sh <preset>`
+
+然后重跑 `build_mvp_ue`，不要传 `--skip-defs`。
 
 ## 在 Blueprint 里搭 UI
 
@@ -86,18 +101,21 @@ BP 端登出：调 `Atlas Subsystem → Logout`。Subsystem 关掉
 ## 与 Unity 客户端的功能差距
 
 - 没有输入键位重映射 / 设置菜单。
-- 没有聊天输入或回滚（服务端 `Avatar.Say()` RPC 在）。
+- 没有聊天输入或滚动历史（服务端 `Avatar.Say()` RPC 在）。
 - 没有装备 / 武器切换 UI。
 - 没有伤害飘字 3D actor 或抛射物轨迹 VFX。
-- 没有 bot 模式（`tools/run_mvp_unity_bots.py` 没有 UE 对应物）。
-- Replay / playback 两端都没实现。
+- 没有跟随相机 / 环绕控制；`APlayerController.ControlRotation` 仅用于移动方向帧。
+- 没有 bot 模式（`tools/bin/run_mvp_unity_bots.{bat,sh}` 没有 UE 对应物）。
+- 非 Win64 UE plugin 链接 / runtime loading 尚未接入。
+- 双客户端录制/回放工具链尚未实现；MovementCommand playback 已接入 Unity 与 UE
+  移动路径。
 
 ## 目录布局
 
 - `Plugins/AtlasUE/Source/AtlasUE/Public/` —— plugin 头文件（subsystem、
   net client、login / HUD / SpaceData / Avatar view）。
 - `Plugins/AtlasUE/Source/AtlasUE/Private/AtlasCore/` —— wire 解码器
-  （AoI envelope、property decoder、RPC dispatch），与 Unity 共享。
+  （AoI envelope、property decoder、RPC dispatch），与 Unity 协议路径对齐。
 - `Plugins/AtlasUE/ThirdParty/AtlasNetClient/Win64/` —— stage 的
   `atlas_net_client.dll` + `mimalloc.dll`（Release CRT）。
 - `Plugins/AtlasUE/ThirdParty/AtlasEntityDef/` —— stage 的

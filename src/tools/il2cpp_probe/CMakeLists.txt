@@ -1,7 +1,11 @@
 option(ATLAS_BUILD_IL2CPP_PROBE "Build the IL2CPP callback spike DLL" OFF)
 
 if(ATLAS_BUILD_IL2CPP_PROBE)
-  add_library(atlas_il2cpp_probe SHARED probe.cc)
+  if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+    add_library(atlas_il2cpp_probe STATIC probe.cc)
+  else()
+    add_library(atlas_il2cpp_probe SHARED probe.cc)
+  endif()
 
   set_target_properties(atlas_il2cpp_probe PROPERTIES
     OUTPUT_NAME "atlas_il2cpp_probe"

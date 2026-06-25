@@ -168,9 +168,8 @@ if(ATLAS_ENABLE_PROFILER)
   else()
     set(TRACY_ON_DEMAND OFF CACHE BOOL "" FORCE)
   endif()
-  # Keep Tracy's own ancillary tools out of the build — we only need
-  # the in-process client library. The viewer is a separate desktop
-  # download.
+  # Keep Tracy's ancillary tools out of this dependency target; the
+  # top-level ATLAS_BUILD_TRACY_VIEWER option deploys matched CLI exes.
   set(TRACY_NO_BROADCAST     OFF CACHE BOOL "" FORCE)
   set(TRACY_NO_CONTEXT_SWITCH OFF CACHE BOOL "" FORCE)
   set(TRACY_STATIC           OFF CACHE BOOL "" FORCE)

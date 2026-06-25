@@ -1,10 +1,14 @@
 # Atlas MVP — Unity end-to-end demo
 
-Single-cell Atlas cluster + Unity 6 client demonstrating the full BigWorld-
-style stack: server-authoritative movement with local prediction, skill /
-projectile damage, AoI-driven peer streaming, and per-tick property
-replication. World is 200 × 200 m with one player avatar and 150 wandering
-NPCs.
+**Status:** Current Unity MVP walkthrough. The sample uses the current
+server-authoritative movement path; UE parity and remaining visual gaps are
+tracked in `samples/mvp/UEClient/`.
+
+Multi-CellApp Atlas cluster + Unity 6 client demonstrating the full
+BigWorld-style stack: server-authoritative movement with local prediction,
+skill / projectile damage, AoI-driven peer streaming, and per-tick property
+replication. The default wrapper starts 4 CellApps for a 200 × 200 m world
+with one player avatar and 150 wandering NPCs.
 
 ## Layout
 
@@ -21,10 +25,11 @@ base + cell, `Npc` is cell-only.
 
 ## Prerequisites
 
-- Unity Hub + Unity 6 LTS (project pinned to `6000.0.28f1c1`)
+- Unity Hub + Unity 6 LTS (project pinned to `6000.0.43f1-lilith-2`)
 - .NET 10 SDK
 - CMake + Ninja (build helper provisions Ninja on demand)
-- Windows: MSVC 2022 (build helper loads env). Linux/macOS: clang or gcc.
+- Windows: Visual Studio 2026 or Visual Studio 2022 17.14+ with MSVC
+  (build helper loads env). Linux/macOS: clang or gcc.
 
 ## Run it
 
@@ -37,15 +42,15 @@ tools\bin\build.bat debug
 tools/bin/setup_mvp_unity.sh
 tools\bin\setup_mvp_unity.bat
 
-# 3. Launch the cluster (machined + loginapp + baseappmgr + baseapp + cellappmgr + cellapp + dbapp).
+# 3. Launch the cluster (machined + loginapp + baseappmgr + baseapp + cellappmgr + cellapps + dbapp).
 tools/bin/run_mvp_cluster.sh
 tools\bin\run_mvp_cluster.bat
 
 # 4. Open samples/mvp/UnityClient in Unity Hub and hit Play.
 ```
 
-LoginApp port defaults to `20018` on both sides. Cluster runs cellapp /
-baseapp at 20 Hz (50 ms tick). `UnityClient/Assets/Scenes/Main.unity`
+LoginApp port defaults to `20018` on both sides. Cluster runs CellApps and
+BaseApp at 20 Hz (50 ms tick). `UnityClient/Assets/Scenes/Main.unity`
 already contains the runtime `Bootstrap` object.
 
 **After editing `Atlas.Mvp.{Client,Cell,Base}/*.cs`, `entity_defs/*`, or
@@ -67,7 +72,7 @@ Always edit the `src/csharp/...` source.
 
 Unity-side MVP code is grouped under `Assets/Scripts/Runtime/` and
 `Assets/Scripts/Editor/`. Runtime compiles as `Atlas.Mvp.Unity.Runtime`
-and is split by module: `App`, `World`, `Views`, `UI`, `Input`,
+and is split by module: `App`, `Camera`, `World`, `Views`, `UI`, `Input`,
 `Projectiles`, and `Debug`. Editor-only build glue compiles as
 `Atlas.Mvp.Unity.Editor`. Debug overlays such as AoI boxes and BSP
 geometry are isolated under `Runtime/Debug/` and are injected into the HUD
@@ -87,9 +92,9 @@ tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 
 The script discovers the Unity executable from `--unity`, `UNITY_EXE`,
 `UNITY_PATH`, then the Unity Hub install path for the pinned project version.
-If `ProjectSettings/ProjectVersion.txt` is absent, it scans installed Unity Hub
-editors and prints the selected executable. Default Windows output is
-`out/mvp-unity/windows/AtlasMvp.exe`; logs land at
+`ProjectSettings/ProjectVersion.txt` is required by `build_mvp_unity`; if that
+pinned editor is not installed, pass `--unity` or set `UNITY_EXE`. Default
+Windows output is `out/mvp-unity/windows/AtlasMvp.exe`; logs land at
 `out/mvp-unity/unity-build.log`. Pass `--target StandaloneLinux64` or
 `--target StandaloneOSX` for non-Windows players. Standalone builds launch in a
 resizable window.
@@ -149,12 +154,15 @@ Jolt backend; if the cache is missing the space keeps its flat ground. Cook
 manually with:
 
 ```bash
-bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json
-# → samples\mvp\maps\main.collision.collisioncache
+bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json -o samples\mvp\maps\main.collisioncache
+# → samples\mvp\maps\main.collisioncache
 ```
 
-`atlas_tool recook --invalid <dir>` re-cooks caches whose
-`jolt_version_stamp` falls behind the current Jolt build.
+`atlas_tool recook --invalid <dir>` only works for the default naming convention
+(`foo.collision.json` -> `foo.collision.collisioncache`). The MVP cache uses the
+custom `main.collisioncache` path, so refresh it by re-running `run_mvp_cluster`
+or the manual `cook_collision ... -o samples/mvp/maps/main.collisioncache`
+command above.
 
 ## Server navmesh + NPC pathfinding
 
@@ -173,27 +181,23 @@ bin\debug\atlas_tool.exe dump_nav samples\mvp\maps\main.collision.json --params 
 bin\debug\atlas_tool.exe path_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json --from -30,0,-30 --to 0,2,16 --obj path.obj
 ```
 
-## UE client (M2 — bidirectional codegen + BP exposure)
+## UE client
 
-Unreal Engine 5.7 client connecting to the same MVP cluster over the
+Unreal Engine 5.x client connecting to the same MVP cluster over the
 Atlas wire protocol. The plugin links `atlas_net_client.dll` +
 `atlas_entitydef_client.dll` directly and does **not** use UE
-replication / RPC. After M2: `Atlas.Tools.CppEmitter` emits typed
-entity classes (`atlas::mvp::Account`, `Avatar`, `Npc`,
-`StressAvatar`) and per-component classes (`StressLoadComponent`)
-covering property getters, scalar-change virtual hooks, upstream RPC
-stubs, downstream `client_methods` virtuals, slot-routed component
-dispatch, and `Serialize/Deserialize` for shared structs. The
-`UAtlasAvatarView` UCLASS publishes BP delegates for property changes
-plus all five Avatar `client_methods` (`ShowDamage`, `OnDied`,
-`OnRespawned`, `OnProjectileFired`, `OnProjectileEnded`) with
-`atlas::Vec3 → FVector` coord conversion baked into the bridge.
+replication / RPC. The current path covers login / auto-login, HUD and
+Avatar Blueprint view bases, SpaceData / NPC count, generated RPC,
+property delta / component decode, and owner-authoritative movement
+input with native predictor / ack replay. Remaining UI and tooling gaps
+are tracked in `samples/mvp/UEClient/README.md`.
 
 ### Prerequisites
 
-- Unreal Engine 5.7 source build at `UE_ROOT` (e.g.
+- Unreal Engine 5.x source build at `UE_ROOT` (e.g.
   `set UE_ROOT=E:\UE\UnrealEngine`)
-- Same MSVC 2022 + .NET 10 SDK + CMake toolchain as the server build
+- Same Visual Studio 2026 / Visual Studio 2022 17.14+ + .NET 10 SDK +
+  CMake toolchain as the server build
 
 ### Build + stage
 
@@ -216,7 +220,7 @@ flags (`--skip-native` / `--skip-defs` / `--skip-codegen` /
 ```bash
 # 1. Start the MVP cluster (see "Run it" above).
 
-# 2. Open the project in UE 5.7:
+# 2. Open the project in Unreal Editor:
 "%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor.exe" samples\mvp\UEClient\UEClient.uproject
 
 # 3. In the editor, hit Play (PIE). UEClientGameMode kicks off Login +
@@ -260,7 +264,8 @@ owner input sequence after reconnect so a resumed client does not collide with
 the old CellApp input sequence state. Peer avatars keep flowing through
 `AvatarFilter`-interpolated transforms each frame, with `MovementCommandStart`
 and `MovementCommandEnd` overriding the filter during skills. NPC AI writes
-movement intent and is advanced by the same server CharacterMotor. Unity can call
+movement intent and is advanced by the same `CellMovementSystem` /
+`movement_sim::Step` path. Unity can call
 `AtlasNetworkManager.SetTransportImpairment(75, 200, seed)` and UE can call
 `UAtlasSubsystem::SetTransportImpairment(75, 200, seed)` to test the same path
 under roughly 150 ms RTT / 2% datagram loss.
@@ -273,16 +278,11 @@ actors don't outlive the dead net ctx. Toggle
 `bAutoReconnectEnabled` off to drive retries from game code instead
 (e.g. once a LoginScreen UMG exists).
 
-### Known gaps after M3a/M3c
+### UE client gaps
 
-- **`AAvatarCapsule` is a Cylinder placeholder** — swap for a project
-  mesh as a polish pass
-- **HUD / damage popups / projectile FX not yet built in BP** — the
-  delegates exist; the actor-side bindings are M3 demo work
-- **No camera control / follow** — default `APlayerController`
-  ControlRotation drives the WASD direction frame, but no spring-arm
-  follow camera is wired up; the editor camera is whatever PIE starts
-  with
+UE-specific UI and camera gaps are tracked in
+`samples/mvp/UEClient/README.md`; the control table below describes the
+Unity MVP client.
 
 ## Controls
 
@@ -383,12 +383,12 @@ own_client → cell → AllClients broadcast path end-to-end.
 ### Persistence surface
 
 `Account.loginCount` and `Account.lastLogin` are `persistent="true"` and
-auto-round-trip through DBApp: on each successful auth `Account.OnInit`
-increments the counter and writes the UTC timestamp, dbapp persists on
-logoff, and the next session loads them back via `CheckoutEntity`. The HUD
-`SESSION` row shows `#N · MM-DD HH:MM` (this session's count + the previous
-session's UTC time), which is the simplest visual confirmation the dbapp
-save/load loop is intact.
+auto-round-trip through DBApp: `Account.SelectAvatar` increments the counter,
+writes the UTC timestamp, and flushes the Account before handing the client to
+the Avatar. DBApp still persists the final Account snapshot on logoff, and the
+next session loads it back via `CheckoutEntity`. The HUD `SESSION` row shows
+`#N · MM-DD HH:MM` (this session's count + the previous session's UTC time),
+which is the simplest visual confirmation the DBApp save/load loop is intact.
 
 `Avatar.gold` and `Avatar.level` are declared `persistent="true"` and DO
 get written to DBApp on logoff (auto-assigned DBID), but MVP's
@@ -421,19 +421,18 @@ source on `PlayerInputController`, so the cell-side workload is identical
 to a real keyboard player). Bots quit on `Application.Quit()` after their
 duration. The 400 ms launch stagger keeps you under LoginApp's default
 5/60s per-IP rate limit; for larger fan-outs restart the cluster with
-`--login-rate-limit-per-ip 0` (a `run_world_stress.py` flag). Per-bot
-Unity logs land at `out/mvp-unity-bots/bot_<idx>.log`.
+`--login-rate-limit-per-ip 0` (a `run_world_stress` flag). Per-bot Unity
+logs land at `out/mvp-unity-bots/bot_<idx>.log`.
 
-Unlike the C++ `run_world_stress.py` / `run_login_stress.py` drivers,
-this driver exercises the full Unity runtime per bot (managed GC,
-Atlas.Client.Unity bridge, Mvp.Client codegen + ApplyDelta), so it
-surfaces Unity-specific overhead that the headless C# stress tool
-doesn't.
+Unlike the headless `run_world_stress` / `run_login_stress` drivers, this
+driver exercises the full Unity runtime per bot (managed GC,
+Atlas.Client.Unity bridge, Mvp.Client codegen + ApplyDelta), so it surfaces
+Unity-specific overhead that the protocol stress tools do not.
 
 ## Multi-cellapp deployment
 
 The wrappers default to `--cellapp-count 4` (2×2 BSP grid); pass `1` to
-exercise single-cell mode.
+exercise single-CellApp mode.
 
 ```bash
 tools/bin/run_mvp_cluster.sh
@@ -470,29 +469,29 @@ keeps adjusting the split positions to keep load equal across the leaves
 once entities migrate. Pushing load via `run_mvp_unity_bots -n 16+` makes
 the balance moves more visible in `UpdateGeometry` re-broadcasts.
 
-**No client cell-id property — by design.** Phase 11 §"Ghost 无 C# 实例"
-keeps Ghost migration transparent to clients: the Witness streams a
-stable Avatar regardless of which CellApp currently holds the Real.
-There is no client-visible "current cell" and the BigWorld model
-discourages adding one.
+**No client cell-id property — by design.** Phase 11 keeps Ghost migration
+transparent to clients: C# Ghost mirrors are passive server-side replicas,
+and Witness streams a stable Avatar regardless of which CellApp currently
+holds the Real. There is no client-visible "current cell" and the BigWorld
+model discourages adding one.
 
 **Verification tests** for the underlying substrate (independent of MVP):
 
 ```bash
-bin/debug/test_bsp_tree.exe                  # 24 BSP unit tests
-bin/debug/test_distributed_space.exe         # 8 over-RUDP: CreateGhost / GhostPositionUpdate /
+bin/debug/test_bsp_tree.exe                  # BSP routing, balance, serialize, unsplit
+bin/debug/test_distributed_space.exe         # over-RUDP: CreateGhost / GhostPositionUpdate /
                                              #   GhostDelta / OffloadEntity + SpaceData mirror
-bin/debug/test_offload_traversal.exe         # 2 BSP-driven offload cases
-bin/debug/test_cellappmgr_integration.exe    # 6 cases incl. multi-cell bootstrap
+bin/debug/test_offload_traversal.exe         # BSP-driven offload / teleport cases
+bin/debug/test_cellappmgr_integration.exe    # late split and multi-cell bootstrap
 ```
 
 ## Known MVP shortcuts
 
-- Movement uses server-authoritative input frames, owner replay, and the
-  shared CharacterMotor with Static / Jolt PhysicsQuery for slope, step-up,
+- Movement uses server-authoritative input frames, owner replay, and the shared
+  `movement_sim::Step` path with Static / Jolt PhysicsQuery for slope, step-up,
   depenetration, and correction audit. `run_mvp_cluster` cooks and loads the
-  Unity-exported collision cache when present; chunk / border query and volume
-  export remain Phase 14 follow-ups.
+  Unity-exported collision cache when present. Static chunk / border query is
+  covered by the regression baseline; volume export remains a follow-up.
 - `Avatar.ReportPos` is removed from the MVP Avatar; stress-only
   `StressAvatar.ReportPos` remains for legacy load generation.
 - NPC AI is random walk + periodic fire through movement intent; no aggro / target.
@@ -502,17 +501,16 @@ bin/debug/test_cellappmgr_integration.exe    # 6 cases incl. multi-cell bootstra
   accepts anything matching its config.
 - ProjectileSimulator state is per-space but in-process; cross-cell
   projectile handoff is not implemented.
-- Space topology is fixed at first `RequestCreateSpace` (i.e. when the
-  first has_cell entity is created in that Space). CellApps registered
-  later are not added to existing Spaces' BSP; that's the Phase 11 wrap-up
-  item (`ShouldOffload` push or equivalent rebalance scheduler).
+- CellAppMgr can split existing Spaces when late CellApps register; the
+  MVP shortcut is that projectiles still do not hand off across cells.
 
 ## Troubleshooting
 
 - **Unity compile errors about missing `Atlas.Mvp.Client`** — you forgot
   to run `setup_mvp_unity`, or run `build_mvp_unity` without `--skip-setup`.
 - **`build_mvp_unity` cannot find Unity** — pass `--unity <Unity.exe>` or set
-  `UNITY_EXE`; without `ProjectVersion.txt`, the script scans Unity Hub installs first.
+  `UNITY_EXE`; also make sure `ProjectSettings/ProjectVersion.txt` exists and
+  names an installed editor.
 - **`Login failed: BadCredentials`** — LoginApp's `accept_any_user` is off
   in your loginapp config. Either enable it for dev or pre-create the user.
 - **No NPCs visible** — check the cellapp log for

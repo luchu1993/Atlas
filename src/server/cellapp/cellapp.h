@@ -328,7 +328,7 @@ class CellApp : public EntityApp, public CellMovementHost {
   void TickBackupPump();
 
   // Owner-baseline pump for client-bound Real entities.
-  // Gives reliable="false" properties a recovery channel.
+  // Refreshes owner-scope state after AoI entry, migration, or app-layer gaps.
   void TickClientBaselinePump();
 
   // Synchronous one-shot used by the pump and at AttachWitness time so
@@ -444,8 +444,8 @@ class CellApp : public EntityApp, public CellMovementHost {
   uint32_t backup_tick_counter_{0};
   uint32_t ghost_persistent_tick_counter_{0};
 
-  // Baseline is a bandwidth-insensitive safety net for
-  // reliable="false" attributes; tighter than backup is unnecessary.
+  // Baseline is a bandwidth-insensitive owner-state refresh; tighter than
+  // backup is unnecessary.
   static constexpr uint32_t kClientBaselineIntervalTicks = 120;
   uint32_t client_baseline_tick_counter_{0};
 

@@ -3,9 +3,10 @@
 > **状态**:✅ 已落地。基础设施(`AssemblyLoadContext` 隔离、
 > `ScriptHost`、`HotReloadManager`、`ClrHotReload`、`FileWatcher`、
 > `ClrObjectRegistry`)、`ScriptApp` 接入(由 `ServerConfig.enable_hot_reload`
-> 等字段驱动,BaseApp / CellApp 自动获得)、C++ 集成测试
-> `tests/integration/test_hot_reload.cpp` 已就位。`Config.assembly_name`
-> 默认 `Atlas.GameScripts.dll`,可在 JSON 配置中通过
+> 等字段驱动,BaseApp / CellApp 自动获得)、reload 前 lifecycle cancel +
+> `ManagedAtlasLoop` drain、C++ 集成测试 `tests/integration/test_hot_reload.cpp`
+> 与 C# drain 单测已就位。`Config.assembly_name` 默认
+> `Atlas.GameScripts.dll`,可在 JSON 配置中通过
 > `hot_reload.assembly_name` 覆盖。
 
 开发期修改 C# 玩法脚本后,无需重启服务端进程即可生效。仅用户脚本程序集
@@ -34,7 +35,9 @@ ScriptLoadContext (isCollectible: true):
      → [CompileScripts: dotnet build → .reload_staging/ → 备份至 .reload_backup/]
      → [HotReloadManager.SerializeAndUnload]
            · 遍历 EntityManager.Instance.GetAllEntities()
-           · 每个实体写入 (typeName, entityId, byteLen, payload)
+           · 触发每个实体的 LifecycleCancellation
+           · drain ManagedAtlasLoop 续延队列,最多 16 轮
+           · 使用同一实体列表写入 (typeName, entityId, byteLen, payload)
            · EntityManager.Clear() + ScriptHost.Unload()
      → [ClrScriptEngine.ReleaseAllScriptObjects() + ResetScriptMethodCache()]
      → [EntityDefRegistry::Instance().clear()]
@@ -62,7 +65,7 @@ C# 侧 — `src/csharp/Atlas.Runtime/Hosting/`:
 |---|---|
 | `ScriptLoadContext.cs` | `internal sealed class ScriptLoadContext : AssemblyLoadContext`,`isCollectible: true` |
 | `ScriptHost.cs` | `Load / Unload(TimeSpan) → bool / Dispose`;`Unload` 内 `GC.Collect` + `WaitForPendingFinalizers` 循环直到 `WeakReference` 失效,超时 `Atlas.Diagnostics.Log.Warning` |
-| `HotReloadManager.cs` | `[UnmanagedCallersOnly] SerializeAndUnload()`、`LoadAndRestore(byte* pathUtf8, int pathLen)` |
+| `HotReloadManager.cs` | `[UnmanagedCallersOnly] SerializeAndUnload()`、`LoadAndRestore(byte* pathUtf8, int pathLen)`；`CancelLifecyclesAndDrain` 先取消实体 lifecycle 并 drain main-loop continuation |
 
 ## 4. 状态快照格式
 
@@ -76,6 +79,10 @@ foreach entity:
     int32  payloadByteLen  // 便于 LoadAndRestore 跳过已删除类型
     bytes  payload         // entity.Serialize(ref SpanWriter)
 ```
+
+写入快照前会先对所有实体触发 `LifecycleCancellation`，再 drain 当前
+`ManagedAtlasLoop` 的续延队列。超过 16 轮仍未清空时记录 warning，继续进入
+序列化 / 卸载路径。
 
 `LoadAndRestore` 中未知 `typeName` 会跳过对应 `payloadByteLen` 个字节,
 避免类型删除导致整段数据损坏。
@@ -115,7 +122,7 @@ foreach entity:
 | 层 | 文件 | 覆盖 |
 |---|---|---|
 | C++ 集成 | `tests/integration/test_hot_reload.cpp` | `IsEnabled` 状态机、disabled 路径无副作用、空目录 Poll 不触发、缺失 assembly / 编译失败的 graceful failure、`ClrObjectRegistry::ActiveCount() == 0` 不变量 |
-| C# 单测 | `tests/csharp/Atlas.Runtime.Tests/ScriptHostTests.cs` | `ScriptHost.Load / Unload`、`WeakReference` GC 收敛 |
+| C# 单测 | `tests/csharp/Atlas.Runtime.Tests/ScriptHostTests.cs`、`tests/csharp/Atlas.Runtime.Tests/Coro/HotReloadDrainTests.cs` | `ScriptHost.Load / Unload`、`WeakReference` GC 收敛、reload 前 lifecycle cancel + drain |
 
 ## 8. 关联
 

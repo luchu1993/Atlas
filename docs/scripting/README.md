@@ -1,6 +1,6 @@
 # C# 脚本层架构
 
-> **状态**:架构主线 ✅ 已落地 / 集成与验证 🚧 进行中(详见 §7)
+> **状态**:架构主线 ✅ 已落地 / 集成与验证 🚧 进行中(详见 §6)
 
 Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generators.Def`
 在编译期生成所有反射敏感代码(序列化、脏标记、RPC 分发、Mailbox 代理、
@@ -53,20 +53,21 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 
 ## 3. 关键设计原则
 
-1. **零反射**。所有序列化、脏标记、RPC 分发、Mailbox 代理、实体工厂、
+1. **热路径零反射**。所有序列化、脏标记、RPC 分发、Mailbox 代理、实体工厂、
    类型注册由 `Atlas.Generators.Def` 在编译期生成 `partial class` 与
-   `[ModuleInitializer]`;运行时不出现 `System.Reflection` /
-   `Activator.CreateInstance` / `MethodInfo.Invoke`。
+   `[ModuleInitializer]`;实体 / RPC / 属性同步热路径不走 `System.Reflection`、
+   `Activator.CreateInstance` 或 `MethodInfo.Invoke`。`ScriptHost` 只在脚本
+   assembly 加载 / 热重载时用 reflection + `Activator.CreateInstance` 发现
+   可选 `IAtlasAppInitializer`，不参与 tick 或 wire dispatch。
 
 2. **单一引擎共享库**。所有 `src/lib/*` 目标聚合为 `atlas_engine.dll/.so`,
    C# 端 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找,服务端可执行
    文件薄壳化,同时绕开 Windows 上"DLL 与 EXE TLS 副本独立"造成的错误桥
    隔离问题(细节见 native_api_architecture.md)。
 
-3. **Provider 进程级特化**。`atlas_*` 导出函数在 C++ 侧统一委托给当前
+3. **Provider 进程级特化**。`Atlas*` 导出函数在 C++ 侧统一委托给当前
    `INativeApiProvider`;当前只有 BaseApp / CellApp 作为脚本宿主注册特化
-   Provider。DBApp 是原生 `ManagerApp`,Reviver / DBAppMgr 仍是占位或管理
-   进程,不是当前脚本宿主。
+   Provider。DBApp、Reviver 和 DBAppMgr 都是原生服务 / 管理进程,不是当前脚本宿主。
 
 4. **主线程语义**。安装 `AtlasSynchronizationContext` 后,所有 `await` 续体
    默认回到 Tick 主线程;每帧 `Lifecycle.DoOnTick` 先 drain 队列再驱动实体
@@ -82,7 +83,7 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 |---|---|---|
 | 引擎握手 | `Atlas.Core.Bootstrap.Initialize(BootstrapArgs*, ObjectVTableOut*)`(in `Atlas.ClrHost`) | `clr_bootstrap()` → `ClrHost::GetMethodAs<>` |
 | 引擎生命周期 | `Atlas.Core.Lifecycle.{EngineInit, EngineShutdown, OnInit, OnTick, OnShutdown}` | `ClrScriptEngine::{Initialize, OnInit, OnTick, OnShutdown, Finalize}` |
-| C# → C++ | `Atlas.Core.NativeApi.Atlas*` `[LibraryImport]` | `ATLAS_NATIVE_API_TABLE` X-macro 展开的 `atlas_*` 函数 |
+| C# → C++ | `Atlas.Core.NativeApi` 的 `[LibraryImport]` 方法（EntryPoint=`Atlas*`） | `ATLAS_NATIVE_API_TABLE` X-macro 展开的 `Atlas*` 导出函数 |
 | C++ → C# | C++ 端缓存的 `[UnmanagedCallersOnly]` 函数指针 | `Atlas.Generators.Def` 生成的 RPC dispatcher / EntityFactory |
 | 错误桥 | `Atlas.Core.ErrorBridge.SetError(ex)`(`Atlas.ClrHost`) | `clr_error_set / clear / get_code`(thread-local;DLL 内导出 `AtlasGetClrError*Fn` 提供函数指针) |
 | GCHandle 桥 | `Atlas.Core.GCHandleHelper`(`Atlas.ClrHost`) 提供 7 个 `[UnmanagedCallersOnly]` | `ClrObjectVTable` 一次性注入,所有 `ClrObject` 共享 |
@@ -99,9 +100,9 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 | C# 单测 | `tests/csharp/Atlas.Client.Tests/` | 客户端实体注册与回放 |
 | 集成 | `tests/csharp/Atlas.RuntimeTest/`、`tests/csharp/Atlas.SmokeTest/` | 测试 forwarder + 冒烟入口,用于 C++ 集成测试加载完整 CLR |
 
-## 7. 完成状态
+## 6. 完成状态
 
-> 核对于 `main` 分支,2026-05-01。✅ 表示主路径已落地并有测试覆盖,
+> 核对于当前工作树。✅ 表示主路径已落地并有测试覆盖,
 > 🚧 表示已具备基础设施但尚未在生产路径上接通,⬜ 表示未开始。
 
 ### 已落地(✅)
@@ -120,15 +121,15 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 | 主线程模型 | `AtlasSynchronizationContext.cs` + `ThreadGuard.cs` |
 | Atlas.Runtime: Entity / Hosting / Log / Time / Diagnostics | `src/csharp/Atlas.Runtime/` |
 | Atlas.Shared: SpanWriter/Reader / DataTypes / Mailbox / RpcId | `src/csharp/Atlas.Shared/` |
-| `Atlas.Generators.Def` 全套 emitter | `Properties / Serialization / DeltaSync / Factory / Mailbox / RpcStub / Dispatcher / RpcId / TypeRegistry / Component / EntityComponentAccessor / Struct / StructRegistry` 等 16 个 |
+| `Atlas.Generators.Def` 全套 emitter | `Properties / Serialization / DeltaSync / Factory / Mailbox / RpcStub / Dispatcher / RpcId / TypeRegistry / Component / EntityComponentAccessor / Struct / StructRegistry` 等 |
 | EntityDefRegistry | `src/lib/entitydef/`(C# 注册路径 + DBApp `RegisterFromBinaryFile` 已接通) |
 | 客户端宿主分层 | `Atlas.Client`(`netstandard2.1`)+ `Atlas.Client.Desktop`(.NET)+ `Atlas.Client.Unity`(asmdef + IL2CPP defines) |
 | 离线工具 | `Atlas.Tools.DefDump`(`.def` → `entity_defs.bin`) |
 | 示例脚本 | `samples/base/`(Account / Avatar)、`samples/client/`(StressAvatar + Component) |
 | 热重载基础设施 | `clr_hot_reload.{h,cc}` + `file_watcher.{h,cc}` + `Hosting/{ScriptHost, ScriptLoadContext, HotReloadManager}.cs` |
 | 热重载接入 + 测试 | `ScriptApp::Init` 读 `ServerConfig.enable_hot_reload` 等字段构造 `ClrHotReload`,`OnTickComplete` 驱动 `Poll/ProcessPending`;集成测试 `tests/integration/test_hot_reload.cpp` |
-| C++ 测试(脚本相关 ~12 个文件) | `tests/unit/test_clr_*` + `test_script_*` + `test_native_api_*` + `test_entity_def_registry_*` |
-| C# 测试 | `Atlas.Runtime.Tests` 18 个文件、`Atlas.Generators.Tests` 5 个文件、`Atlas.Client.Tests` |
+| C++ 测试 | `tests/unit/test_clr_*` + `test_script_*` + `test_native_api_*` + `test_entity_def_registry_*`；`test_clr_script_engine.cpp` 覆盖 EngineInit → OnInit → OnTick → OnShutdown → EngineShutdown |
+| C# 测试 | `Atlas.Runtime.Tests`、`Atlas.Generators.Tests`、`Atlas.Client.Tests` |
 | 集成 forwarder / 冒烟 | `Atlas.RuntimeTest` + `Atlas.SmokeTest` |
 
 ### 进行中(🚧)
@@ -136,7 +137,6 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 | 项 | 现状 / 缺什么 |
 |---|---|
 | 其余进程的 Provider | 当前只有 `BaseApp` / `CellApp` 已实现脚本宿主 Provider;`DBApp` 直接走原生 entity-def / 数据库路径,`Reviver` / `DBAppMgr` 不是当前脚本宿主 |
-| 端到端引擎生命周期测试 | 缺 `tests/integration/test_engine_lifecycle.*`(C++ 启动 → C# 初始化 → Tick N 帧 → 关闭) |
 | Unity IL2CPP 端到端验收 | `Atlas.Client.Unity.asmdef` 已就位,但 `link.xml` + iOS/Android IL2CPP build + 序列化/RPC 往返尚未验证 |
 
 ### 未开始(⬜)
@@ -148,13 +148,13 @@ Atlas 服务端的玩法脚本运行在嵌入式 .NET CoreCLR 上;`Atlas.Generat
 | GC 暂停 p99 < 5 ms 验证 | `runtime/atlas_server.runtimeconfig.json` 已启用 Server GC + DATAS,缺持续负载下的 p99 数据 |
 | `delegate* unmanaged` < 100 ns / string < 500 ns 延迟基准 | 同上,需要对应测试台 |
 
-## 8. 部署形态
+## 7. 部署形态
 
 ```
 deploy/
 ├── BaseApp / CellApp                           — 脚本宿主,动态链接 atlas_engine
-├── LoginApp / *Mgr / DBApp / Reviver           — 原生服务进程或占位管理进程
-├── atlas_engine.dll/.so                        — 引擎核心,导出 atlas_* 符号
+├── LoginApp / *Mgr / DBApp / Reviver           — 原生服务进程或管理进程
+├── atlas_engine.dll/.so                        — 引擎核心,导出 Atlas* 符号
 ├── dotnet/                                     — .NET 运行时(随构建打包)
 ├── scripts/
 │   ├── Atlas.Runtime.dll

@@ -5,7 +5,8 @@
 >
 > **读者**：服务端工程、客户端/Unity 工程、工具链工程、战斗系统工程、技术策划。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：✅ 当前基线。Phase 14 已接入 movement_sim、PhysicsQuery、Static/Jolt 后端与
+> parity gate；material、volume、大地图 streaming 和 Jolt cache chunking 仍是后续扩展。
 >
 > **前置文档**：`docs/gameplay/OVERVIEW.md`、
 > `docs/gameplay/01_world/CELL_ARCHITECTURE.md`、
@@ -81,27 +82,30 @@ atlas_tool validate/cook
         │
         ▼
 Atlas Runtime Physics
-  - PhysicsWorld / PhysicsScene
-  - PhysicsQuery
-  - PhysicsBody / PhysicsShape handles
-  - Watcher / Tracy / DebugDraw
+  - Space-owned PhysicsQuery
+  - Flat / Static / Chunked query implementations
+  - collision cache -> PhysicsQuery backend factory
+  - long-term scene/body handles and telemetry
         │
         ▼
 Backend Adapter
-  - JoltPhysicsBackend
-  - NullPhysicsBackend
-  - TestPhysicsBackend
+  - JoltPhysicsQuery
+  - Null / Flat / Static PhysicsQuery
+  - test-local fake PhysicsQuery implementations
         │
         ▼
 Gameplay Integration
-  - CharacterMotor / ServerKCC
+  - CellMovementSystem / movement_sim::Step
   - SkillQuery
   - ProjectileQuery
   - TriggerSystem
   - Vision / LOS Query
 ```
 
-Jolt 位于 backend adapter 内部。Atlas 的长期契约位于 `src/lib/physics`，Jolt 实现位于独立库，例如 `src/lib/physics_jolt`。
+Jolt 位于 backend adapter 内部。当前已落地的 Atlas 契约是
+`PhysicsQuery`、collision asset/cache 和 `CollisionBackendFactory`；完整
+scene/body handle 服务层仍是长期扩展边界。Jolt 实现位于独立库
+`src/lib/physics_jolt`。
 
 ---
 
@@ -174,8 +178,7 @@ Atlas `layer`（Jolt 用作 object layer），query 只命中 mask 命中位的 
 Space 可通过 collision asset 安装自己的 Static query；手工替换 query 时会
 清除 asset metadata，避免观测状态和实际 backend 漂移。Cell C# 脚本可调用
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 给既有 Space 装载同一资源。
-material、volume、大地图 streaming 和 Jolt cache chunking 仍属于后续导出 /
-cook 阶段。
+material、volume、大地图 streaming 和 Jolt cache chunking 仍属于后续扩展。
 
 **Cooked cache** (M5+)：`atlas_tool cook_collision <input.collision.json>` 把
 source JSON + side-car bin 打成单个 `.collisioncache` 文件，便于部署只下发
@@ -199,7 +202,9 @@ mismatch 直接 error，**不** silent fallback。Reader 也接受 v1 layout
 `JoltPhysicsQuery::CurrentJoltStamp()` 和 `CookCollisionMeshes` 输出的
 cooked blob；`atlas_tool recook --invalid <dir>` 递归扫描 `.collisioncache`，
 对 stamp 不等于当前 Jolt stamp 或 cooked blob 缺失的 cache 自动重 cook
-（约定 `foo.collision.json` ↔ `foo.collision.collisioncache`）。
+（仅按默认命名约定从 cache 路径反推源资产：
+`foo.collision.json` ↔ `foo.collision.collisioncache`）。自定义 `-o`
+输出名需要用原始 `cook_collision <source> -o <cache>` 命令刷新。
 
 运行时由 `CollisionBackendFactory`（physics 层抽象）消费 cache：
 `JoltCollisionBackendFactory`（physics_jolt 层）`BuildFromCache` 校验
@@ -219,13 +224,15 @@ cache 可删除、可重建、可因版本不匹配失效。
 
 ```text
 atlas_tool validate_collision map.collision.json
-atlas_tool cook_collision map.collision.json --backend jolt
+atlas_tool cook_collision map.collision.json
 atlas_tool dump_collision map.collision.json --obj map_collision.obj
 ```
 
-当前已实现 `validate_collision` 和 `dump_collision --obj`。前者会执行 v1 JSON
-schema、坐标系、finite 数值、layer 范围、box extents 和 plane normal 校验；
-后者会把 box / plane 输出为 OBJ 调试预览；`cook_collision` 仍是后续工具入口。
+当前已实现 `validate_collision`、`cook_collision`、`dump_collision --obj`
+和 `recook --invalid`。`validate_collision` 会执行 v1/v2 JSON schema、坐标系、
+finite 数值、layer 范围、box extents 和 plane normal 校验；`cook_collision`
+生成 `.collisioncache` 并写入当前 Jolt stamp / cooked mesh blob；`dump_collision`
+会输出 OBJ 调试预览；`recook --invalid` 用于批量刷新 stale cache。
 
 Cooking 职责：
 
@@ -239,7 +246,13 @@ Cooking 职责：
 
 ### 4.4 Runtime 服务层
 
-Runtime 服务层提供 Atlas 类型的 API：
+当前 runtime 服务层已落地为每个 `Space` 持有一个可替换的
+`physics::PhysicsQuery`，raw collision asset 生成 Static / Chunked query，
+`.collisioncache` 在注入 `CollisionBackendFactory` 后可构建 Jolt query；C#
+入口通过 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 触发同一路径。
+
+完整 scene/body handle API 仍是长期目标，不能当作当前可用接口。目标形态是
+Atlas 类型的 API：
 
 ```cpp
 namespace atlas::physics {
@@ -278,7 +291,7 @@ class PhysicsBackend {
 }
 ```
 
-公开 API 使用 Atlas math、Atlas handles、Atlas layer/mask/filter，不使用 Jolt 类型。
+公开 API 必须使用 Atlas math、Atlas handles、Atlas layer/mask/filter，不使用 Jolt 类型。
 
 ### 4.5 Gameplay 集成层
 
@@ -286,7 +299,7 @@ Gameplay 系统使用 `PhysicsQuery`，不直接访问 backend：
 
 | 系统 | 物理能力 |
 |---|---|
-| CharacterMotor / ServerKCC | capsule shape cast、ground probe、depenetration、step、slope、snap |
+| CellMovementSystem / movement_sim::Step | capsule shape cast、ground probe、depenetration、step、slope、snap |
 | SkillQuery | sphere/box/capsule overlap、shape cast、LOS check、命中过滤 |
 | ProjectileSystem | raycast、sphere cast、pierce/ricochet query |
 | TriggerSystem | overlap、sensor volume、enter/leave 状态 |
@@ -481,6 +494,9 @@ optional custom filter
 ## 9. Entity 与 PhysicsProxy
 
 Entity 不是 PhysicsBody。物理对象是实体的可选代理。
+当前工程尚未落地动态 body / `PhysicsProxyComponent`；已落地的是 Space 级
+静态 collision asset query，供 `movement_sim::Step` 和 Cell movement 使用。
+下面是后续 scene/body 服务层扩展时的目标形态：
 
 ```text
 EntityId
@@ -571,9 +587,10 @@ raycast、overlap 或 sensor 接触的 volume 才注册到 PhysicsScene。
 
 ---
 
-## 11. CharacterMotor 与移动
+## 11. `movement_sim::Step` 与移动
 
-Atlas 自己实现服务端 CharacterMotor。Jolt 只提供查询事实：
+Atlas 在 `CellMovementSystem` / `movement_sim::Step` 中实现服务端移动状态机。
+Jolt 只提供查询事实：
 
 ```text
 capsule shape cast
@@ -589,14 +606,14 @@ step、Unity / UE native predictor、NPC movement intent 和 ack replay。14.2
 `movement_sim::PhysicsCharacterQuery` 适配器；Space 已持有可替换
 `PhysicsQuery` backend，当前默认 Static backend。CellApp movement tick 按
 实体所属 Space 路由查询；Jolt 接入只替换 backend，不改变 gameplay / script
-边界。Atlas collision asset v1 JSON loader 已能校验 box / plane 静态碰撞并
+边界。Atlas collision asset loader 已能校验 v1/v2 静态碰撞资产并
 构建不带隐式平地的 Static query，`atlas_tool validate_collision`
 可用于内容管线前置检查。Space 已有装载 collision asset 并替换本 Space
 physics query 的入口，Cell C# 脚本可通过
 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 调用该入口。
 box-bearing raw asset 会安装 Static chunk wrapper，覆盖跨 chunk query region、
 border box 复制和 plane fallback；完整 streaming / Jolt cache chunking 后置。
-CharacterMotor 已使用 ground normal 做
+`movement_sim::Step` 已使用 ground normal 做
 slope limit，在非跳跃 grounded sweep 命中时支持基础 step-up，并显式标记
 snap-to-ground；起跳 tick 不会被 snap 拉回地面，还会按配置预算执行初始重叠
 depenetration。Static backend 可用静态 box、静态平面和向下 ground capsule cast
@@ -604,7 +621,7 @@ depenetration。Static backend 可用静态 box、静态平面和向下 ground c
 ground / plane depenetration 和低顶阻挡。CellApp 会把角色胶囊半径传入
 ground probe，避免盒体边缘探地退化成点查询。
 
-CharacterMotor 控制：
+`CellMovementSystem` / `movement_sim::Step` 控制：
 
 - 输入到速度的规则。
 - dash、roll、knockback、airborne、root-motion curve 的位移解释。
@@ -636,7 +653,8 @@ PvP lag compensation 需要历史 Transform / collider 状态。物理 backend �
 
 - 对角色/怪物保存 1 秒历史胶囊或 hit primitive。
 - lag compensation 使用历史 primitive 做命中过滤。
-- 静态世界阻挡使用当前 PhysicsScene。
+- 静态世界阻挡使用当前 Space 的 `PhysicsQuery`；后续 scene/body 服务层落地后再映射到
+  `PhysicsScene`。
 - 动态障碍若影响 PvP 公平，需要保存简化历史状态或禁止进入高公平场景。
 
 这比回滚完整物理世界更可控。
@@ -645,7 +663,9 @@ PvP lag compensation 需要历史 Transform / collider 状态。物理 backend �
 
 ## 13. 脚本 API 边界
 
-C# 脚本可以使用受控查询：
+当前 C# 脚本已暴露 `CellServerEntity.LoadCollisionAsset(spaceId, path)` 来给
+Space 装载静态 collision asset。通用脚本物理查询 API 尚未落地；后续扩展时应采用
+受控查询：
 
 ```csharp
 Physics.Raycast(...)
@@ -666,7 +686,8 @@ Physics.ShapeCast(...)
 
 ## 14. 可观测性
 
-Watcher 指标：
+当前已具备通用 Tracy profile 区域和 Cell movement 侧接入；下面是完整物理
+服务层落地时需要补齐的 Watcher 指标目标：
 
 ```text
 physics.scenes
@@ -686,7 +707,7 @@ physics.cache.miss
 physics.debug.slow_query.count
 ```
 
-Tracy zones：
+目标 Tracy zones：
 
 ```text
 Physics.LoadScene
@@ -697,7 +718,7 @@ Physics.Raycast
 Physics.ShapeCast
 Physics.Overlap
 Physics.TriggerEvaluate
-Movement.CharacterMotor
+CellMovementSystem::Tick
 Skill.PhysicsQuery
 Projectile.PhysicsQuery
 ```
@@ -720,9 +741,12 @@ Projectile.PhysicsQuery
 
 ### 15.1 Backend 无关测试
 
-使用 TestPhysicsBackend 覆盖：
+当前已覆盖 `movement_sim::Step`、Flat / Static / Jolt parity、collision asset
+pipeline 与 Space 装载路径。后续新增脚本查询 / 动态 body 时，使用
+`NullPhysicsQuery` / `FlatPhysicsQuery` / `StaticPhysicsQuery` 或测试内局部 fake
+query 覆盖：
 
-- CharacterMotor 状态机。
+- `movement_sim::Step` 状态机。
 - 技能过滤逻辑。
 - query budget。
 - layer/mask 组合。
@@ -730,14 +754,11 @@ Projectile.PhysicsQuery
 
 ### 15.2 Jolt 集成测试
 
-覆盖：
+当前 Jolt 集成测试覆盖 primitive、mesh、heightfield、layer filter、cache
+stamp/cooked blob 和 Space cache 加载。后续 scene/body 服务层落地时继续覆盖：
 
-- primitive raycast/overlap/shape cast。
-- mesh 和 heightfield query。
-- layer filter。
 - BodyHandle 与 EntityId 映射。
 - scene load/unload。
-- cache version mismatch。
 
 ### 15.3 内容管线测试
 
@@ -778,27 +799,32 @@ Jolt 升级流程：
 ```text
 1. 升级 physics_jolt。
 2. 跑 backend 集成测试。
-3. 标记旧 joltcache 失效。
-4. 重新 cook 官方测试地图。
+3. 用 `atlas_tool recook --invalid <dir>` 刷新默认命名的 stale collision cache。
+4. 对自定义 `-o` 输出的 cache 逐个重跑原始 `cook_collision <source> -o <cache>`。
 5. 对比 query golden results。
 6. 进入项目地图批量 recook。
 ```
 
 ---
 
-## 17. 实施顺序
+## 17. 当前落地与后续边界
 
-1. 建立 `src/lib/physics` API、handles、query types、layer/mask、Null/Test backend。
-2. 建立 `src/lib/physics_jolt`，只实现 static scene、primitive、mesh、raycast、shape cast、overlap。
-3. 建立 `docs/physics` 和 `atlas_tool` collision validate/cook/dump 命令。
-4. 建立 Unity exporter MVP：primitive、static mesh、layer、material、preview。
-5. 在 CellApp Space 中挂接 PhysicsScene 生命周期。
-6. 实现 CharacterMotor 查询接入。
-7. 实现 SkillQuery、ProjectileQuery、TriggerSystem 接入。
-8. 引入 heightfield、chunk、cache、slow-query diagnostics。
-9. 设计跨 Cell physics chunk 和 border query 策略。
+已落地：
 
-实施顺序可以按项目节奏调整，但架构红线不能降低。
+1. `src/lib/physics` API、query types、layer/mask、Null/Flat/Static/Chunked query。
+2. `src/lib/physics_jolt` static scene、primitive、mesh、raycast、shape cast、overlap。
+3. `atlas_tool` collision validate/cook/dump/recook 命令。
+4. `tools/bin/check_jolt_isolation.{bat,sh}` 防止 Jolt 头泄漏到
+   `src/lib/physics_jolt` 外。
+5. Unity exporter MVP：primitive、static mesh、heightfield、layer、preview。
+6. CellApp Space collision asset 生命周期与 `PhysicsCharacterQuery` / `movement_sim::Step` 查询接入。
+7. Static collision asset chunk / border query 起步。
+
+后续边界：
+
+1. material、volume、大地图 streaming、Jolt cache chunking。
+2. SkillQuery、ProjectileQuery、TriggerSystem。
+3. moving platform、ladder、跨 Cell physics chunk 和 border query 策略。
 
 ---
 
@@ -817,14 +843,11 @@ Jolt 升级流程：
 
 ---
 
-## 19. 需要同步更新的旧文档
+## 19. 文档同步边界
 
-现有 gameplay 文档中部分早期假设需要在物理子系统设计确认后更新：
+`MOVEMENT_SYNC.md` 和 `HIT_VALIDATION.md` 已按当前物理架构同步：移动核心由
+Atlas `CellMovementSystem` / `movement_sim::Step` 控制，底层通过 `PhysicsQuery` / Jolt 查询碰撞事实；
+Combat hitbox 过滤和 lag compensation 仍由服务端确定性逻辑控制。
 
-- `MOVEMENT_SYNC.md` 中“不做完整物理模拟 / 高度图足够”的描述应改为
-  “移动核心由 Atlas CharacterMotor 控制，底层可使用 Atlas PhysicsQuery/Jolt 查询”。
-- `HIT_VALIDATION.md` 中“不做物理 raycast / 自研形状扫描”的描述应改为
-  “命中过滤和 lag compensation 由 Combat 系统控制，候选查询和阻挡可使用 Atlas PhysicsQuery”。
-- `OVERVIEW.md` 中关于 C++ 共享移动仿真的表述需要区分纯规则计算与服务端物理查询依赖。
-
-这些文档不应在物理架构未评审前零散改动，避免下游设计反复。
+后续如果新增 moving platform、ladder、跨 cell 物理或 Jolt cache streaming，
+需要同步更新 roadmap、movement sync、combat hit validation 和 MVP 客户端文档。

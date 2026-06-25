@@ -1,11 +1,12 @@
 # Witness Outbound Channel Cache
 
-**Status:** ✅ Shipped (`3ab62ca`, 2026-04-30).
+**Status:** ✅ Shipped.
 **Subsystem:** `src/server/cellapp/witness.{h,cc}` (SendFn signature,
 `OutboundChannel` hint), `src/server/cellapp/cellapp.cc::AttachWitness`
 (channel resolution + lambda capture),
-`src/server/cellapp/cellapp.{cc,h}::OnOutboundChannelDeath`
-(synchronous invalidation hook).
+`src/server/cellapp/cellapp.h` /
+`src/server/cellapp/cellapp.cc::OnOutboundChannelDeath` (synchronous
+invalidation hook).
 
 ## Design
 

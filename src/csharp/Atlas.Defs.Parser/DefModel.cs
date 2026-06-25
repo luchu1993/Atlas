@@ -131,7 +131,7 @@ internal sealed class PropertyDefModel
     public PropertyScope Scope { get; set; } = PropertyScope.CellPrivate;
     public bool Persistent { get; set; }
 
-    // Bypasses DeltaForwarder byte budget — dropped packet won't strand the client.
+    // Retained in descriptors; current emitters send all property deltas reliably.
     public bool Reliable { get; set; }
 
     // ATLAS_DEF008: `position` is volatile-channel transported; emitters skip.
@@ -193,7 +193,7 @@ internal sealed class ComponentDefModel
 
     public List<PropertyDefModel> Properties { get; } = new();
 
-    // Component RPCs route via entity (slot_idx in rpc_id bits 24-31).
+    // Component RPCs route via entity (slot_idx in rpc_id bits 24-30).
     public List<MethodDefModel> ClientMethods { get; } = new();
     public List<MethodDefModel> CellMethods { get; } = new();
     public List<MethodDefModel> BaseMethods { get; } = new();

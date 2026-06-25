@@ -1,5 +1,9 @@
 # Atlas MVP — UE Client
 
+**Status:** Current UE MVP walkthrough. Login, SpaceData, Avatar view,
+movement input / prediction, movement command playback, and generated RPC are
+wired; remaining visual-layer gaps are listed below.
+
 The Unreal counterpart of `samples/mvp/UnityClient`. Same wire (RUDP + ATDF),
 same MVP feature set (Account login → SelectAvatar → AoI / NPCs), driven by
 the `AtlasUE` plugin (`Plugins/AtlasUE/`) and a thin game module
@@ -13,22 +17,31 @@ Bilingual docs: see `README_cn.md` for 中文.
   whatever engine the project's `UEClient.uproject` points at; set the
   `UE_ROOT` environment variable (or pass `--ue-root`) to the engine root
   (folder containing `Engine/Build/BatchFiles/`).
+- **Windows / Win64** for the complete local UE Editor loop. The `.sh`
+  wrappers exist for script parity, but the sample plugin currently links and
+  loads `ThirdParty/*/Win64` only.
 - **.NET 10 SDK** for the C# server / codegen / DefDump pipeline.
 - **Python 3.10+** (stdlib only) for the build & launch wrappers.
-- **Visual Studio 2022/18 + MSVC C++ toolchain** for the native client SDK.
+- **Visual Studio 2026 or Visual Studio 2022 17.14+ with MSVC C++
+  toolchain** for the native client SDK.
 
 ## One-button local dev loop
 
-```sh
+```text
 # Build cluster + plugin + ATDF, then spawn cluster and open UE Editor.
-python tools/run_mvp_ue.py            # defaults: --config Release
+tools\bin\run_mvp_ue.bat              # Windows / Win64, default --config Release
 ```
 
+`tools/bin/run_mvp_ue.sh` is kept for wrapper parity. Non-Windows UE Editor
+builds require extending `AtlasUE.Build.cs` and `AtlasUE.cpp` beyond the
+current Win64 ThirdParty paths.
+
 The wrapper:
-1. Runs `tools/build_mvp_ue.py` (builds atlas_net_client.dll + ATDF +
+1. Runs `tools/bin/build_mvp_ue.{bat,sh}` (builds atlas_net_client.dll + ATDF +
    verifies digest vs `bin/<config>/Atlas.Mvp.Cell.dll`, then UEClientEditor).
-2. Spawns the MVP cluster in the background (5 server processes on 127.0.0.1
-   under `.tmp/world-stress/<timestamp>/logs/`).
+2. Spawns the MVP cluster in the background on 127.0.0.1 (the standard
+   world-stress stack plus one BaseApp and one CellApp; logs under
+   `.tmp/world-stress/<timestamp>/logs/`).
 3. Opens `UEClient.uproject` in UnrealEditor — hit **PIE** to play.
 4. On UnrealEditor exit (or Ctrl+C) it closes the cluster cleanly.
 
@@ -36,10 +49,13 @@ Skip individual steps with `--no-build`, `--no-cluster`, `--no-ue`.
 
 ## Build only (no launch)
 
-```sh
+```text
 # Native + ATDF + UE plugin recompile; default config = Release.
-python tools/build_mvp_ue.py
+tools\bin\build_mvp_ue.bat             # Windows / Win64
 ```
+
+`tools/bin/build_mvp_ue.sh` can drive the same Python pipeline, but the sample
+plugin does not yet link or load non-Win64 ThirdParty artifacts.
 
 Mismatch guards that fire at this stage:
 
@@ -51,8 +67,10 @@ Mismatch guards that fire at this stage:
   because UE Editor (Development) can't load Debug-CRT DLLs.
 
 If you see the def_mismatch fail, the fix is in the error message:
-`python tools/build.py <preset>` then re-run `build_mvp_ue.py` without
-`--skip-defs`.
+- Windows: `tools\bin\build.bat <preset>`
+- Linux/macOS: `tools/bin/build.sh <preset>`
+
+Then re-run `build_mvp_ue` and do not pass `--skip-defs`.
 
 ## Wiring the UI in Blueprint
 
@@ -92,15 +110,19 @@ auto-retry.
 - No chat input or scrollback (server-side `Avatar.Say()` exists).
 - No equipment / weapon swap UI.
 - No damage floater 3D actor or projectile trail VFX.
-- No bot mode (`tools/run_mvp_unity_bots.py` has no UE equivalent yet).
-- Replay / playback unimplemented on both clients.
+- No follow camera / orbit controls; `APlayerController.ControlRotation` only
+  drives the movement frame.
+- No bot mode (`tools/bin/run_mvp_unity_bots.{bat,sh}` has no UE equivalent yet).
+- Non-Win64 UE plugin linkage/runtime loading is not wired yet.
+- Session recording / playback tooling is not implemented for both clients;
+  MovementCommand playback is implemented in the Unity and UE movement paths.
 
 ## Layout
 
 - `Plugins/AtlasUE/Source/AtlasUE/Public/` — plugin headers (subsystem,
   net client, login / HUD / SpaceData / Avatar view).
 - `Plugins/AtlasUE/Source/AtlasUE/Private/AtlasCore/` — wire decoders
-  (AoI envelope, property decoder, RPC dispatch) shared with Unity.
+  (AoI envelope, property decoder, RPC dispatch) matching the Unity protocol path.
 - `Plugins/AtlasUE/ThirdParty/AtlasNetClient/Win64/` — staged
   `atlas_net_client.dll` + `mimalloc.dll` (Release CRT).
 - `Plugins/AtlasUE/ThirdParty/AtlasEntityDef/` — staged

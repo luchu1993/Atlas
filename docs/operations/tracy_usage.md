@@ -1,5 +1,8 @@
 # Tracy Profiler 使用指南
 
+> 状态: 当前 Tracy 使用手册；工具版本与部署方式以
+> [`profiling.md`](profiling.md) 和当前 CMake 配置为准。
+>
 本文档是"我具体怎么在 Atlas 上用 Tracy"的实操向说明。运维 runbook（构建
 preset、部署、多进程编排）见 [`profiling.md`](profiling.md)；设计依据
 （为什么选 Tracy、为什么是这个形态）见
@@ -18,7 +21,7 @@ Tracy 是采样 + 插桩的混合 profiler。Atlas 把它当**插桩** profiler 
 - **Frame 时间轴**：每个逻辑 tick 一根 bar（`OpenWorldTick`、
   `<process_name>.Tick` 等）。鼠标悬停显示时长，点击放大。
 - **每帧 zone 树**：`Tick → CellApp::OnTickComplete → TickWitnesses →
-  Witness::Update → Witness::Update::Pump → SendEntityUpdate → …`。一直
+  Witness::Update → Witness::Update::PerBandPump → SendEntityUpdate → …`。一直
   向下钻到耗时所在层。
 - **Plot**：`TickWorkMs`、`BytesIn`、`BytesOut` 跟时间轴在同一时间维度
   上画。`TickWorkMs` 上的尖峰直接对应当时打开的那个 zone。
@@ -33,11 +36,11 @@ Tracy 是采样 + 插桩的混合 profiler。Atlas 把它当**插桩** profiler 
 
 Tracy 默认**不**给你的：
 
-- **跨进程视图**：一个 viewer 同一时间只能 attach 一个进程。4 进程
+- **跨进程视图**：一个 viewer 同一时间只能 attach 一个进程。多进程
   集群要在 attach session 之间切换。viewer 的 Discover 对话框会列出全
-  部，重连一键。
+  部启用 profiler 的进程，重连一键。
 - **分布式 trace**：没有"BaseApp 发出的 RPC 到了 CellApp"这种概念，
-  那是 profiler 集成计划 Phase 5b 有意延后的 OpenTelemetry 工作。
+  OTel 分布式 trace 仍在当前 profiling baseline 外。
 - **持续抓取**：默认 Tracy 在内存里全缓冲。长时间会话会累计几百 MB。
   关闭前用 **Save trace** 留底。
 
@@ -47,24 +50,28 @@ Atlas 把 Tracy native 钉在 **0.13.1**（见 `cmake/Dependencies.cmake`）。
 viewer 的 wire protocol 必须**精确匹配**这个 minor 版本 —— 拿一个
 0.12.x 的 viewer 接 0.13.1 的 client，能连上但 zone 会被静默丢弃。
 
-### 推荐方式：让构建顺带拿过来（Windows）
+### 推荐方式：让 profile 构建顺带拿过来（Windows）
 
-把 `ATLAS_BUILD_TRACY_VIEWER` 选项打开，CMake configure 时会从上游
-release 下载 `windows-0.13.1.zip`，把里面的 6 个 exe（`tracy-profiler`
-GUI 加上 `tracy-capture` / `tracy-csvexport` / `tracy-import-chrome` /
-`tracy-import-fuchsia` / `tracy-update` CLI 工具）部署到
-`bin/<build_dir>/tools/`：
+`profile` preset 已默认打开 `ATLAS_BUILD_TRACY_VIEWER`。构建时 CMake 会从
+上游 release 下载 `windows-0.13.1.zip`，把里面的 6 个 exe
+（`tracy-profiler` GUI 加上 `tracy-capture` / `tracy-csvexport` /
+`tracy-import-chrome` / `tracy-import-fuchsia` / `tracy-update` CLI 工具）
+部署到 `bin/profile/`：
 
 ```bash
-cmake --preset profile -DATLAS_BUILD_TRACY_VIEWER=ON
-cmake --build build/profile --config RelWithDebInfo
-# 之后 Tracy 工具集就在：
-# bin/profile/tracy-profiler.exe
+tools\bin\build.bat profile
 ```
 
 下载只在第一次 configure 时发生（约 5 MB），之后 cache 在 build dir 里。
 版本严格匹配：升级 Tracy native 时（`cmake/Dependencies.cmake` 里那
 个 URL）顺手把这里的 release URL 也改了即可。
+
+非 profile preset 也可以通过直接 CMake configure 显式启用：
+
+```bash
+cmake --preset debug -DATLAS_BUILD_TRACY_VIEWER=ON
+cmake --build build/debug --config Debug
+```
 
 ### Linux / macOS
 
@@ -82,7 +89,7 @@ cmake --build build
 
 依赖：装系统包 `libglfw3-dev`、`libfreetype-dev`、`libcapstone-dev`、
 `libcurl4-openssl-dev`，以及 Wayland 或 X11 显示库。具体清单见 Tracy
-仓库里的 `profiler/README.md`。
+源码树里的 `profiler/README.md`。
 
 ### 后路：自己去 GitHub 下
 
@@ -97,9 +104,13 @@ cmake --build build
 下面任一 preset 都可以：
 
 ```bash
-cmake --preset debug              # 日常开发
-cmake --preset profile    # 生产形态
-cmake --build build/<preset> --config Debug
+# Windows
+tools\bin\build.bat debug      # 日常开发
+tools\bin\build.bat profile    # 生产形态，RelWithDebInfo + Tracy 工具
+
+# Linux / macOS / Git Bash
+tools/bin/build.sh debug
+tools/bin/build.sh profile
 ```
 
 `release` preset 故意**关掉** profiler——上线二进制不带 Tracy。
@@ -119,7 +130,7 @@ bin/profile/atlas_cellapp.exe --config server.json
 
 ### 第 3 步 —— 接 viewer
 
-1. 启动 `Tracy.exe`（Linux 上是 `tracy-profiler`）。
+1. 启动 `tracy-profiler.exe`（Linux 上是 `tracy-profiler`）。
 2. 工具栏点 **Connect**。
 3. 地址默认 `127.0.0.1`，保留。端口 `8086` 是 Tracy 默认 listen 端口。
 4. 点 **Connect**。
@@ -175,8 +186,7 @@ Tick
 │   ├─ CellApp::TickWitnesses
 │   │   └─ Witness::Update (× N 个有 witness 的实体)
 │   │       ├─ Witness::Update::Transitions
-│   │       ├─ Witness::Update::PriorityHeap
-│   │       └─ Witness::Update::Pump
+│   │       └─ Witness::Update::PerBandPump
 │   │           └─ Witness::SendEntityUpdate (× N 个 peer)
 │   ├─ CellApp::TickBackupPump
 │   └─ CellApp::TickClientBaselinePump
@@ -192,7 +202,7 @@ plot 跟 frame 同步对齐。Atlas 输出：
 | Plot | 来源 | 典型读法 |
 |---|---|---|
 | `TickWorkMs` | 每 tick 工作时间 | 应当远低于 `1000/update_hertz`（30 Hz 是 33 ms） |
-| `BytesOut` | 每包出方向 | 尖峰对应 `Witness::Update::Pump` zone |
+| `BytesOut` | 每包出方向 | 尖峰对应 `Witness::Update::PerBandPump` zone |
 | `BytesIn` | 每包入方向 | 尖峰对应 `Channel::Dispatch` zone |
 
 悬停任一点读当时的值。**Edit plots** 菜单可以改颜色、改格式（比如显示
@@ -202,7 +212,7 @@ plot 跟 frame 同步对齐。Atlas 输出：
 
 `Ctrl-F` 打开 zone 搜索。输入任意 zone 名过滤列表。**Find Zone**（独立
 对话框）显示一个 zone 在整个 trace 里的时长直方图——找异常值很方便
-（`Witness::Update::Pump` 大多 0.5 ms，但有 8 ms 的尾巴？点尾巴上的
+（`Witness::Update::PerBandPump` 大多 0.5 ms，但有 8 ms 的尾巴？点尾巴上的
 那点，时间轴跳到那一刻）。
 
 ## Memory tab
@@ -311,5 +321,5 @@ viewer 的 **File → Save** 把 trace 写到 `.tracy` 文件。之后用
 - Atlas profiler 设计：[`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md)
 - Atlas 宏面：[`src/lib/foundation/profiler.h`](../../src/lib/foundation/profiler.h)
 - Atlas 托管 facade：[`src/csharp/Atlas.Shared/Diagnostics/Profiler.cs`](../../src/csharp/Atlas.Shared/Diagnostics/Profiler.cs)
-- Tracy 0.13 wire protocol：只有源码——读
-  `build/<preset>/_deps/tracy-src/server/TracyWorker.cpp` 是权威版本。
+- Tracy 0.13 wire protocol：只有源码——FetchContent 展开的 Tracy
+  `server/TracyWorker.cpp` 是权威版本。

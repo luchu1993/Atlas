@@ -4,7 +4,8 @@
 >
 > **读者**：工程（必读）、网络工程师（必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：✅ Real / Ghost / offload 主线已由 Phase 10 / 11 落地；战斗命中
+> 相关 Ghost 语义仍是目标设计。
 >
 > **前置文档**：`OVERVIEW.md`、`CELL_ARCHITECTURE.md`、`HIT_VALIDATION.md`、`MOVEMENT_SYNC.md`
 >

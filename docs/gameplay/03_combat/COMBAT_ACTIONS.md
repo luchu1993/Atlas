@@ -4,7 +4,7 @@
 >
 > **读者**：工程（必读）、战斗策划（§5、§9 必读，理解能用什么"积木"配技能/buff）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，完整 Combat Action runtime 尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`00_foundations/DETERMINISM_CONTRACT.md`
 >

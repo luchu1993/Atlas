@@ -1,5 +1,8 @@
 # 属性同步
 
+> **状态**：✅ 当前实现。Property delta / baseline / volatile 位置流已落地；
+> `.def reliable` 只保留在描述符中，当前 property delta 统一走 reliable 通道。
+>
 > 关联：[component_design.md](./component_design.md) · [container_property_sync_design.md](./container_property_sync_design.md) · [BigWorld EventHistory 参考](../bigworld_ref/BIGWORLD_EVENT_HISTORY_REFERENCE.md) · [phase10_cellapp.md](../roadmap/phase10_cellapp.md)
 
 Atlas 用 **DirtyBit + audience 拆分** 做属性同步：C# 属性 setter 标 `_dirtyFlags` → CellApp 帧末 `BuildAndConsumeReplicationFrame` 写两份 audience-filtered delta（owner / other） + 两份 audience-filtered snapshot → 通过两条物理通道下发到 BaseApp 中继到 client。这套设计明确**不**是 BigWorld 的 EventHistory（per-observer 游标 + 优先级队列），原因与权衡见 §6。
@@ -13,13 +16,19 @@ Atlas 用 **DirtyBit + audience 拆分** 做属性同步：C# 属性 setter 标 
 | `kEntityEnter` (1) | reliable | `kReplicatedReliableDeltaFromCell` (2017) | `0xF003` | AoI peer 进入 + 初始 other-snapshot |
 | `kEntityLeave` (2) | reliable | 同上 | `0xF003` | AoI peer 离开 |
 | `kEntityPropertyUpdate` (4) | reliable | 同上 | `0xF003` | 属性 delta（含 `event_seq` 前缀） |
-| `kEntityPositionUpdate` (3) | **unreliable** | `kReplicatedDeltaFromCell` (2015) | `0xF001` | 位置/朝向（30 B 定长） |
+| `kEntityPositionUpdate` (3) | **unreliable** | `kReplicatedDeltaFromCell` (2015) | `0xF001` | 单实体位置/朝向（38 B envelope） |
+| `kEntityPositionBatch` (8) | **unreliable** | BaseApp 合批生成 | `0xF001` | 多实体 latest-wins 位置批 |
 | baseline | reliable | `kReplicatedBaselineFromCell` (2019) | `0xF002` | owner-snapshot 周期重放 |
 | backup | reliable | `kBackupCellEntity` (2018) | — | cell→base opaque blob，用于 DB / offload / reviver |
 
-`reliable` / `unreliable` 在 cellapp 侧由 `Witness` 的两个 `SendFn` 区分（`witness.h:38`），由 `CellApp::AttachWitness` 注入。Cell→Base 之后所有 reliable envelope 直接转 `0xF003`；unreliable envelope 进 `DeltaForwarder`（见 §3）。
+`reliable` / `unreliable` 在 cellapp 侧由 `Witness` 的两个 `SendFn` 区分，
+由 `CellApp::AttachWitness` 注入。Cell→Base 之后所有 reliable envelope 直接转
+`0xF003`；unreliable envelope 进 `DeltaForwarder`（见 §3）。
 
-注意：`.def` 上的 `reliable="true"` 标志被 generator 写进 `DefEntityTypeRegistry` 的二进制描述符（`TypeRegistryEmitter.cs:132`），但**当前 C# 发射器并不据此分流通道**。所有 property delta 都走 reliable，volatile 通道仅承担 `kEntityPositionUpdate`。`reliable` 标志保留是为支撑后续 per-property 重要性区分。
+注意：`.def` 上的 `reliable="true"` 标志被 generator 写进
+`DefEntityTypeRegistry` 的二进制描述符，但**当前 C# 发射器并不据此分流通道**。
+所有 property delta 都走 reliable，volatile 通道仅承担
+`kEntityPositionUpdate` / `kEntityPositionBatch`。`reliable` 标志保留是为支撑后续 per-property 重要性区分。
 
 ---
 
@@ -64,7 +73,7 @@ avatar.Hp = 60   ──→  if (_hp != value) {                  ──→  if (
 [u8 sectionMask]                       bit0 = scalar dirty, bit1 = container dirty, bit2 = component dirty
 [if bit0] [u8/u16/u32/u64 scalarFlags] [scalar values...]
 [if bit1] [u8/u16/u32/u64 containerFlags] [container op-log...]
-[if bit2] [u8 activeSlots] [for each slot: u8 slotIdx + per-component delta...]
+[if bit2] [PackedUInt32 count] [for each slot: u8 slotIdx + per-component delta...]
 ```
 
 flags 整型宽度按属性数量自动选型（≤8→byte，≤16→ushort，≤32→uint，≤64→ulong）。客户端 `ApplyReplicatedDelta` 反向解码（`DeltaSyncEmitter.EmitClientApplyReplicatedDelta`）。
@@ -73,7 +82,8 @@ flags 整型宽度按属性数量自动选型（≤8→byte，≤16→ushort，�
 
 ## 3. DeltaForwarder：unreliable volatile 通道的 latest-wins 队列
 
-`src/server/baseapp/delta_forwarder.{h,cc}` —— per-client 队列，承载 `kEntityPositionUpdate` 唯一一类 envelope。
+`src/server/baseapp/delta_forwarder.{h,cc}` —— per-client 队列，承载 cellapp 发来的
+`kEntityPositionUpdate`，flush 时可把多条位置 delta 合批为 `kEntityPositionBatch`。
 
 ```
 PendingDelta { entity_id, delta bytes, deferred_ticks, priority }
@@ -82,9 +92,9 @@ PendingDelta { entity_id, delta bytes, deferred_ticks, priority }
 - 同一 entity 后到的 delta **整条替换**前一条（latest-wins）。位置流的语义允许这样做。
 - `Flush(channel, kDeltaBudgetPerTick = 16 KB)` 按 priority desc / deferred_ticks desc 排序后取前 N 条（`baseapp.h`）。
 - `kMaxDeferredTicks = 120` 兜底强发，避免低优先级 entity 永远饿死。
-- watcher：`baseapp/delta_bytes_sent_total` / `baseapp/delta_bytes_deferred_total` / `baseapp/delta_queue_depth`（`baseapp.cc:382-395`）。
+- watcher：`baseapp/delta_bytes_sent_total` / `baseapp/delta_bytes_deferred_total` / `baseapp/delta_queue_depth`。
 
-不变量：**累积型状态**（HP、库存、event_seq）**禁**走 DeltaForwarder —— latest-wins 会吞中间帧。Cumulative 一律走 reliable path（`OnReplicatedReliableDeltaFromCell` 直发，`baseapp.cc:878`）。
+不变量：**累积型状态**（HP、库存、event_seq）**禁**走 DeltaForwarder —— latest-wins 会吞中间帧。Cumulative 一律走 reliable path（`BaseApp::OnReplicatedReliableDeltaFromCell` 直发）。
 
 ---
 
@@ -146,4 +156,3 @@ EventHistory（事件队列 + per-observer 游标 + LOD 补发 + 优先级队列
 | `baseapp/delta_queue_depth` | DeltaForwarder 队列深度 |
 | `baseapp/reliable_delta_bytes_sent_total` | reliable channel 已发字节 |
 | `baseapp/client_event_seq_gaps_total` | 客户端 reliable delta 跳号累计 |
-

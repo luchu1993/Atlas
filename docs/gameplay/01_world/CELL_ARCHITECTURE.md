@@ -4,11 +4,12 @@
 >
 > **读者**：工程（必读）、网络工程师（§5、§6 必读）、运维（§7、§9 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：✅ 引擎主线已由 Phase 10 / 11 落地。本文保留 gameplay
+> 视角的 Cell、负载、迁移目标设计；具体工程状态以 roadmap Phase 10 / 11 为准。
 >
 > **前置文档**：`OVERVIEW.md`、`DETERMINISM_CONTRACT.md`、`MOVEMENT_SYNC.md`
 >
-> **下游文档**：`GHOST_ENTITY.md`（跨 cell 实体）、`DENSITY_ADAPTIVE_NETWORKING.md`（订阅策略）、`PERSISTENCE_DESIGN.md`（实体持久化，待写）
+> **下游文档**：`GHOST_ENTITY.md`（跨 cell 实体）、`DENSITY_ADAPTIVE_NETWORKING.md`（订阅策略）
 
 ---
 
@@ -179,7 +180,7 @@ CellApp 崩溃：
 - 玩家短暂卡顿（5–10 秒），但不掉线
 - 实体持久化数据已存 BaseApp / DBApp，不丢失
 
-详见 `09_tools/LOAD_TESTING.md`（待写）的故障演练。
+集群压测与故障演练见 `../../stress_test/WORLD_STRESS_TESTING.md`。
 
 ---
 
@@ -703,7 +704,7 @@ P4 阶段必须做大规模压测：
   - `GHOST_ENTITY.md`（跨 cell 实体感知）
   - `DENSITY_ADAPTIVE_NETWORKING.md`（订阅频率）
   - `HIT_VALIDATION.md §9`（跨 cell 命中判定）
-  - `PERSISTENCE_DESIGN.md`（实体持久化，待写）
+  - `../../roadmap/phase07_dbapp.md`、`../../roadmap/phase15_dbappmgr.md`（持久化 / 分片）
 
 ---
 

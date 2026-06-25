@@ -4,10 +4,11 @@
 >
 > **读者**：工程（必读）、战斗策划（§8 技能位移必读）、客户端开发（Unity 侧，§11 必读）。
 >
-> **状态**：14.1-14.3 主体实现已落地：Unity / UE owner 输入帧、本地预测、
+> **状态**：14.1-14.4 主体实现已落地：Unity / UE owner 输入帧、本地预测、
 > CellApp 权威 step、ack replay、MovementCommand fanout、PhysicsQuery / Jolt
 > collision backend、Unity collision export / cache，以及 position history /
-> lag-compensation 原型。14.4 chunk / border query 和 stress / parity 验收基线待补。
+> lag-compensation 原型、Static collision asset chunk / border query 和 stress /
+> parity 验收基线。
 >
 > **前置文档**：`OVERVIEW.md`、`00_foundations/DETERMINISM_CONTRACT.md`、`03_combat/SKILL_SYSTEM.md`
 >
@@ -26,7 +27,7 @@
 | 问题 | 主要诉求 | 权威方 | 主要策略 |
 |---|---|---|---|
 | **A. 主控本地预测** | 0 延迟手感 | 客户端先行，服务端权威 | 输入帧 + 预测 + 和解 |
-| **B. 远端实体插值** | 平滑视觉 | 服务端快照 | Hermite 插值 + 自适应外推 |
+| **B. 远端实体插值** | 平滑视觉 | 服务端快照 | 当前 `AvatarFilter` ring + 线性插值 / 短外推；Hermite 后置 |
 | **C. 技能位移** | 端同一致的曲线 | 服务端 | 构建期提取曲线，端同执行 |
 
 **本文按这三条线各自展开**；它们共享底层仿真库但表现层策略完全不同。
@@ -46,7 +47,9 @@
 
 - **不追求 CS:GO 级公平**（0 ping 差异）——MMO 语境下不可能，也不必要
 - **不做客户端权威位置**——玩家发位置 = 速度挂/瞬移挂失控
-- **不做完整物理模拟**（Havok/PhysX）——2.5D 胶囊 + 高度图足够（见 OVERVIEW §9.1）
+- **不把角色移动交给 Havok/PhysX/Jolt rigidbody 或 CharacterController**——移动核心
+  由 Atlas `CellMovementSystem` / `movement_sim::Step` 控制，底层可通过
+  `PhysicsQuery` / Jolt 查询碰撞事实
 - **不做 Root Motion 运行时**——非确定性，构建期提曲线
 
 ---
@@ -60,7 +63,7 @@
 │   ┌────────────────┐   ┌──────────────┐   ┌──────────────────┐  │
 │   │Input 采集       │   │Predictor     │   │Remote            │  │
 │   │60Hz            │──►│ (C++)        │   │Interpolator      │  │
-│   │                │   │ local loop   │   │ (Hermite)        │  │
+│   │                │   │ local loop   │   │ (AvatarFilter)   │  │
 │   └────────────────┘   └──────┬───────┘   └────────┬─────────┘  │
 │                               │                    │            │
 │                    ┌──────────▼─────────┐          │            │
@@ -71,7 +74,7 @@
 └───────────────────────────┬──────────────────────────────────────┘
                             │
                   Channel 1: UDP unreliable 位置快照 (20/30Hz)
-                  Channel 2: UDP reliable 输入帧 + 事件
+                  Channel 2: UDP unreliable 输入帧；reliable 事件另走独立通道
                             │
 ┌───────────────────────────▼──────────────────────────────────────┐
 │                        Server (Atlas)                            │
@@ -91,8 +94,8 @@
 ```
 
 **核心约束**：
-- `Movement Simulator` 的核心函数 `apply_input()` 是**纯函数**，端共享 C++ 代码
-- 服务端和客户端同 `apply_input()` 保证和解机制有效
+- `Movement Simulator` 的核心函数 `movement_sim::Step` 是端共享 C++ 代码
+- 服务端和客户端同 `movement_sim::Step` 保证和解机制有效
 - Unity 只通过 P/Invoke 调用 native plugin，不在 C# 重实现仿真逻辑
 
 ---
@@ -106,7 +109,7 @@
 - 速度挂、瞬移挂几乎无法根治
 - MMO 经济 + PvP 不能容忍此漏洞
 
-客户端发**输入帧**，服务端用同一 `apply_input()` 推导位置——服务端永远是位置的唯一真源。
+客户端发**输入帧**，服务端用同一 `movement_sim::Step` 推导位置——服务端永远是位置的唯一真源。
 
 ### 3.2 InputFrame 数据结构
 
@@ -195,10 +198,13 @@ struct MovementConfig {
   float capsule_radius_m;
   float capsule_half_height_m;
   float ground_snap_distance_m;
+  float max_walkable_slope_degrees;
+  float step_height_m;
+  float max_depenetration_m;
 };
 ```
 
-当前 14.1 使用内置默认配置；后续再接数据表覆盖和技能状态约束。
+当前使用内置默认配置；后续再接数据表覆盖和技能状态约束。
 
 ### 4.3 `CharacterQuery`（查询接口）
 
@@ -224,7 +230,7 @@ class CharacterQuery {
 
 ### 4.4 确定性契约遵从
 
-`ApplyInput` 严格遵循 `DETERMINISM_CONTRACT.md`：
+`movement_sim::Step` 严格遵循 `DETERMINISM_CONTRACT.md`：
 - 所有浮点用 `/fp:strict`，不用 `-ffast-math`
 - 三角函数走 `Atlas.CombatCore.Math::Sin/Cos`（软件实现）
 - 整数运算不依赖 overflow 未定义行为
@@ -238,7 +244,7 @@ class CharacterQuery {
 
 ```
 1. 采集输入 → InputFrame{seq=N}
-2. 立即本地仿真：state_N = apply_input(state_{N-1}, input_N, dt)
+2. 立即本地仿真：state_N = movement_sim::Step(state_{N-1}, input_N, config, query, tick)
 3. 存入 ring buffer: history[N] = {input_N, state_N, predicted_server_tick}
 4. 发送 InputFrame（含冗余）
 5. 写入 Unity transform（渲染当前 state）
@@ -273,7 +279,7 @@ class PredictionHistory {
 - 每 3 tick（100-150ms）发一次"状态回馈"
 - Ack 内容：
   ```cpp
-  struct StateAck {
+  struct MovementStateAck {
     uint32_t acked_input_seq;      // 已处理的最高输入 seq
     uint32_t server_tick;
     MovementState authoritative_state;
@@ -282,10 +288,10 @@ class PredictionHistory {
 
 ### 5.4 和解（Reconciliation）
 
-客户端收到 `StateAck` 后：
+客户端收到 `MovementStateAck` 后：
 
 ```cpp
-void Predictor::OnStateAck(const StateAck& ack) {
+void Predictor::OnMovementStateAck(const MovementStateAck& ack) {
   auto* entry = history_.FindBySeq(ack.acked_input_seq);
   if (!entry) return;  // 太旧，已被 truncate
 
@@ -369,22 +375,34 @@ float3 Predictor::GetRenderPosition() {
 
 ## 6. 远端实体插值
 
-### 6.1 策略：延迟渲染 + Cubic Hermite
+### 6.1 当前策略：延迟渲染 + AvatarFilter
 
 **不追求"实时"**——远端实体**渲染于过去 100-120ms**，换取：
 - 接收到下一快照时有足够数据插值
 - 对网络抖动天然容忍
 - 符合人眼视觉舒适区
 
-渲染时间 = `now - interp_delay`，其中：
-
-```cpp
-interp_delay_ms = clamp(100.0f, 2.0f * jitter_stddev_ms + 50.0f, 250.0f);
-```
-
-稳定网络 80ms，抖动网络自动扩大到 200ms。
+当前 C# / UE 客户端共享 `AvatarFilter` 语义：8 样本 ring，按
+`LatencyFrames * ServerInterval` 取目标延迟，用 wall-clock 与 server-time 的
+EMA offset 映射到服务端时间域。`ClientEntity.TryGetInterpolated` 从 filter 读出
+渲染位置；`MovementCommandStart` / `MovementCommandEnd` 会临时覆盖普通插值。
 
 ### 6.2 快照数据
+
+当前 wire 仍是显式 entity id + 全精度 pose 的 envelope，服务端写入：
+
+```cpp
+struct CurrentPositionSample {
+  uint32_t entity_id;
+  float3 position;
+  float3 direction;
+  bool on_ground;
+  double server_time;
+};
+```
+
+客户端把 `server_time / position / direction / on_ground` 喂给 `AvatarFilter`。
+以下压缩格式是后续目标，尚未落地：
 
 ```cpp
 struct EntitySnapshot {
@@ -399,63 +417,51 @@ struct EntitySnapshot {
 
 见 `ENTITY_SNAPSHOT.md` 具体压缩策略。
 
-### 6.3 Cubic Hermite 插值
+### 6.3 当前插值与 Hermite 后置
 
-已知两个快照 `S0 (t=t0)` 和 `S1 (t=t1)`，渲染 `t ∈ [t0, t1]`：
+当前 `AvatarFilter` 在两个样本之间使用线性插值：
 
 ```cpp
-float3 HermiteInterp(float t_normalized,  // [0, 1]
-                     float3 p0, float3 v0,
-                     float3 p1, float3 v1,
-                     float dt_ms) {
-  float t = t_normalized;
+float t = (target_time - a.server_time) / (b.server_time - a.server_time);
+pos = Lerp(a.position, b.position, t);
+dir = Lerp(a.direction, b.direction, t);
+on_ground = b.on_ground;
+```
+
+Hermite 需要 velocity 或相邻样本导出的稳定切线；当前远端位置 envelope 不传
+velocity，客户端也没有 Hermite evaluator。等 IDAlias / 位置压缩 / velocity
+字段进入 wire contract 后，再升级为：
+
+```cpp
+float3 HermiteInterp(float t, float3 p0, float3 v0, float3 p1, float3 v1,
+                     float dt_s) {
   float h00 = 2*t*t*t - 3*t*t + 1;
   float h10 = t*t*t - 2*t*t + t;
   float h01 = -2*t*t*t + 3*t*t;
   float h11 = t*t*t - t*t;
-
-  float dt_s = dt_ms / 1000.0f;
-  return h00 * p0 + h10 * dt_s * v0
-       + h01 * p1 + h11 * dt_s * v1;
+  return h00 * p0 + h10 * dt_s * v0 + h01 * p1 + h11 * dt_s * v1;
 }
 ```
 
-**比线性 lerp 优越处**：
+Hermite 目标收益：
 - 拐弯、急停、冲刺起步视觉更自然
 - 利用 velocity 信息，不只是位置
 
-**代价**：
-- 新快照到达时切线可能不连续（`v0` in [t0,t1] 与下一段 `v0'` in [t1, t2] 不同）
-- 解决方法：用 Catmull-Rom 变体——用前一个 `p0` 外推为"虚拟前点"：
-  ```
-  v0_cat = (p1 - p_prev) / (2 * dt_prev)
-  ```
+### 6.4 当前短外推（Extrapolation）
 
-### 6.4 外推（Extrapolation）
-
-下一个快照迟到时：
+当目标时间晚于最新样本时，当前 `AvatarFilter` 只用最近两个样本导出短期速度，
+并且最多外推 `MaxExtrapolation = 0.05s`；超过上限则保持最新位置：
 
 ```cpp
-float3 Extrapolate(const EntitySnapshot& latest,
-                   float extrap_ms) {
-  if (extrap_ms < 100) {
-    // 线性外推
-    return latest.position + latest.velocity * (extrap_ms / 1000.0f);
-  } else if (extrap_ms < 300) {
-    // 减速外推（速度指数衰减）
-    float decay = exp(-(extrap_ms - 100) / 150.0f);
-    float effective_ms = 100.0f + 150.0f * (1.0f - decay);
-    return latest.position + latest.velocity * (effective_ms / 1000.0f);
-  } else {
-    // 冻结
-    return last_extrapolated_position_;
-  }
-}
+if (ahead <= 0 || sample_count < 2) return latest.position;
+if (ahead > max_extrapolation) return latest.position;
+float scale = ahead / (latest.server_time - previous.server_time);
+return latest.position + (latest.position - previous.position) * scale;
 ```
 
-**300ms 外推仍无新快照**：通常意味着该实体离开 AoI 或严重丢包——停止外推，等新订阅建立。
+更长的减速外推属于后续 smoother 目标，不是当前实现。
 
-### 6.5 位置量化
+### 6.5 目标位置量化（未落地）
 
 **放弃 BigWorld 的浮点指数-尾数格式**（SIMD 不友好、跨平台不稳），用**固定点整数 delta**：
 
@@ -470,7 +476,7 @@ struct PackedPos {
 - Reference point 周期性刷新（每 2 秒或明显偏移时）
 - 远距离（>100m）用全量位置：12 字节
 
-### 6.6 Jitter Buffer 自适应
+### 6.6 目标 Jitter Buffer 自适应（未落地）
 
 ```cpp
 class JitterEstimator {
@@ -784,7 +790,7 @@ void OnRemoteCommandStart(const MovementCommandStart& cmd) {
 
 ### 10.1 基础校验
 
-每次 `ApplyInput` 后检查：
+每次 `movement_sim::Step` 后检查：
 
 ```cpp
 bool ValidateMove(const MovementState& prev, const MovementState& next,
@@ -855,112 +861,84 @@ public:
 
 ## 11. Unity 客户端集成
 
-### 11.1 `AtlasMovementController : MonoBehaviour`
+### 11.1 当前 MVP 路径
 
-```csharp
-public sealed class AtlasMovementController : MonoBehaviour {
-  // Native plugin handle
-  IntPtr _nativeHandle;
+当前 Unity MVP 不创建单独的 native predictor handle。`PlayerInputController`
+持有 `UnityOwnerMovementPredictor`，后者包装 `Atlas.Client.OwnerMovementPredictor`
+并把每次预测 step 委托给 `AtlasNetworkManager.PredictMovement`。
 
-  void Awake() {
-    _nativeHandle = NativePlugin.CreateMovementPredictor(entityId_);
-  }
+每帧流程：
 
-  void Update() {
-    // Input 采集（Unity Input System）
-    InputFrame frame = InputCollector.Sample();
-
-    // 传给 native plugin 做预测
-    NativePlugin.PushInput(_nativeHandle, ref frame);
-
-    // 读取渲染位置并应用
-    NativePlugin.GetRenderTransform(_nativeHandle, out var pos, out var yaw);
-    transform.position = pos;
-    transform.rotation = Quaternion.Euler(0, yaw, 0);
-  }
-
-  void OnStateAck(StateAck ack) {
-    NativePlugin.ApplyStateAck(_nativeHandle, ref ack);
-  }
-
-  void OnCommandStart(MovementCommandStart cmd) {
-    NativePlugin.ApplyCommand(_nativeHandle, ref cmd);
-  }
-
-  void OnDestroy() {
-    NativePlugin.DestroyMovementPredictor(_nativeHandle);
-  }
-}
-```
+1. `PlayerInputController.Tick` 先调用 `TickVisualOffset(dt)` 推进视觉纠正衰减。
+2. 以 30 Hz 采样 Unity 输入，构造 `AtlasMovementInputFrame`。
+3. `OwnerMovementPredictor.PushInput` 立即调用
+   `AtlasNetMovementPredictStep`，native 侧进入 `movement_sim::Step`。
+4. `CopyRecentFrames` 拿最近输入帧，`AtlasNetworkManager.SendMovementInput`
+   通过 `atlas_net_client` 发给 BaseApp / CellApp。
+5. `MovementStateAck`、`MovementCommandStart`、`MovementCommandEnd` 从
+   `ClientSession` 回调进入 predictor，完成 ack replay、技能位移覆盖和视觉纠正。
+6. 主线程把 `RenderPosition` / `RenderDirection` 写回 Unity `Transform`。
 
 ### 11.2 关键纪律
 
-- **禁用** `Rigidbody` / `CharacterController`
-- **禁用** Unity `Physics.*`（用自研碰撞）
+- **禁用** `Rigidbody` / `CharacterController` 作为权威移动来源
+- **禁用** Unity `Physics.*` 作为权威事实；客户端物理只可做视觉预表现
 - **禁用** Root Motion（动画用占位，位移由曲线）
-- **禁止**在 `Update` 里调用 `NativePlugin.*` 超过 2 次（每次 P/Invoke ~20ns，高频调用浪费）
+- 热路径只通过 `atlas_net_client.AtlasNetMovementPredictStep` 进入 native
+  predictor，不额外引入 per-entity native handle
 - 渲染在 `LateUpdate` 统一写 transform，避免中间帧抖动
 
-### 11.3 远端实体 `AtlasRemoteEntity : MonoBehaviour`
+### 11.3 远端实体
 
-```csharp
-public sealed class AtlasRemoteEntity : MonoBehaviour {
-  IntPtr _interpHandle;
-
-  public void OnSnapshot(EntitySnapshot snap) {
-    NativePlugin.PushRemoteSnapshot(_interpHandle, ref snap);
-  }
-
-  void LateUpdate() {
-    NativePlugin.GetInterpolatedTransform(_interpHandle,
-                                           GetRenderTimeMs(),
-                                           out var pos, out var yaw);
-    transform.position = pos;
-    transform.rotation = Quaternion.Euler(0, yaw, 0);
-  }
-}
-```
+远端实体不走 owner predictor。`Atlas.Client.ClientEntity` 持有
+`AvatarFilter`，MVP 的 `EntityView` / `AvatarView` / `NpcView` 在 Unity 主线程
+读取 filtered transform 并写 `Transform`。技能期间，`MovementCommandStart` /
+`MovementCommandEnd` 会覆盖 filter 输出，避免 dash / knockback 被普通插值抹平。
 
 ### 11.4 线程模型
 
-- **主线程**：`Update` / `LateUpdate`，调用 native plugin 读状态 → 写 transform
-- **网络线程**：接收 UDP 包，反序列化为事件，push 进 `ConcurrentQueue`
-- **主线程 `Update` 开头**：从 queue 取出事件，同步 apply 到 native plugin
+- **主线程**：Unity `Update` / Atlas frame pump，采样输入、推进 predictor、写
+  `Transform`
+- **native client**：`atlas_net_client` 负责 RUDP、登录、认证、收包解码和
+  `on_deliver` 分发
+- **托管层**：`ClientSession` / `ClientEntityManager` 应用 ack、AoI、delta、
+  SpaceData 和 RPC 事件
 
 **禁止**：网络线程直接改 transform 或 GameObject 状态（Unity 要求主线程）。
 
 ### 11.5 GC 优化
 
-Hot path 禁止 `new`：
-- InputFrame 用 `struct`，栈分配
-- 事件批处理用 `NativeArray<T>` 池化
-- 每帧调用数 <10，无 GC 压力
+Hot path 禁止不必要的托管分配：
+- `AtlasMovementInputFrame` / movement state 均为 struct
+- owner predictor 复用 history ring 和最近帧数组
+- 远端实体复用 `AvatarFilter` ring
+- Unity 视图层只读当前状态，不在网络回调里分配 GameObject
 
 ---
 
-## 12. Native Plugin 接口（C API）
+## 12. Native Client C API
 
-### 12.1 导出函数（C 形式便于 P/Invoke）
+### 12.1 当前移动相关导出
 
 ```cpp
 extern "C" {
 
-// Predictor（主控）
-void* atlas_predictor_create(uint64_t entity_id, const MovementConfig* cfg);
-void  atlas_predictor_destroy(void* handle);
-void  atlas_predictor_push_input(void* handle, const InputFrame* input);
-void  atlas_predictor_apply_ack(void* handle, const StateAck* ack);
-void  atlas_predictor_apply_command(void* handle, const MovementCommandStart* cmd);
-void  atlas_predictor_get_render_transform(void* handle,
-                                            float3* pos_out, uint16_t* yaw_out);
+int32_t AtlasNetSendMovementInput(AtlasNetContext* ctx,
+                                  uint32_t target_entity_id,
+                                  const AtlasMovementInputFrame* frames,
+                                  int32_t frame_count);
 
-// Remote Interpolator
-void* atlas_interp_create(uint64_t entity_id);
-void  atlas_interp_destroy(void* handle);
-void  atlas_interp_push_snapshot(void* handle, const EntitySnapshot* snap);
-void  atlas_interp_apply_command(void* handle, const MovementCommandStart* cmd);
-void  atlas_interp_get_transform(void* handle, uint32_t render_time_ms,
-                                  float3* pos_out, uint16_t* yaw_out);
+int32_t AtlasNetSendMovementCorrectionReport(AtlasNetContext* ctx,
+                                             uint32_t target_entity_id,
+                                             uint32_t acked_input_seq,
+                                             uint32_t server_tick,
+                                             float distance_m,
+                                             uint16_t correction_flags);
+
+int32_t AtlasNetMovementPredictStep(const AtlasMovementStateFrame* previous,
+                                    const AtlasMovementInputFrame* input,
+                                    uint32_t server_tick,
+                                    AtlasMovementStateFrame* out_state);
 
 }
 ```
@@ -968,27 +946,29 @@ void  atlas_interp_get_transform(void* handle, uint32_t render_time_ms,
 ### 12.2 C# P/Invoke 封装
 
 ```csharp
-internal static class NativePlugin {
-  const string DLL = "libatlas_movement";
+internal static unsafe class AtlasNetNative {
+  const string LibName = "atlas_net_client";
 
-  [DllImport(DLL, EntryPoint = "atlas_predictor_create")]
-  public static extern IntPtr CreateMovementPredictor(ulong entityId);
-
-  [DllImport(DLL, EntryPoint = "atlas_predictor_push_input")]
-  public static extern void PushInput(IntPtr handle, ref InputFrame input);
-
-  // ... 其余方法
+  [DllImport(LibName)]
+  public static extern int AtlasNetMovementPredictStep(
+      AtlasMovementStateFrame* previous,
+      AtlasMovementInputFrame* input,
+      uint serverTick,
+      AtlasMovementStateFrame* outState);
 }
 ```
 
 ### 12.3 构建产物
 
-根据 `project_atlas_scope.md`（桌面限定）：
-- Windows: `libatlas_movement.dll`
-- Linux Server: `libatlas_movement.so`
-- macOS (仅 Unity Editor): `libatlas_movement.dylib`
+移动预测不再有独立 `libatlas_movement` 产物；它随 `atlas_net_client` 发布。
+Unity staging 由 `tools/bin/setup_unity_client.{bat,sh}` /
+`tools/bin/setup_mvp_unity.{bat,sh}` 处理：
 
-**不需要** iOS / Android 构建。
+- Windows: `atlas_net_client.dll`
+- Linux: `libatlas_net_client.so`
+- macOS: `atlas_net_client.bundle`
+- Android: `libatlas_net_client.so`
+- iOS: `libatlas_net_client_static.a`
 
 ---
 
@@ -998,7 +978,7 @@ internal static class NativePlugin {
 
 | 操作 | 预算（单实体单 tick） |
 |---|---|
-| `ApplyInput` | ≤ 10 μs |
+| `movement_sim::Step` | ≤ 10 μs |
 | `ValidateMove` + jitter debt | ≤ 2 μs |
 | 历史缓冲写入 | ≤ 1 μs |
 | 广播准备 | ≤ 5 μs |
@@ -1011,7 +991,7 @@ internal static class NativePlugin {
 | 操作 | 预算（每帧） |
 |---|---|
 | Input 采集 + push | ≤ 50 μs |
-| `apply_input` 本地预测 | ≤ 15 μs |
+| `movement_sim::Step` 本地预测 | ≤ 15 μs |
 | `GetRenderTransform` | ≤ 5 μs |
 | 远端实体插值（50 个） | ≤ 200 μs |
 | **总计** | **≤ 300 μs** = 0.3 ms / 16.67 ms 帧 = 1.8% |
@@ -1021,7 +1001,7 @@ internal static class NativePlugin {
 | 方向 | 内容 | 带宽 |
 |---|---|---|
 | 上行 | InputFrame 冗余 | 3.24 KB/s |
-| 下行 | StateAck | ~0.5 KB/s |
+| 下行 | MovementStateAck | ~0.5 KB/s |
 | 下行 | 远端实体快照（50 实体 × 20Hz） | ~8-12 KB/s |
 | 下行 | MovementCommand 事件 | ~0.5 KB/s |
 
@@ -1037,7 +1017,9 @@ internal static class NativePlugin {
 - **不可共享**：服务端没有 Unity 运行时
 - **黑盒**：内部逻辑不可控，难以适配 MMO 场景（如跳过某些碰撞）
 
-Atlas 自研胶囊 + 高度图碰撞，代码约 500 行（见 `src/lib/movement/capsule_collide.cc`），完全可控。
+Atlas 自研 `movement_sim::Step` 状态机，碰撞事实通过 `PhysicsQuery` backend
+提供；Static / Jolt 后端可以替换，gameplay 和客户端预测不直接依赖 Unity
+`CharacterController` 或 Jolt 类型。
 
 ### Q2: 为什么把预测逻辑放 C++ 而不是 C#？
 
@@ -1072,9 +1054,11 @@ C++ 路径：
 
 ### Q5: 客户端走 C++ predictor，Unity Editor 调试怎么办？
 
-- `libatlas_movement.dylib` 同时构建 macOS 版，Editor 加载
-- VS Code / VS 调试器 attach 到 Unity 进程，断点打到 C++ 源码
-- 或使用 Unity Editor 的 `ATLAS_CSHARP_FALLBACK` 编译宏：纯 C# 实现（仅编辑器测试用，明确知道数值可能略有差异）
+- Unity Editor 加载同平台的 `atlas_net_client` 产物
+- VS Code / VS 调试器 attach 到 Unity 进程，断点打到 `client_api.cc` /
+  `movement_sim.cc`
+- 若未来需要纯 C# predictor，可新增 Unity Editor 专用的 `ATLAS_CSHARP_FALLBACK`
+  编译宏；当前工程尚未提供这条 fallback，Editor 调试仍以 native predictor 为准。
 
 ### Q6: 丢失 UDP 包导致位置"卡顿"？
 
@@ -1102,7 +1086,7 @@ C++ 路径：
 
 这种延迟差属于**物理不可消除**，只能通过 lag compensation 在命中判定时弥补（见 `LAG_COMPENSATION.md`）。
 
-### Q9: 如果 `ApplyInput` 端同漂移 1 ULP，累计 100 帧会变成几厘米偏差吗？
+### Q9: 如果 `movement_sim::Step` 端同漂移 1 ULP，累计 100 帧会变成几厘米偏差吗？
 
 **理论上会**，所以必须：
 - 严格遵守 `DETERMINISM_CONTRACT.md`（浮点规约）
@@ -1124,8 +1108,8 @@ C++ 路径：
 - ❌ 用 `Time.deltaTime` 作为仿真 dt（用 server tick）
 - ❌ 客户端计算伤害/命中（这是服务端权威的）
 - ❌ 服务端发"整个位置流"给客户端（应发输入 ack）
-- ❌ 远端实体用 `Vector3.Lerp` 而不是 Hermite（视觉差）
-- ❌ `apply_input` 里查询 Unity `Physics.Raycast`（端同破坏）
+- ❌ 把当前 peer `AvatarFilter` 线性插值误写成已落地 Hermite（会误导验收）
+- ❌ `movement_sim::Step` 里查询 Unity `Physics.Raycast`（端同破坏）
 - ❌ 命令完成后再广播 `MovementCommandStart`（来不及预测）
 - ❌ 忽略 jitter debt，每 tick 严格校验（误伤合法玩家）
 
@@ -1138,7 +1122,7 @@ C++ 路径：
 | P0 末 | Native plugin 骨架；InputFrame 协议定义；端同 diff 测试通过 |
 | P1 中 | 主控预测 + 硬 snap 纠正；2 人联机移动同步 |
 | P1 末 | 三级软纠正 + visual_offset；4 人联机 150ms 模拟延迟下手感可接受 |
-| P2 中 | 远端 Hermite 插值 + 自适应 jitter buffer；MovementCommand 集成 |
+| P2 中 | peer `AvatarFilter` + MovementCommand 集成；Hermite / 自适应 jitter buffer 后置 |
 | P2 末 | 技能 Dash/Launch 端同；反作弊 jitter debt；压力测试 50 实体 |
 | P3 | 配合手感打磨：移动动画、碰撞反馈 |
 | P4+ | 400 实体热点压测；Cell 边界移动处理 |
@@ -1155,7 +1139,7 @@ C++ 路径：
   - `ENTITY_SNAPSHOT.md`（快照压缩细节）
   - `LAG_COMPENSATION.md`（命中判定时间回溯）
   - `UNITY_INTEGRATION.md`（Unity 侧实现细节）
-  - `ANTI_CHEAT_STRATEGY.md`（§10 反作弊纳入总体策略）
+  - `HIT_VALIDATION.md §13`（命中相关反作弊目标设计）
 
 ---
 

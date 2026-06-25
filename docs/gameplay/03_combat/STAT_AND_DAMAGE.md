@@ -1,10 +1,11 @@
 # 属性与伤害系统（Stat & Damage）
 
-> **用途**：定义 Atlas 实体的属性体系（HP/MP/攻击/防御/速度等）、modifier 聚合规则、StatCache 实现，以及命中确认后的伤害结算 pipeline。
+> **用途**：定义 Atlas 目标实体属性体系（HP/MP/攻击/防御/速度等）、
+> modifier 聚合规则、StatCache 实现，以及命中确认后的伤害结算 pipeline。
 >
 > **读者**：工程（必读）、数值策划（必读）、战斗策划（§5、§6 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，完整 Stat / Damage runtime 尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`BUFF_SYSTEM.md`、`HIT_VALIDATION.md`、`COMBAT_ACTIONS.md`、`DETERMINISM_CONTRACT.md`
 >
@@ -584,7 +585,7 @@ float ApplyResistance(float damage, StatCache vic, DamageType type) {
 按命中事件的处理流：
 
 ```
-HitValidation 已通过 (hitbox 形状重叠 + iframe 检查)
+目标 HitValidation runtime 已确认命中 (hitbox 形状重叠 + iframe 检查)
   ↓
 Block 检查（在 HIT_VALIDATION.md §6 处理，伤害 pipeline 不重复检）
   ↓
@@ -936,7 +937,8 @@ public void Damage_Physical_AppliesDefense() {
 
 ### 13.1 修改 modifier 数值
 
-数值策划改 Excel 中 buff modifier 的 value，run codegen，热更到服务器：
+DataBuild / codegen 落地后，数值策划改 Excel 中 buff modifier 的 value，
+重新生成数据并热更到服务器：
 - 已存在的 BuffInstance：可选保持旧值或升级到新值（`hot_reload_strategy`）
 - 新施加的：使用新值
 - StatCache：所有受影响实体 mark dirty，下次 Get 重算
@@ -1056,7 +1058,7 @@ K 值的设计：
 - PvP 装备词条系数化（如 PvE 装备伤害 ×0.7 在 PvP）——通过 PvP-specific modifier 实现
 - 玩家进 PvP arena 自动触发"PvP 平衡 buff"，附加大量 modifier 调整数值
 
-详见 `09_tools/AB_TESTING.md`（待写）"PvP 平衡机制"章节。
+当前尚无独立 A/B testing gameplay 专题；PvP 平衡机制先由本目标设计记录。
 
 ### Q10: 一次性大量目标的伤害会拉爆性能吗？
 

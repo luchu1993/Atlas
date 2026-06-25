@@ -1,5 +1,8 @@
-# BigWorld EventHistory 属性同步机制参考 — Atlas 实现指南
+# BigWorld EventHistory 属性同步机制参考 — Atlas 对照
 
+> 状态: 参考资料。本文记录 BigWorld EventHistory 语义；Atlas 当前属性同步
+> 实现见 [property_sync_design.md](../property_sync/property_sync_design.md)。
+>
 > 来源: BigWorld Engine 14.4.1 源码分析
 > 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [BigWorld EntityID 参考](BIGWORLD_ENTITY_ID_REFERENCE.md) | [Phase 10 CellApp](../roadmap/phase10_cellapp.md) | [Phase 12 Client SDK](../roadmap/phase12_client_sdk.md)
 
@@ -429,33 +432,29 @@ void EventHistory::trim()
 
 ---
 
-## 11. Atlas 实现建议
+## 11. Atlas 当前对照
 
-### 11.1 核心设计要点
+Atlas 当前属性同步没有实现 BigWorld `EventHistory`。现有方案见
+[property_sync_design.md](../property_sync/property_sync_design.md)：C# setter 标记
+DirtyBit，CellApp 帧末生成 owner / other 两份 audience-filtered delta 与 snapshot，
+BaseApp 只负责中继和位置 latest-wins 合批。
 
-| 设计点 | BigWorld 方案 | Atlas 建议 |
+| 维度 | BigWorld `EventHistory` | Atlas 当前实现 |
 |---|---|---|
-| 事件存储 | `list<HistoryEvent*>` 链表 | 可考虑环形缓冲区（cache 友好） |
-| 事件编号 | `int32` 单调递增 | `uint64` 避免回绕，或使用 `uint32` + 溢出处理 |
-| 游标 | `EntityCache.lastEventNumber_` | 相同设计，每观察者每实体一个游标 |
-| LOD 游标 | `lodEventNumbers_[MAX_LOD_LEVELS]` | 保留此设计，支持分层同步 |
-| LatestChangeOnly | 复用 HistoryEvent 对象 | 保留此优化，高频属性只保留最新值 |
-| 裁剪 | 周期性 trim 分时间片 | 可绑定到帧末或独立协程 |
-| Ghost 同步 | 流式发送到所有 Haunt | 保留此设计 |
+| 事件存储 | 每实体共享事件队列 | 每 tick 生成一次 delta / snapshot，没有跨 tick 历史队列 |
+| 观察者游标 | 每观察者每实体维护 `lastEventNumber_` | 客户端用 `event_seq` 检测 gap；服务端不保存 per-observer 属性游标 |
+| LOD 补发 | `lodEventNumbers_` 支持按层级补发 | 尚未实现属性 LOD；AOI enter 和周期 baseline 走 snapshot |
+| 高频位置 | `LatestChangeOnly` 合并历史事件 | `DeltaForwarder` 只接收 `kEntityPositionUpdate`，可合批为 `kEntityPositionBatch` |
+| 可靠属性 | 可靠事件可随历史补发 | 属性、容器和组件 delta 走 `kReplicatedReliableDeltaFromCell` |
+| Ghost 同步 | Real 的历史事件流式复制到 Ghost | Ghost 使用 baseline / delta / backup payload 维持状态 |
 
-### 11.2 与 BigWorld 的差异点
+当前不引入 EventHistory 的主要原因是 wire contract 已落在 `sectionMask + flags +
+values`，且可靠属性、容器 op-log、组件 baseline 已能覆盖 MVP 同步需求。若 AoI 压测
+出现“全可靠太重、unreliable 又不足”的中间地带，候选方向是保留现有 C# DirtyBit
+检测，把多观察者调度迁到 C++ 侧轻量环形历史窗口；客户端 wire 格式保持不变。
 
-1. **序列化格式**: BigWorld 使用自定义二进制流。Atlas 可使用 flatbuffers 或自研零拷贝方案。
-2. **带宽调度**: BigWorld 通过 `entityQueue_` 优先级队列限流。Atlas 应保留此设计并考虑更细粒度的 QoS。
-3. **内存管理**: BigWorld 使用 `new/delete` 分配 HistoryEvent。Atlas 建议使用对象池或 arena 分配器。
-4. **可靠性**: BigWorld 区分 reliable / unreliable 事件。Atlas 应在传输层（TCP/KCP）支持此区分。
+保留下来的不变量：
 
-### 11.3 关键不变量
-
-实现时必须保证以下不变量：
-
-1. **事件编号严格递增** — `getNextEventNumber()` 必须是原子的或单线程调用
-2. **游标只前进不后退** — `lastEventNumber_` 一旦更新，不能回退
-3. **新进入 AOI 的实体发快照而非回放历史** — 防止历史事件积压导致带宽爆炸
-4. **LatestChangeOnly 不能丢失最终值** — 合并旧事件时必须保留最新数据
-5. **Ghost 的 EventHistory 与 Real 保持一致** — 编号、顺序、内容都必须相同
+1. **新进入 AOI 发 snapshot，不回放旧 delta**，避免历史积压直接打爆带宽。
+2. **累积型状态不走 latest-wins**，HP、库存、`event_seq` 和容器 op-log 必须走可靠通道。
+3. **位置流可以合并，属性流必须有序**，`DeltaForwarder` 只处理 volatile 位置 envelope。

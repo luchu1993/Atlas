@@ -4,11 +4,12 @@
 >
 > **读者**：Tech Lead、客户端工程、战斗策划（§3、§5 必读）、动画师（§5 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：部分落地。`Atlas.Client.Unity`、native client SDK、owner predictor
+> 与 MVP Unity 接入已可用；完整战斗动画 / 反馈工作流仍是目标设计。
 >
 > **前置文档**：`OVERVIEW.md`、`MOVEMENT_SYNC.md`、`COMBAT_FEEL.md`
 >
-> **关联文档**：`ANIMATION_INTEGRATION.md`（动画细节）、`CLIENT_PREDICTION.md`（预测策略）
+> **关联文档**：`ANIMATION_INTEGRATION.md`（动画细节）、`MOVEMENT_SYNC.md`（预测策略）
 
 ---
 
@@ -74,8 +75,8 @@
 
 | Unity 默认行为 | Atlas 覆盖原因 | 替代方案 |
 |---|---|---|
-| **Rigidbody / CharacterController** | 非确定性，PhysX 跨端不一致 | 自研胶囊 + 高度图碰撞（C++ native） |
-| **Physics.Raycast** | 同上 | 自研形状重叠（端共享） |
+| **Rigidbody / CharacterController** | 非确定性，PhysX 跨端不一致 | Atlas `movement_sim::Step` + native predictor |
+| **Physics.Raycast** | 客户端物理不能作为权威事实 | 服务端 `PhysicsQuery` / Jolt 查询，客户端只做视觉预表现 |
 | **Animator Root Motion** | 运行时计算非确定 | 构建期提取曲线 |
 | **NetworkManager** | 与 Atlas 协议不兼容 | 自研协议层 |
 | **Time.timeScale 全局** | 影响所有系统不可控 | 仅 hit pause / slomo 局部使用 |
@@ -272,13 +273,13 @@ Unity 几乎所有 API 必须在**主线程**调用：
 
 工程师/策划在 Unity Editor 内迭代越快 → 玩家感受到的版本质量越高。
 
-### 6.2 关键工作流
+### 6.2 当前 / 目标工作流
 
 | 工作流 | 频率 | 期望耗时 |
 |---|---|---|
 | 改 C# 代码后运行 | 每天百次 | < 10 s（脚本编译） |
 | 改 prefab 后看效果 | 每天数十次 | 即时（Editor 已是所见即所得） |
-| 改 Excel 后看效果 | 每天数十次 | < 30 s（DataBuild 增量 + 重启 PIE） |
+| 改 Excel 后看效果 | DataBuild 落地后每天数十次 | 目标 < 30 s（DataBuild 增量 + 重启 PIE） |
 | 改 native plugin（C++）后看效果 | 每周数次 | < 60 s（C++ 编译 + Unity 加载） |
 | 改 shader / material | 每天数次 | < 5 s |
 | 加载场景跑战斗测试 | 每天数十次 | < 5 s |
@@ -294,8 +295,12 @@ Unity 几乎所有 API 必须在**主线程**调用：
 
 ### 6.4 Editor-Only 功能
 
+当前 MVP 已有基础 debug overlay 和 native transport impairment；以下战斗 /
+AI 工具仍是目标态。
+
 许多调试功能仅 Editor 启用：
-- Frame Data Editor（参见 `09_tools/FRAME_DATA_EDITOR.md`）
+- Frame Data Editor（参见
+  [`09_tools/FRAME_DATA_EDITOR.md`](../09_tools/FRAME_DATA_EDITOR.md)）
 - Combat Replay 查看器
 - 网络模拟器（注入延迟/丢包）
 - Stat Inspector
@@ -404,8 +409,11 @@ ClientVer  | ServerVer | 行为
 
 ### 9.3 协议版本
 
-每个网络包带 `proto_ver` byte（参见 `OVERVIEW.md §4`）。
-- 服务端支持 N 个最近版本（兼容窗口）
+目标形态是客户端 / 服务端有显式协议版本协商（参见 `OVERVIEW.md §4`）。
+当前工程已经有 `ATLAS_NET_ABI_VERSION`、登录携带的 entity-def digest，以及
+machined / mesh 控制协议版本字段；普通游戏消息尚未统一每包 `proto_ver`。
+
+- 服务端支持 N 个最近版本（兼容窗口）仍是目标策略
 - 客户端只用自己版本协议
 - 跨版本必须升级客户端
 
@@ -427,7 +435,8 @@ ClientVer  | ServerVer | 行为
 - VPN / proxy 检测（仅作辅助参考）
 - 异常输入频率检测（如每秒 1000 次输入）
 
-**核心原则**：客户端反作弊是**第一道墙**，挡掉脚本小子。**真正防御在服务端**（参见 `08_security/ANTI_CHEAT_STRATEGY.md`，待写）。
+**核心原则**：客户端反作弊是**第一道墙**，挡掉脚本小子。真正防御在服务端；
+当前反作弊目标分散在 `MOVEMENT_SYNC.md` 和 `../03_combat/HIT_VALIDATION.md`。
 
 ### 10.2 玩家不感知正常防御
 
@@ -555,7 +564,7 @@ P3 阶段定基线：
 
 ### Q10: PvP arena 为什么 30 Hz 不上 60 Hz？
 
-P3 阶段 30 Hz 已通过盲测达标。60 Hz 边际收益：
+目标是在 P3 阶段验证 30 Hz 盲测达标后继续保持 30 Hz。60 Hz 边际收益：
 - 视觉差异：玩家几乎不察觉（动画插值能补）
 - 输入延迟：从 33ms 降到 17ms，但本地预测已 0ms
 - 服务端成本：CPU 翻倍
@@ -598,10 +607,10 @@ P3 阶段 30 Hz 已通过盲测达标。60 Hz 边际收益：
   - `OVERVIEW.md`
   - `MOVEMENT_SYNC.md §11`（Unity 集成具体）
   - `ANIMATION_INTEGRATION.md`（动画细节）
-  - `CLIENT_PREDICTION.md`（预测策略）
+  - `MOVEMENT_SYNC.md`（预测策略）
   - `COMBAT_FEEL.md`（视觉 / 听觉反馈）
   - `DATA_PIPELINE.md`（资源加载）
-  - `08_security/ANTI_CHEAT_STRATEGY.md`（待写，反作弊客户端侧）
+  - 当前尚无独立客户端反作弊 gameplay 专题。
 
 ---
 

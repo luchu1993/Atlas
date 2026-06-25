@@ -390,7 +390,7 @@ public static class Program
         };
     }
 
-    // Layout (mirrors RpcIdEncoder): slot[31:24] | dir[23:22] | type[21:8] | method[7:0].
+    // Layout mirrors RpcIdEncoder; generated upstream stubs leave reply bit clear.
     private static uint EncodeRpcId(int slot, byte direction, ushort typeIndex, int methodIdx)
     {
         return ((uint)slot << 24) | ((uint)direction << 22) | ((uint)typeIndex << 8) | (uint)methodIdx;
@@ -657,7 +657,7 @@ public static class Program
                 var names = new FreshNames();
                 EmitWriteValue(sb, "    ", ref_, "__writer", a.Name, @namespace, names);
             }
-            // rpc_id = (slot<<24) | (direction<<22) | (entity_type<<8) | method_idx
+            // Upstream stubs leave rpc_id reply bit clear.
             sb.AppendLine($"    const uint32_t __rpc_id = (static_cast<uint32_t>(SlotIdx()) << 24)");
             sb.AppendLine($"        | (static_cast<uint32_t>({direction}u) << 22)");
             sb.AppendLine($"        | (static_cast<uint32_t>(__owner->TypeId()) << 8)");

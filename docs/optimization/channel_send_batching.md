@@ -1,9 +1,8 @@
 # Channel-Level Send Batching
 
-**Status:** ✅ Shipped (`7cfbb27` plumbing → `4057994` default flip →
-`938ca28` / `c44cb32` whitelist → `201a80a` cellapp dedupe →
-`0bd984c` OOM-only threshold → `bd5ca36` correctness fixes).
-**Subsystem:** `src/lib/network/{message.h,channel.{h,cc},reliable_udp.{h,cc},network_interface.{h,cc}}`,
+**Status:** ✅ Shipped.
+**Subsystem:** `src/lib/network/message.h`, `src/lib/network/channel.{h,cc}`,
+`src/lib/network/reliable_udp.{h,cc}`, `src/lib/network/network_interface.{h,cc}`,
 `src/server/baseapp/baseapp.cc`, `src/server/cellapp/cellapp.cc`.
 
 ## Design
@@ -12,7 +11,7 @@ Each `MessageDesc` carries a two-axis classification:
 
 ```cpp
 enum class MessageReliability : uint8_t { kReliable, kUnreliable };
-enum class MessageUrgency     : uint8_t { kBatched, kImmediate };
+enum class MessageUrgency     : uint8_t { kImmediate, kBatched };
 ```
 
 `Channel::SendMessage` routes on `urgency`:
@@ -22,7 +21,7 @@ enum class MessageUrgency     : uint8_t { kBatched, kImmediate };
   the caller is `co_await`ing on, and the PvP combat-command path.
 - **`kBatched`** (default for new descriptors) — append to the
   channel's per-reliability deferred bundle, register the channel
-  with `NetworkInterface::dirty_send_channels_`, return without a
+  with `NetworkInterface::dirty_channels_`, return without a
   syscall. `NetworkInterface::DoTask` flushes all dirty channels
   once per dispatcher tick.
 
@@ -35,8 +34,9 @@ Threshold rules in the batched path:
 - Tick-end flush is the common path: one `sendto` per
   (channel × reliability × tick), regardless of how many
   descriptors fed in.
-- TCP channels ignore `urgency`; the kernel write buffer + MSS
-  segmentation already coalesce.
+- TCP channels use one deferred bundle per channel and flush it through
+  `FlushDeferred`; the kernel write buffer + MSS segmentation still
+  handle final coalescing.
 
 ## `kImmediate` whitelist (PR-2 audit ground truth)
 
@@ -58,7 +58,7 @@ Categories flipped to `kBatched`:
 |---|---|---|
 | Replication delta | `ReplicatedReliableDeltaFromCell`, `ReplicatedBaselineFromCell` | Direct hit on the BaseApp `Channel::Send` hotspot |
 | Ghost sync | `GhostDelta`, `GhostPositionUpdate`, `GhostSnapshotRefresh` | Collapses cellapp's `O(reals × haunts)` ghost broadcast to `O(haunts × tick)` |
-| RPC forwarding | `CellRpcForward`, `SelfRpcFromCell`, `BroadcastRpcFromCell` | Cellapp → BaseApp → client chain coalesces per client |
+| RPC forwarding | `CellRpcForward`, `BroadcastRpcFromCell` | Cellapp → BaseApp → client chain coalesces per client |
 | Ghost lifecycle | `CreateGhost`, `DeleteGhost` | Coalesces with the next ghost-update bundle to the same peer |
 | Entity creation | `CreateBase`, `CreateBaseFromDb`, `CreateCellEntity`, `DestroyCellEntity` | Login-wave / instance-entry fan-out |
 | Client event report | `ClientEventSeqReport` | Periodic acks merge into the next outbound bundle |

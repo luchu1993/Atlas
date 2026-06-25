@@ -1,6 +1,8 @@
 # Atlas MVP — Unity 端到端演示
 
-单 Cell Atlas 集群 + Unity 6 客户端，用来演示完整的 BigWorld 风格链路：服务端权威移动 + owner 本地预测、服务端权威技能 / 投射物伤害、AoI 驱动的同屏实体流式同步，以及逐 tick 属性复制。世界尺寸为 200 × 200 m，包含 1 个玩家 Avatar 和 150 个游荡 NPC。
+> 状态：当前 Unity MVP 运行说明。示例使用现行服务端权威移动路径；UE 对齐与剩余表现层缺口见 `samples/mvp/UEClient/`。
+>
+多 CellApp Atlas 集群 + Unity 6 客户端，用来演示完整的 BigWorld 风格链路：服务端权威移动 + owner 本地预测、服务端权威技能 / 投射物伤害、AoI 驱动的同屏实体流式同步，以及逐 tick 属性复制。默认 wrapper 启动 4 个 CellApp，世界尺寸为 200 × 200 m，包含 1 个玩家 Avatar 和 150 个游荡 NPC。
 
 ## 目录结构
 
@@ -16,10 +18,11 @@ samples/mvp/
 
 ## 前置条件
 
-- Unity Hub + Unity 6 LTS（工程固定为 `6000.0.28f1c1`）
+- Unity Hub + Unity 6 LTS（工程固定为 `6000.0.43f1-lilith-2`）
 - .NET 10 SDK
 - CMake + Ninja（构建 helper 会按需准备 Ninja）
-- Windows：MSVC 2022（构建 helper 会加载环境）。Linux/macOS：clang 或 gcc。
+- Windows：Visual Studio 2026 或 Visual Studio 2022 17.14+，需安装 MSVC
+  （构建 helper 会加载环境）。Linux/macOS：clang 或 gcc。
 
 ## 运行
 
@@ -28,18 +31,18 @@ samples/mvp/
 tools/bin/build.sh debug
 tools\bin\build.bat debug
 
-# 2. 把 SDK + 实体 DLL staging 到 samples/mvp/UnityClient/Assets/。
+# 2. 把 SDK + 实体 DLL staging 到 Unity Assets 目录。
 tools/bin/setup_mvp_unity.sh
 tools\bin\setup_mvp_unity.bat
 
-# 3. 启动集群（machined + loginapp + baseappmgr + baseapp + cellappmgr + cellapp + dbapp）。
+# 3. 启动集群（machined + loginapp + baseappmgr + baseapp + cellappmgr + cellapps + dbapp）。
 tools/bin/run_mvp_cluster.sh
 tools\bin\run_mvp_cluster.bat
 
 # 4. 在 Unity Hub 中打开 samples/mvp/UnityClient，然后点击 Play。
 ```
 
-两端默认使用 LoginApp 端口 `20018`。集群中 cellapp / baseapp 以 20 Hz 运行（50 ms tick）。`UnityClient/Assets/Scenes/Main.unity` 已经包含运行时 `Bootstrap` 对象。
+两端默认使用 LoginApp 端口 `20018`。集群中 CellApp 与 BaseApp 以 20 Hz 运行（50 ms tick）。`UnityClient/Assets/Scenes/Main.unity` 已经包含运行时 `Bootstrap` 对象。
 
 **改了 `Atlas.Mvp.{Client,Cell,Base}/*.cs`、`entity_defs/*` 或 `src/csharp/Atlas.Client*/*.cs` 后，必须重跑 `tools\bin\setup_mvp_unity.bat`（或 .sh）再回 Unity Editor**。Unity 项目下有两条 staged 路径，都由 `setup_mvp_unity` 从源头重生成：
 
@@ -50,7 +53,7 @@ tools\bin\run_mvp_cluster.bat
 
 Unity MVP 自身代码按 `Assets/Scripts/Runtime/` 和
 `Assets/Scripts/Editor/` 分层。Runtime 由
-`Atlas.Mvp.Unity.Runtime` asmdef 编译，并继续按 `App`、`World`、
+`Atlas.Mvp.Unity.Runtime` asmdef 编译，并继续按 `App`、`Camera`、`World`、
 `Views`、`UI`、`Input`、`Projectiles`、`Debug` 模块归类；Editor-only
 构建入口由 `Atlas.Mvp.Unity.Editor` 编译。AoI box、BSP 几何等调试
 overlay 独立放在 `Runtime/Debug/`，通过实例注入接入 HUD，不再作为
@@ -68,7 +71,7 @@ tools/bin/build_mvp_unity.sh --skip-setup --clean-output
 tools\bin\build_mvp_unity.bat --skip-setup --clean-output
 ```
 
-脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。如果缺少 `ProjectSettings/ProjectVersion.txt`，脚本会扫描本机 Unity Hub 已安装的 Editor 并打印最终选中的可执行文件。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
+脚本会按顺序从 `--unity`、`UNITY_EXE`、`UNITY_PATH`、固定工程版本对应的 Unity Hub 安装路径查找 Unity 可执行文件。`build_mvp_unity` 要求存在 `ProjectSettings/ProjectVersion.txt`；如果固定版本的 Editor 未安装，请传 `--unity` 或设置 `UNITY_EXE`。Windows 默认输出为 `out/mvp-unity/windows/AtlasMvp.exe`，日志写到 `out/mvp-unity/unity-build.log`。非 Windows player 可传 `--target StandaloneLinux64` 或 `--target StandaloneOSX`。Standalone 构建默认以可调整大小的窗口启动。
 
 不启动集群也可以运行打包 Player 的 native predictor 自检：
 
@@ -117,12 +120,14 @@ tools\bin\export_collision_unity.bat --output samples\mvp\maps\main.collision.js
 时 space 保留平地。手动 cook：
 
 ```bash
-bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json
-# → samples\mvp\maps\main.collision.collisioncache
+bin\debug\atlas_tool.exe cook_collision samples\mvp\maps\main.collision.json -o samples\mvp\maps\main.collisioncache
+# → samples\mvp\maps\main.collisioncache
 ```
 
-`atlas_tool recook --invalid <dir>` 会重 cook
-`jolt_version_stamp` 已落后于当前 Jolt build 的 cache。
+`atlas_tool recook --invalid <dir>` 只支持默认命名约定
+（`foo.collision.json` -> `foo.collision.collisioncache`）。MVP 使用自定义
+`main.collisioncache` 路径，因此刷新它要重新运行 `run_mvp_cluster`，或手动执行
+上面的 `cook_collision ... -o samples/mvp/maps/main.collisioncache` 命令。
 
 ## 服务端导航网格 + NPC 寻路
 
@@ -140,14 +145,20 @@ bin\debug\atlas_tool.exe dump_nav samples\mvp\maps\main.collision.json --params 
 bin\debug\atlas_tool.exe path_nav samples\mvp\maps\main.collision.json --params samples\mvp\maps\main.nav.json --from -30,0,-30 --to 0,2,16 --obj path.obj
 ```
 
-## UE 客户端（M2 — 双向 codegen + BP 暴露）
+## UE 客户端
 
-Unreal Engine 5.7 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin 直接链接 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，**不**使用 UE 的 replication / RPC。M2 之后：`Atlas.Tools.CppEmitter` 输出 typed entity 类（`atlas::mvp::Account`、`Avatar`、`Npc`、`StressAvatar`）和每个 synced logic component 的独立类（`StressLoadComponent`），覆盖属性 getter、scalar 变化虚 hook、上行 RPC stub、下行 `client_methods` 虚处理、slot-routed component 分发、共享 struct 的 `Serialize/Deserialize`。`UAtlasAvatarView` UCLASS 把属性变化以及 Avatar 全部 5 个 `client_methods`（`ShowDamage`、`OnDied`、`OnRespawned`、`OnProjectileFired`、`OnProjectileEnded`）publish 成 BP delegate，bridge 内置 `atlas::Vec3 → FVector` 坐标转换。
+Unreal Engine 5.x 客户端，通过 Atlas wire 协议连接同一个 MVP 集群。Plugin
+直接链接 `atlas_net_client.dll` + `atlas_entitydef_client.dll`，**不**使用 UE
+的 replication / RPC。当前路径覆盖登录 / 自动登录、HUD 与 Avatar Blueprint
+view 基类、SpaceData / NPC count、generated RPC、属性 delta / component decode，
+以及 owner-authoritative movement input + native predictor / ack replay。剩余 UI
+和工具缺口以 `samples/mvp/UEClient/README.md` 为准。
 
 ### 前置条件
 
-- 源码构建的 Unreal Engine 5.7，设置 `UE_ROOT` 指向引擎根目录（例：`set UE_ROOT=E:\UE\UnrealEngine`）
-- 与服务端构建同样的 MSVC 2022 + .NET 10 SDK + CMake 工具链
+- 源码构建的 Unreal Engine 5.x，设置 `UE_ROOT` 指向引擎根目录（例：`set UE_ROOT=E:\UE\UnrealEngine`）
+- 与服务端构建同样的 Visual Studio 2026 / Visual Studio 2022 17.14+ +
+  .NET 10 SDK + CMake 工具链
 
 ### 构建 + staging
 
@@ -163,7 +174,7 @@ tools\bin\build_mvp_ue.bat
 ```bash
 # 1. 先启动 MVP 集群（见上面的"运行"小节）。
 
-# 2. 用 UE 5.7 打开工程：
+# 2. 用 Unreal Editor 打开工程：
 "%UE_ROOT%\Engine\Binaries\Win64\UnrealEditor.exe" samples\mvp\UEClient\UEClient.uproject
 
 # 3. 编辑器中点 Play（PIE）。UEClientGameMode 会向 127.0.0.1:20018 发起 Login
@@ -194,7 +205,8 @@ CellApp 持有最终位置权威，并通过 movement ack 驱动 replay。owner 
 movement ack 也会播种下一帧 owner input seq，避免旧 CellApp 输入序列状态把
 新会话输入当成 stale。Peer avatar 仍走 `AvatarFilter` 插值轨迹，技能期间由
 `MovementCommandStart` / `MovementCommandEnd` 覆盖 filter 输出。NPC AI 写入
-movement intent，由同一套服务端 CharacterMotor 推进。Unity 可调用
+movement intent，并由同一套服务端 `CellMovementSystem` / `movement_sim::Step`
+路径推进。Unity 可调用
 `AtlasNetworkManager.SetTransportImpairment(75, 200, seed)`，UE 可调用
 `UAtlasSubsystem::SetTransportImpairment(75, 200, seed)`，在约 150 ms RTT /
 2% datagram loss 下验证同一路径。
@@ -204,11 +216,10 @@ movement intent，由同一套服务端 CharacterMotor 推进。Unity 可调用
 stale actor 不会残留在死掉的 net ctx 上。需要把重试交给游戏层（例如未来有
 LoginScreen UMG），关掉 `bAutoReconnectEnabled` 即可。
 
-### M3a / M3c 之后的已知缺口
+### UE 客户端缺口
 
-- **`AAvatarCapsule` 是 Cylinder 占位** mesh，作为美术 polish 项替换
-- **HUD / 伤害浮字 / 投射物特效未在 BP 里搭起** —— delegate 已就绪，actor 侧绑定是 M3 demo 工作
-- **没有相机控制 / 跟随** —— 默认 `APlayerController` 的 ControlRotation 驱动 WASD 移动方向，但没有 spring-arm 跟随相机；编辑器相机就是 PIE 启动给的默认视角
+UE 专属 UI 与相机缺口以 `samples/mvp/UEClient/README.md` 为准；下方操作表
+描述的是 Unity MVP 客户端。
 
 ## 操作
 
@@ -219,6 +230,8 @@ LoginScreen UMG），关掉 `bAutoReconnectEnabled` 即可。
 | **鼠标 — 滚轮** | 缩放（0.5×–12×） |
 | **Space** | 朝面向方向发射投射物（命中 10 点伤害） |
 | **Left Shift** | 通过服务端权威 MovementCommand 向前冲刺 |
+| **点击聊天输入框** | 输入消息（Enter 发送，Esc 取消） |
+| **1 / 2 / 3** | 装备 Sword / Bow / Staff（服务端经 EquipmentComponent 处理） |
 
 玩家行走时，相机 yaw 会平滑追上 Avatar 朝向（约 250 ms 阻尼），类似 PUBG。横移（A/D）保持 Avatar 朝前，避免相机跟随环路抖动。
 
@@ -272,7 +285,7 @@ Left Shift 触发 `Avatar.Dash`，由 cell 脚本写入 server-stamped
 
 ### 持久化覆盖
 
-`Account.loginCount` 与 `Account.lastLogin` 标记为 `persistent="true"`，会自动经 DBApp 往返：每次认证成功 `Account.OnInit` 自增计数并写入 UTC 时间，logoff 时 dbapp 持久化，下次会话通过 `CheckoutEntity` 重新加载。HUD 的 `SESSION` 行显示 `#N · MM-DD HH:MM`（本次会话编号 + 上次会话的 UTC 时间），是 dbapp 保存/加载循环正常工作的最直观确认。
+`Account.loginCount` 与 `Account.lastLogin` 标记为 `persistent="true"`，会自动经 DBApp 往返：`Account.SelectAvatar` 绑定角色时自增计数、写入 UTC 时间，并在交出客户端前主动刷新 Account。logoff 时 DBApp 仍会持久化最终 Account 快照，下次会话通过 `CheckoutEntity` 重新加载。HUD 的 `SESSION` 行显示 `#N · MM-DD HH:MM`（本次会话编号 + 上次会话的 UTC 时间），是 DBApp 保存/加载循环正常工作的最直观确认。
 
 `Avatar.gold` 与 `Avatar.level` 同样声明了 `persistent="true"`，logoff 时确实会写入 DBApp（自动分配 DBID），但 MVP 的 `Account.SelectAvatar` 总是调用 `EntityFactory.CreateBase("Avatar")`，每次铸造一个全新的 Avatar，并不会按上一次的 DBID 走 checkout 加载。因此会话内 Gold/Level 的变更 + 复制按预期工作，但跨会话会重置为初值。补齐 `Account → avatarDbid` + `CreateBaseFromDbid` checkout 通路即可闭环，留作后续。
 
@@ -287,13 +300,13 @@ tools/bin/run_mvp_unity_bots.sh -n 4 --duration 60
 tools\bin\run_mvp_unity_bots.bat -n 4 --duration 60
 ```
 
-每个 bot 以 `mvp_bot_<idx>` 登录（LoginApp 开发模式接受任意用户名），等进入世界后由 `BotPilot` 接管 `PlayerInputController` 的 joystick/fire 源，跑随机朝向的游走 + 周期开火——cell 侧负载与真实键盘玩家一致。bot 到达指定 duration 后调用 `Application.Quit()` 退出。400 ms 启动间隔默认满足 LoginApp 5/60s 每 IP 上限；要扇出更多，重启集群时加 `--login-rate-limit-per-ip 0`（`run_world_stress.py` 参数）。每个 bot 的 Unity 日志写入 `out/mvp-unity-bots/bot_<idx>.log`。
+每个 bot 以 `mvp_bot_<idx>` 登录（LoginApp 开发模式接受任意用户名），等进入世界后由 `BotPilot` 接管 `PlayerInputController` 的 joystick/fire 源，跑随机朝向的游走 + 周期开火——cell 侧负载与真实键盘玩家一致。bot 到达指定 duration 后调用 `Application.Quit()` 退出。400 ms 启动间隔默认满足 LoginApp 5/60s 每 IP 上限；要扇出更多，重启集群时加 `--login-rate-limit-per-ip 0`（`run_world_stress` 参数）。每个 bot 的 Unity 日志写入 `out/mvp-unity-bots/bot_<idx>.log`。
 
-与 C++ 版本的 `run_world_stress.py` / `run_login_stress.py` 不同，这个驱动每个 bot 都跑完整的 Unity runtime（managed GC、`Atlas.Client.Unity` 桥、Mvp.Client codegen + ApplyDelta），能暴露 headless C# 压测工具看不到的 Unity 侧开销。
+与 headless `run_world_stress` / `run_login_stress` 驱动不同，这个驱动每个 bot 都跑完整的 Unity runtime（managed GC、`Atlas.Client.Unity` 桥、Mvp.Client codegen + ApplyDelta），能暴露协议压测工具看不到的 Unity 侧开销。
 
 ## 多 cellapp 部署
 
-wrapper 默认 `--cellapp-count 4`（2×2 BSP 网格）；要单 cell 测试传 `1`。
+wrapper 默认 `--cellapp-count 4`（2×2 BSP 网格）；要单 CellApp 测试传 `1`。
 
 ```bash
 tools/bin/run_mvp_cluster.sh
@@ -317,38 +330,37 @@ CellApp: ... received offload entity / converted ghost↔real ...
 
 `BSPTree::Balance` 循环（`CellAppMgr::OnTickComplete` 每 30 ticks 一次）会持续调整 split 位置以均衡叶子间负载。配合 `run_mvp_unity_bots -n 16` 以上把负载推高，能在 `UpdateGeometry` 的重广播里观察到 split 线移动。
 
-**客户端没有 cell-id 属性——这是有意设计。** Phase 11 §"Ghost 无 C# 实例" 保证 Ghost 迁移对客户端透明：Witness 看到的是一个稳定的 Avatar，不论 Real 当下在哪个 CellApp。所以没有也不该有客户端可见的"当前 cell"，BigWorld 模型也不鼓励加这种属性。
+**客户端没有 cell-id 属性——这是有意设计。** Phase 11 保证 Ghost 迁移对客户端透明：C# Ghost mirror 是服务端被动副本，Witness 看到的是一个稳定的 Avatar，不论 Real 当下在哪个 CellApp。所以没有也不该有客户端可见的"当前 cell"，BigWorld 模型也不鼓励加这种属性。
 
 **底层基础验证测试**（与 MVP 解耦）：
 
 ```bash
-bin/debug/test_bsp_tree.exe                  # 24 个 BSP 单测
-bin/debug/test_distributed_space.exe         # 8 个 over-RUDP：CreateGhost / GhostPositionUpdate /
+bin/debug/test_bsp_tree.exe                  # BSP 路由、balance、serialize、unsplit
+bin/debug/test_distributed_space.exe         # over-RUDP：CreateGhost / GhostPositionUpdate /
                                              #   GhostDelta / OffloadEntity + SpaceData mirror
-bin/debug/test_offload_traversal.exe         # 2 个 BSP-driven offload 用例
-bin/debug/test_cellappmgr_integration.exe    # 6 个用例（含 multi-cell bootstrap）
+bin/debug/test_offload_traversal.exe         # BSP-driven offload / teleport 用例
+bin/debug/test_cellappmgr_integration.exe    # late split 与 multi-cell bootstrap
 ```
 
 ## 已知 MVP 简化点
 
-- 移动已走服务端权威输入帧、owner replay 和共享 CharacterMotor；Static / Jolt
+- 移动已走服务端权威输入帧、owner replay 和共享 `movement_sim::Step` 路径；Static / Jolt
   PhysicsQuery 已覆盖坡面、台阶、depenetration 和大纠正审计。`run_mvp_cluster`
-  会 cook 并加载 Unity 导出的 collision cache；chunk / border query 和 volume
-  export 仍是 Phase 14 后续项。
+  会 cook 并加载 Unity 导出的 collision cache。Static chunk / border query 已进入
+  回归基线；volume export 仍是后续项。
 - MVP `Avatar.ReportPos` 已移除；仅压测用 `StressAvatar.ReportPos`
   保留给 legacy load generation。
 - NPC AI 通过 movement intent 随机游走 + 周期性开火；没有仇恨 / 目标选择。
 - NPC 死亡后按数量补充（≤ 150 触发，每 2 秒 1 个，封顶 250），但死亡实例本身不复活。
 - 登录使用硬编码 username + password hash；LoginApp 的 dev 模式会接受任何符合配置的输入。
 - `ProjectileSimulator` 状态是 per-space 但仍在进程内；没有实现跨 cell 投射物 handoff。
-- Space 拓扑在第一次 `RequestCreateSpace` 时（首个 has_cell 实体创建时）
-  一次性定型。之后注册的 cellapp 不会自动加入已建 Space 的 BSP——这正是
-  Phase 11 收尾项（`ShouldOffload` 推送或等价 rebalance 调度器）。
+- CellAppMgr 已可在 late CellApp 注册时拆分已有 Space；MVP 简化点是
+  投射物仍未实现跨 cell handoff。
 
 ## 排障
 
 - **Unity 编译报缺少 `Atlas.Mvp.Client`** — 你忘了运行 `setup_mvp_unity`，或者打包时用了带 `--skip-setup` 的 `build_mvp_unity`。
-- **`build_mvp_unity` 找不到 Unity** — 传 `--unity <Unity.exe>` 或设置 `UNITY_EXE`；没有 `ProjectVersion.txt` 时脚本会先扫描 Unity Hub 安装目录。
+- **`build_mvp_unity` 找不到 Unity** — 传 `--unity <Unity.exe>` 或设置 `UNITY_EXE`；同时确认 `ProjectSettings/ProjectVersion.txt` 存在，并且对应版本的 Editor 已安装。
 - **`Login failed: BadCredentials`** — loginapp 配置里的 `accept_any_user` 关闭了。开发环境可以打开它，或者预先创建用户。
 - **看不到 NPC** — 检查 cellapp 日志是否有 `MvpSpace: seeded 150/150 NPCs`；如果显示 0，说明 CellApp 缺少 Mvp.Cell DLL（重新运行 `build.bat debug`，让 CMake 重新部署）。
 - **标签卡在屏幕边缘 / 位置不对** — Unity 场景模板自带的 `Main Camera` GameObject 与 Bootstrap 运行时相机冲突。删除层级面板中的默认 Main Camera。

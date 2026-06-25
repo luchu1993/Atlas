@@ -4,7 +4,7 @@
 >
 > **读者**：工具开发（必读）、战斗策划（必读）、动画师（§5、§7 必读）、Tech Lead（必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计。Frame Data Editor 与 DataBuild 均尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`SKILL_SYSTEM.md`、`COMBAT_FEEL.md`、`DATA_PIPELINE.md`
 >
@@ -47,7 +47,7 @@
 - **不在线编辑**：仅 Editor 内（不发布给玩家）
 - **不做行为树编辑**：AI 用单独工具
 
-### 1.4 与 DATA_PIPELINE 的关系
+### 1.4 与 DATA_PIPELINE 的目标关系
 
 ```
 策划在 Excel 编辑 ⟷ Frame Data Editor (双向同步)
@@ -393,9 +393,9 @@ public sealed class PreviewRunner {
 
 ---
 
-## 6. 数据双向同步
+## 6. 目标数据双向同步
 
-### 6.1 加载流程
+### 6.1 目标加载流程
 
 ```
 打开技能 → 读 data/generated/skills.bytes 中对应 SkillDef
@@ -405,7 +405,7 @@ public sealed class PreviewRunner {
         填充 Timeline / Inspector UI
 ```
 
-### 6.2 保存流程
+### 6.2 目标保存流程
 
 ```
 点击 Save → 编辑器内存模型 → 转换为 Excel 行格式
@@ -423,7 +423,7 @@ public sealed class PreviewRunner {
         预览自动重载
 ```
 
-**编辑器不直接写 .bytes**——必须经过 Excel + DataBuild 流程，保证一致性。
+目标约束：编辑器不直接写 `.bytes`，必须经过 Excel + DataBuild 流程，保证一致性。
 
 ### 6.3 冲突处理
 
@@ -432,7 +432,7 @@ public sealed class PreviewRunner {
 - 保存时检查当前 Excel 是否已被改动
 - 不一致 → 提示冲突，让用户选择"覆盖 / 合并 / 取消"
 
-### 6.4 Live Reload
+### 6.4 目标 Live Reload
 
 DataBuild 完成后，编辑器自动检测 .bytes 变化，重新加载预览。
 
@@ -728,7 +728,9 @@ VFX 美术、动画师可用关键功能：
 
 ### Q10: 工具失败时策划怎么继续工作？
 
-退化路径：直接编辑 Excel + DataBuild + 启动游戏 → 这是工具加持前的工作流，仍然可用。**工具是加速器不是必需品**——必需品是 Excel + DataBuild。
+DataBuild 落地前，Frame Data Editor 没有独立退化路径；当前只能沿用 MVP
+样例和手写配置验证已有 gameplay 表现。DataBuild 落地后，退化路径是直接
+编辑 Excel + DataBuild + 启动游戏；工具是加速器，不是数据真源。
 
 ---
 

@@ -4,7 +4,8 @@
 >
 > **读者**：网络工程师（必读）、战斗策划（必读）、客户端工程（§5、§6 必读）、运营 / GM（§9 必读，处理玩家投诉）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：部分落地。`MovementPositionHistoryStore`、offload history restore
+> 与 `LagCompensationConfig` 已存在；完整 PvP hit validation 策略仍未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`HIT_VALIDATION.md §5`、`MOVEMENT_SYNC.md`、`ENTITY_SNAPSHOT.md`
 >
@@ -362,7 +363,8 @@ PvP 战斗结束后**自动录像保存** 7 天：
 - 服务端检测：实际包到达时间 vs 玩家声称 ping
 - 不一致超过阈值 → 视为作弊
 
-参见 `08_security/ANTI_CHEAT_STRATEGY.md`（待写）。
+命中作弊检测目标见 `../03_combat/HIT_VALIDATION.md` §13；当前尚无独立
+anti-cheat gameplay 专题文档。
 
 ---
 
@@ -567,8 +569,8 @@ B 略吃亏，但**网络是 B 的责任**——不能让 A 因为 B 网络差�
   - `MOVEMENT_SYNC.md §7`（位置历史缓冲）
   - `ENTITY_SNAPSHOT.md`（远端实体显示延迟）
   - `COMBAT_EVENT_ORDERING.md §6`（事件排序）
-  - `08_security/ANTI_CHEAT_STRATEGY.md`（待写，反作弊集成）
-  - `10_liveops/PLAYER_SUPPORT.md`（待写，玩家投诉处理）
+  - `../03_combat/HIT_VALIDATION.md §13`（命中作弊检测目标设计）
+  - 当前尚无独立 player-support / liveops gameplay 专题。
 
 ---
 

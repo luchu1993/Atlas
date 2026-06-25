@@ -102,7 +102,7 @@ endif()
 # ── Tracy viewer GUI (optional) ──────────────────────────────────────────────
 # We ship the viewer alongside Atlas binaries by downloading the
 # upstream prebuilt archive matched to our pinned Tracy version, then
-# extracting Tracy.exe into bin/<build_dir>/. Building from source via
+# extracting tracy-profiler.exe into bin/<build_dir>/. Building from source via
 # add_subdirectory(${tracy_SOURCE_DIR}/profiler) sounds cleaner but
 # Tracy's profiler CMakeLists invokes an embed helper as
 # `${CMAKE_CURRENT_BINARY_DIR}/embed`, which CMake strips to a bare

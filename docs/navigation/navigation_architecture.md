@@ -1,13 +1,13 @@
-# 服务端导航子系统设计（草案 v0.3）
+# 服务端导航子系统设计
 
 > **用途**：定义 Atlas 服务端寻路（navmesh / pathfinding）子系统的分层、资源管线、
 > 后端隔离与 v1 边界。与 `docs/physics/physics_architecture.md` 同构：Atlas 拥有
 > 导航架构，Recast/Detour 是首个生产级后端。
 >
-> **状态**：草案 v0.3 — 待评审。
+> **状态**：✅ 当前 v1 基线。契约层、Recast 后端、atlas_tool 命令、Space 集成与
+> MoveTo 入口已落地；§6 列出仍在 v1 之外的边界。
 >
-> **范围**：本文描述 v1 的目标设计；契约层、Recast 后端、`atlas_tool` 命令与
-> Space 集成已落地，§6 列出仍在 v1 之外的部分。
+> **范围**：本文描述当前 v1 设计与后续边界。
 
 ---
 
@@ -70,7 +70,7 @@ src/lib/navigation_recast/   后端，唯一 include Recast/Detour 的地方（A
 
 - `navigation_recast`：Recast 离线烘焙 + Detour 运行时查询；`dt*`/`rc*` 不出该库；
   `ATLAS_ENABLE_RECAST` 门控，FetchContent 接入照 Jolt（关 demo/test、匹配 /MD 运行库、
-  版本 pin）；`tools/check_recast_isolation.py` 守 CI。
+  版本 pin）；`tools/bin/check_recast_isolation.{bat,sh}` 守 CI。
 - `atlas_tool`：`validate_nav`（纯资产层，无 recast 也可用）；`cook_nav` 内存 bake 并打印
   统计（poly / 顶点 / 可走面积 / skip 数，v1 不落 `.navcache`）；`dump_nav --obj` 导可走面
   OBJ；`path_nav --from --to [--obj]` 烘焙 + 单次 FindPath，打印状态 / 长度并可导路径折线

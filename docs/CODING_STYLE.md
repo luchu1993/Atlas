@@ -1,5 +1,8 @@
 # Atlas Engine — Coding Style Guide
 
+> Status: Current project coding standard. `AGENTS.md` / `CLAUDE.md` may add
+> task-specific operating rules, but this document remains the style baseline.
+>
 > Based on the [Google C++ Style Guide](https://google.github.io/styleguide/cppguide.html).
 > Project-specific additions are marked with **(Atlas)**.
 
@@ -442,7 +445,7 @@ TEST(TimerQueueTest, OneShotFires) {
 
 ## 14. Build & CMake
 
-- **CMake 3.20+** required
+- **CMake 3.28+** required
 - Use `atlas_add_library()`, `atlas_add_executable()`, `atlas_add_test()` macros
 - Platform-conditional sources via `if(WIN32)` / `if(UNIX AND NOT APPLE)` in CMakeLists.txt
 - Build configurations: Debug (`ATLAS_DEBUG=1`), Release (`NDEBUG`), RelWithDebInfo

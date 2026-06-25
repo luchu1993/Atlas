@@ -1,5 +1,8 @@
-# BigWorld EntityID 一致性机制参考 — Atlas 实现指南
+# BigWorld EntityID 一致性机制参考 — Atlas 对照
 
+> 状态: 参考资料。本文记录 BigWorld 源码语义；当前 Atlas 对照见第 9 节和
+> `src/lib/server/entity_types.h`。
+>
 > 来源: BigWorld Engine 14.4.1 源码分析
 > 关联: [BigWorld RPC 参考](BIGWORLD_RPC_REFERENCE.md) | [BigWorld EventHistory 参考](BIGWORLD_EVENT_HISTORY_REFERENCE.md) | [Phase 7 DBApp](../roadmap/phase07_dbapp.md) | [Phase 8 BaseApp](../roadmap/phase08_baseapp.md)
 
@@ -279,37 +282,29 @@ unlockTime_ = timestamp() + uint64(10) * stampsPerSecond();
 
 ---
 
-## 9. Atlas 实现建议
+## 9. Atlas 当前对照
 
-### 9.1 核心设计要点
+Atlas 当前没有采用早期文档里讨论过的 `uint64` EntityID。源码以
+`src/lib/server/entity_types.h` 为准：`EntityID = uint32_t`，
+`kInvalidEntityID = 0`，`kFirstLocalEntityID = 0x7F000000`。
 
-| 设计点 | BigWorld 方案 | Atlas 建议 |
+| 设计点 | BigWorld 方案 | Atlas 当前实现 |
 |---|---|---|
-| ID 类型 | `int32` | 建议 `uint64`，彻底避免回绕和空间不足 |
-| 分配源 | DBApp 中心化 | 保留此设计，DBApp 统一分配保证全局唯一 |
-| 本地缓存 | IDClient 水位控制 | 保留此设计，批量预取减少跨进程请求 |
-| 三端一致 | 原值传递 | **必须保持**，这是实体系统正确性的基础 |
-| 客户端别名 | `uint8` IDAlias (256个) | 可扩展到 `uint16` (65536) 以支持更大 AOI |
-| 本地实体 | 高位 ID 空间 | 保留此设计，高位区间留给客户端本地实体 |
-| ID 回收 | 默认关闭 | 使用 `uint64` 后基本无需回收 |
+| ID 类型 | `int32` | `uint32_t`，服务端有效区间为 `[1, kFirstLocalEntityID)` |
+| 分配源 | DBApp 中心化 | DBApp `EntityIdAllocator` 是权威源，持久化前进水位 |
+| 本地缓存 | `IDClient` 水位控制 | BaseApp / CellApp 各自用 `IDClient` 批量缓存 DBApp 下发范围 |
+| 三端一致 | 原值传递 | Base、Cell、Client 使用同一个 wire-level `EntityID` |
+| 客户端别名 | `uint8` IDAlias | 尚未实现；当前 wire 仍发送完整 entity id |
+| 本地实体 | 高位 ID 空间 | `[kFirstLocalEntityID, 0xFFFFFFFF]` 保留给 client-only 实体 |
+| ID 回收 | 默认关闭 | 不回收；DBApp crash recovery 通过安全缓冲跳过已发范围 |
+| 并发模型 | 单线程 `IDClient` | `IDClient` 标注为 BaseApp / CellApp main loop 单线程使用 |
 
-### 9.2 关键不变量
+当前关键不变量：
 
-实现时必须保证以下不变量：
+1. **全局唯一性**：DBApp 不会发出重叠范围，`EntityIdAllocator` 拒绝跨入本地 ID 区间。
+2. **三端一致性**：Base、Cell、Client 上同一实体必须使用同一个 `EntityID`。
+3. **区间隔离**：服务端只分配 `[1, kFirstLocalEntityID)`，本地实体保留高位区间。
+4. **前进水位**：`EntityIdAllocator::Persist` 带安全缓冲，崩溃恢复时跳过已发但未落库的 ID。
 
-1. **全局唯一性** — 任何时刻不能有两个不同实体使用同一 EntityID
-2. **三端一致性** — Base、Cell、Client 上的同一实体必须使用相同 ID，任何转换/映射都是 bug
-3. **ID 空间隔离** — 服务端 ID 和客户端本地 ID 必须使用不重叠的区间
-4. **分配原子性** — `getID()` 在并发环境下必须保证不返回重复 ID
-5. **ID 不跨越边界传播时丢失** — 实体迁移（Cell → Cell、Base → Base）时 ID 必须保持不变
-
-### 9.3 与 BigWorld 的差异建议
-
-1. **使用 `uint64`**: BigWorld 用 `int32` 是历史原因（2000 年代设计）。Atlas 用 `uint64` 可以：
-   - 不再需要 ID 回收机制
-   - 高 32 位可编码服务器 ID，支持多集群
-   - 低 32 位自增，单集群支持 40 亿+ 实体
-
-2. **IDAlias 可升级为 `uint16`**: BigWorld 的 256 上限在大规模场景下可能不够。`uint16` 支持 65536 个同时可见实体，每条消息仅多 1 字节。
-
-3. **无锁 ID 分配**: BigWorld 的 IDClient 是单线程的。Atlas 如果使用多线程 BaseApp，可考虑 `std::atomic<uint64>` 分配或分段预取。
+`uint64` EntityID、`uint16` IDAlias 和多线程无锁分配只保留为未来扩展候选；引入时需要
+同时更新 C++ / C# wire contract、生成器、客户端 SDK 和持久化格式。

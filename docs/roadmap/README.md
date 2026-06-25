@@ -1,5 +1,7 @@
 # Atlas Engine — 引擎开发路线图
 
+> 状态: 当前路线图索引。各 Phase 的详细状态以对应 phase 文档为准。
+>
 C# 脚本层架构(`atlas_engine` 共享库 + 嵌入式 CoreCLR + Source
 Generator + 热重载)已落地,详见
 [`docs/scripting/`](../scripting/);本文档负责脚本层之上的引擎能力分阶段
@@ -17,8 +19,8 @@ Generator + 热重载)已落地,详见
 | 10 | CellApp 空间模拟 | ✅ | Space、RangeList、AOI/Witness、Controller；持续优化在 docs/optimization | [phase10](phase10_cellapp.md) |
 | 11 | 分布式空间（Real/Ghost + CellAppMgr） | ✅ 主线 | Ghost 机制、Entity Offload、BSP 分区、CellAppMgr 负载均衡 | [phase11](phase11_distributed_space.md) |
 | 12 | 客户端 SDK | ✅ | atlas_net_client、Atlas.Client、AvatarFilter、Unity 包骨架、AtlasClient/LoginClient async API | [phase12](phase12_client_sdk.md) |
-| 13 | 高可用（Reviver + Manager Recovery） | ✅ Cell+BaseAppMgr HA + machined mesh | Reviver multi-target、worker 重建恢复、priority 仲裁、per-host machined mesh；DBAppMgr 拆到 Phase 15 RFC | [phase13](phase13_high_availability.md) |
-| 14 | 服务端权威移动与本地预测 | ✅ 14.1–14.4 主线闭环 | 输入帧协议、共享 CharacterMotor、owner 预测和解、Jolt 查询后端、Unity 碰撞/mesh/heightfield 导出、Static chunk/border query | [phase14](phase14_movement_authority.md) |
+| 13 | 高可用（Reviver + Manager Recovery） | ✅ Cell+BaseAppMgr HA + machined mesh | Reviver multi-target、worker 重建恢复、priority 仲裁、per-host machined mesh；DBAppMgr 已由 Phase 15 接入同一模式 | [phase13](phase13_high_availability.md) |
+| 14 | 服务端权威移动与本地预测 | ✅ 14.1–14.4 主线闭环 | 输入帧协议、共享 `movement_sim::Step`、owner 预测和解、Jolt 查询后端、Unity 碰撞/mesh/heightfield 导出、Static chunk/border query | [phase14](phase14_movement_authority.md) |
 | 15 | DBAppMgr — 多 DBApp 分片管理 + HA | ✅ P15.2 主线 | DBAppMgr 进程、DBApp 注册、range shard table、客户端表查询；DBApp/BaseApp/LoginApp 接入；worker shard 重报、Reviver target、verify 脚本已接入 | [phase15](phase15_dbappmgr.md) |
 
 ## 依赖关系
@@ -34,7 +36,9 @@ Generator + 热重载)已落地,详见
         │                             │
         ▼                             │
    Phase 7  DBApp + DB 层            │
-        │                             │
+        ├─────────────► Phase 15 DBAppMgr
+        │                 ▲
+        │                 │
         ▼                             │
    Phase 8  BaseApp ◄─────────────────┘
         │
@@ -51,6 +55,8 @@ Generator + 热重载)已落地,详见
    Phase 12 客户端 SDK
         │
         ├─────────────► Phase 13 高可用
+        │                    │
+        │                    └──────► Phase 15 DBAppMgr HA
         │
         ▼
    Phase 14 服务端权威移动
@@ -68,5 +74,6 @@ Generator + 热重载)已落地,详见
 | **M-World** | + Phase 10 | 角色在空间中移动，AOI 可工作 |
 | **M-Distributed** | + Phase 11 | 多 CellApp 负载均衡，跨 Cell 无缝迁移 |
 | **M-Client** | + Phase 12 | Unity 客户端可接入完整流程 |
-| **M-Production** | + Phase 13 | 具备崩溃恢复和故障转移能力 |
+| **M-Production** | + Phase 13 | Manager 级崩溃恢复和故障转移能力 |
 | **M-Movement** | + Phase 14 | 玩家只发输入帧，服务端权威移动，owner 客户端预测和解 |
+| **M-DBScale** | + Phase 15 | 多 DBApp range shard 路由、DBAppMgr worker 重建恢复与 Reviver 接入 |

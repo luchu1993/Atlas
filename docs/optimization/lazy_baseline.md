@@ -1,11 +1,13 @@
 # Lazy / Compact Baseline Snapshot
 
-**Status:** 🔵 Deferred — `SendEntityEnter` is 0.34 % of cellapp CPU
-at 200 cli; the `cached_*_envelope` mechanism in
-[group_broadcast.md](group_broadcast.md) already covers the delta
-path. Revisit only if a denser AoI scenario surfaces an enter-storm.
+**Status:** 🔵 Deferred — the last retained optimization profile had
+`SendEntityEnter` at 0.34 % of cellapp CPU; the `cached_*_envelope`
+mechanism in [group_broadcast.md](group_broadcast.md) already covers
+the delta path. Revisit only if a fresh, denser AoI scenario surfaces
+an enter-storm.
 **Subsystem:** `src/server/cellapp/witness.cc`,
-`src/csharp/Atlas.Generators.Def/Emitters/{DeltaSyncEmitter,ComponentEmitter}.cs`,
+`src/csharp/Atlas.Generators.Def/Emitters/DeltaSyncEmitter.cs`,
+`src/csharp/Atlas.Generators.Def/Emitters/ComponentEmitter.cs`,
 `src/server/cellapp/cell_entity.{h,cc}`.
 
 ## What this would be

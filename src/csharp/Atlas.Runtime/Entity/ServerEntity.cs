@@ -194,7 +194,7 @@ public abstract class ServerEntity
         if (_replicated[slot] is not T c) return false;
         c.OnDetached();
         _replicated[slot] = null;
-        // Mark dirty so the pump emits the future kRemoveComponent op.
+        // Generated pumps ignore slots with no audience-visible component delta.
         _dirtyComponents |= 1UL << slot;
         return true;
     }

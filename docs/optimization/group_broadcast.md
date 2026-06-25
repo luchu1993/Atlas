@@ -1,15 +1,15 @@
 # Envelope Cache (Shared Delta Serialisation)
 
-**Status:** ✅ Shipped (`0c1e755`).
+**Status:** ✅ Shipped.
 **Subsystem:** `src/server/cellapp/cell_entity.h` (cache members on
 `ReplicationFrame`), `src/server/cellapp/witness.cc::SendEntityUpdate`
 (cache lookup + `Witness::Event::Build` / `Witness::Event::Send` zones).
 
 ## Design
 
-A `ReplicationFrame` owns two opportunistic byte caches —
-`cached_owner_envelope` and `cached_other_envelope`. The first witness
-that needs to send a delta for that frame builds the wire envelope and
+A `ReplicationFrame` owns one opportunistic byte cache:
+`cached_other_envelope`. The first witness that needs to send a
+shareable "other" delta for that frame builds the wire envelope and
 stores it; every subsequent witness for the same frame (same tick,
 same peer, late observers replaying older frames) memcpy's the bytes
 verbatim.
@@ -29,9 +29,9 @@ same-tick fan-out and history-window replay with a single mechanism.
 
 ## Caveats
 
-- One extra `std::vector<std::byte>` per active `ReplicationFrame` per
-  audience. The frames live in a bounded history window so retained
-  capacity is bounded by `kReplicationHistoryWindow × peers × payload`.
+- One extra `std::vector<std::byte>` per active `ReplicationFrame`.
+  The frames live in a bounded history window so retained capacity is
+  bounded by `kReplicationHistoryWindow × peers × payload`.
 - Per-observer filtering (team visibility, fog-of-war) would invalidate
   the shared cache and need either parameterisation or one cache slot
   per visibility class.

@@ -1,60 +1,57 @@
-# Phase 0 Spike: IL2CPP Callback Pattern Decision
+# IL2CPP Callback Pattern Decision
 
-**Date:** 2026-05-01
-**Verdict:** ✅ **Pattern B** (`[MonoPInvokeCallback]` + delegate +
+**Status:** Current decision record for Unity callback interop. Re-run the
+probe before changing Unity runtime, target platform, or callback pattern.
+
+**Current verdict:** ✅ **Pattern B** (`[MonoPInvokeCallback]` + delegate +
 `Marshal.GetFunctionPointerForDelegate`) — adopt now.
 **Forward path:** Migrate to Pattern A (`[UnmanagedCallersOnly]` +
-function pointer) when Unity 6.6+ ships with embedded .NET 10. Migration
-is mechanical; see [Forward compatibility](#forward-compatibility).
+function pointer) only after the target Unity runtime exposes compatible
+function-pointer support and this probe passes on every target platform.
+Migration is mechanical; see [Forward compatibility](#forward-compatibility).
 
 ## Result matrix
 
 | Target | Pattern A (`[UnmanagedCallersOnly]`) | Pattern B (`[MonoPInvokeCallback]`) |
 |---|---|---|
 | Editor (Mono, Unity 2022 LTS) | ❌ | ✅ |
-| Editor (Mono, Unity 6.x ≤ 6.5) | ❌ | ✅ |
-| Standalone Windows IL2CPP (Unity ≤ 6.5) | ❌ | ✅ |
-| Android arm64 IL2CPP (Unity ≤ 6.5) | ❌ | ✅ |
-| iOS arm64 IL2CPP (Unity ≤ 6.5) | ❌ | ✅ |
+| Editor (Mono, current MVP Unity 6 `6000.0.43f1-lilith-2`) | ❌ | ✅ |
+| Standalone Windows IL2CPP (same Unity 6 editor line) | ❌ | ✅ |
+| Android arm64 IL2CPP | Re-run per target | Re-run per target |
+| iOS arm64 IL2CPP | Re-run per target | Re-run per target |
 
-**Why A fails today:** Unity 2022 through 6.5 ships an old Mono / .NET 4.x
-runtime (or IL2CPP transpiled from same), neither of which supports
+**Why A fails today:** Unity 2022.3 LTS and the current MVP Unity 6 editor
+ship an old Mono / .NET 4.x runtime (or IL2CPP transpiled from same), neither of which supports
 `[UnmanagedCallersOnly]`. The attribute exists in newer .NET, but Unity's
 embedded runtime doesn't recognize it, so the JIT/AOT chain throws at
-attribute lookup or silently emits a non-callable function pointer. This
-covers every Unity version in current use.
+attribute lookup or silently emits a non-callable function pointer. Treat
+other Unity 6.x releases as new validation targets and rerun this probe before
+changing the callback bridge.
 
-**When A becomes available:** Unity 6.6 (per Unity's published roadmap)
-replaces the embedded Mono/.NET-4.x with .NET 10 across both Editor and
-IL2CPP backends. .NET 10 supports `[UnmanagedCallersOnly]` natively, so
-Pattern A should light up unchanged. We **must** re-run this probe at
-6.6 RTM before flipping the codebase.
+**When A becomes available:** do not rely on a forecasted Unity version.
+Adopt Pattern A only after the exact target Unity editor/player runtime
+supports `[UnmanagedCallersOnly]` function pointers and this probe passes on
+every target platform.
 
-## Decision impact on the design doc
+## Current integration contract
 
-- §6.3 (`AtlasNetCallbackBridge`): rewrite for Pattern B — declare
-  `delegate` types per callback shape, attribute the static handler
-  with `[MonoPInvokeCallback(typeof(...))]`, hold a static delegate
-  field to keep the GC from collecting it, register via
+- `AtlasNetCallbackBridge` uses Pattern B: declare `delegate` types per
+  callback shape, attribute the static handler with
+  `[MonoPInvokeCallback(typeof(...))]`, hold a static delegate field to
+  keep the GC from collecting it, register via
   `Marshal.GetFunctionPointerForDelegate`.
-- §4.0.4 (sentinel pattern): simplify. The original design had C# fetch
-  function pointers to DLL-exported `AtlasNetNoop*` symbols, which is
-  awkward in Pattern B (you can't `&[LibraryImport]Method` to get a
-  raw native pointer in old IL2CPP). Switch to: **NULL fields in the
-  `AtlasNetCallbacks` struct mean "use the DLL's internal noop"**. The
-  DLL substitutes any NULL slot with its own sentinel before storing
-  the table. C# never sees the sentinel symbols.
-- §4.0.4.1 (sentinel acquisition mode A vs B): drop entirely.
-- §6.1 P/Invoke declarations: no change.
-- §10 Phase 0: status updated to ✅ done; this doc replaces the
-  decision-pending placeholder.
+- NULL fields in `AtlasNetCallbacks` mean "use the DLL's internal noop".
+  The DLL substitutes any NULL slot before storing the table; C# never
+  sees sentinel symbols.
+- P/Invoke declarations remain plain `DllImport` / `LibraryImport` shapes.
 
 ## Forward compatibility
 
-When Unity 6.6+ ships and we want to flip to Pattern A:
+When a target Unity release with compatible runtime support is adopted and we
+want to flip to Pattern A:
 
-1. **Re-run the probe** in `src/tools/il2cpp_probe/` against the new
-   runtime; confirm Pattern A fires on all four targets. Don't skip
+1. **Re-run the probe** in `src/tools/il2cpp_probe/` against the target
+   runtime; confirm Pattern A fires on all target platforms. Don't skip
    this — Unity has historically delayed runtime features past initial
    release.
 2. **Add a build-time toggle** `ATLAS_CALLBACK_PATTERN_A` (Player
@@ -73,7 +70,7 @@ When Unity 6.6+ ships and we want to flip to Pattern A:
    static OnRpcDelegate s_onRpcKeepAlive = OnRpc;
    nint fnPtr = Marshal.GetFunctionPointerForDelegate(s_onRpcKeepAlive);
 
-   // Pattern A (Unity 6.6+ planned)
+   // Pattern A (future runtime candidate)
    [UnmanagedCallersOnly(CallConvs = new[] { typeof(CallConvCdecl) })]
    static void OnRpc(nint ctx, uint eid, uint rid, byte* payload, int len)
        => /* … same handler body … */;
@@ -99,7 +96,7 @@ When Unity 6.6+ ships and we want to flip to Pattern A:
 - `src/tools/il2cpp_probe/CMakeLists.txt` — gated by
   `ATLAS_BUILD_IL2CPP_PROBE`
 - `src/tools/il2cpp_probe/Unity/ProbeComponent.cs` — both patterns
-  side-by-side; keep for re-validation at Unity 6.6
+  side-by-side; keep for re-validation when adopting a new Unity runtime
 - `src/tools/il2cpp_probe/README.md` — operational steps
 
 The probe stays in the tree as a regression check for the eventual

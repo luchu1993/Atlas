@@ -52,7 +52,7 @@ internal static unsafe partial class NativeApi
         uint entityId, uint packedRpcId, byte target,
         byte* payload, int payloadLen, ulong traceId);
 
-    // packedRpcId layout: [direction:2 | typeIndex:14 | method:8].
+    // packedRpcId layout: reply:1 | slot:7 | direction:2 | typeIndex:14 | method:8.
     public static void SendClientRpc(uint entityId, uint packedRpcId, RpcTarget target,
         ReadOnlySpan<byte> payload, ulong traceId)
     {

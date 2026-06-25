@@ -1268,7 +1268,7 @@ def main() -> int:
         if not capture_exe.exists():
             fail(
                 f"--capture-dir set but tracy-capture not found at {capture_exe}. "
-                f"Build with -DATLAS_BUILD_TRACY_VIEWER=ON."
+                f"Build the profile preset or enable -DATLAS_BUILD_TRACY_VIEWER=ON."
             )
         capture_dir = Path(args.capture_dir)
 

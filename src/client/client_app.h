@@ -67,7 +67,8 @@ class ClientApp {
   auto Authenticate(const Address& baseapp_addr, const SessionKey& session_key) -> bool;
 
   void RegisterMessageHandlers();
-  void OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte* payload, int32_t len);
+  void OnRpcMessage(EntityID entity_id, uint32_t rpc_id, uint64_t trace_id,
+                    const std::byte* payload, int32_t len);
 
   Config config_;
   EventDispatcher dispatcher_{"client"};

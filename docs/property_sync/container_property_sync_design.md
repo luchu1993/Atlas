@@ -1,5 +1,8 @@
 # 容器属性同步
 
+> **状态**：✅ 当前实现。容器 op-log 走 reliable property envelope；
+> `max_size` 目前只写入类型描述符，运行时 Observable API 尚未强制。
+>
 > 关联：[property_sync_design.md](./property_sync_design.md) · [component_design.md](./component_design.md) · [BigWorld EventHistory 参考](../bigworld_ref/BIGWORLD_EVENT_HISTORY_REFERENCE.md)
 
 `.def` 在标量基础上支持 **struct / list[T] / dict[K,V]** 与任意层级嵌套。容器同步走 op-log（精确元素级）而非整体重传，对带宽敏感的列表 / 字典属性效果最显著。
@@ -18,7 +21,7 @@
 
 - 嵌套深度 ≤ 8（DEF010）
 - dict key 必须标量（DEF011）
-- 容器 `max_size`（默认 4096）— 越界丢 op 并报错日志
+- 容器 `max_size`（默认 4096）写入类型描述符；当前 Observable API 尚未强制这个上限
 - 解析在 `DefTypeExprParser`，递归生成 `DataTypeRefModel`
 
 ---
@@ -124,7 +127,9 @@ public ObservableList<int> Scores =>
     __scoresList ??= new(() => _dirtyFlags |= ReplicatedDirtyFlags.Scores);
 ```
 
-容器内部维护 op buffer，setter / Add / RemoveAt / Clear 各自记录 `OpKind` + path，帧末由 `BuildAndConsumeReplicationFrame` 串接进 audience delta 的 ContainerOp 段。
+容器内部维护 op buffer，setter / Add / RemoveAt / Clear 各自记录 `OpKind` + path，帧末由
+`BuildAndConsumeReplicationFrame` 串接进 audience delta 的 ContainerOp 段。标量属性与容器
+op-log 同帧进入 reliable envelope；`.def reliable` 当前只保留在描述符中，不决定属性通道。
 
 `list[struct (sync=field)]` 元素的字段写入：
 
@@ -148,7 +153,7 @@ avatar.PartyAt(0).Hp = 5;      // PartyAt 返回 <Struct>ItemAt class，记 kStr
 [u8 sectionMask]                        bit0 = scalar dirty / bit1 = container dirty / bit2 = component dirty
 [if bit0] [flags : u8/u16/u32/u64] [scalar values...]
 [if bit1] [flags : u8/u16/u32/u64] [container ops...]
-[if bit2] [u8 activeSlots] [for each slot: u8 slotIdx + per-component delta...]
+[if bit2] [PackedUInt32 count] [for each slot: u8 slotIdx + per-component delta...]
 ```
 
 flags 整型按属性数量自动选型。Container ops 每条按 path 编码：
@@ -169,10 +174,9 @@ flags 整型按属性数量自动选型。Container ops 每条按 path 编码：
 | 3 | `DictErase` | `dict[K,V]`：删除 key |
 | 4 | `Clear` | 容器整体重置；同 tick 之前的 op 全部吞掉 |
 | 5 | `StructFieldSet` | struct field 模式：单字段更新 |
-| 6 | `AddComponent` | 预留（未启用），见 [component_design.md §5](./component_design.md#5-协议预留尚未启用的-op) |
-| 7 | `RemoveComponent` | 预留（未启用） |
+| 6–15 | 未分配 | 保留给后续 wire 扩展；组件生命周期 op 尚未分配，见 [component_design.md §5](./component_design.md#5-动态增删的当前边界) |
 
-四 bit 编码上限 16 值，目前 8 个已用 / 占位。
+四 bit 编码上限 16 值，目前 6 个已用。
 
 ### 4.4 同 tick 合并
 
@@ -199,7 +203,7 @@ op-log 与 integral 是双轨：热增量走 op-log，冷启动 / 重置走 inte
 
 | 场景 | 行为 |
 |---|---|
-| 容器越过 `max_size` | 脚本 API 抛 / 返错，丢 op，日志 ERROR |
+| 容器越过 `max_size` | 当前运行时未强制；`max_size` 仅作为类型描述符暴露给工具 / 后续校验 |
 | 同 tick 合并后仍超字节预算 | 回退 `Clear + Splice(0,0,snapshot)` |
 | 嵌套深度 > 8 | DEF010 注册期失败 |
 | struct 循环引用 | DEF013 注册期失败 |
@@ -217,10 +221,9 @@ AoI 进入 / Cell 迁移 / 冷启动接收方无旧版本，会退化为全量�
 需要客户端维护 `(entityId, slot) → (version, snapshot)` 缓存子系统（内存上限 / LRU / 重连恢复 / 首次 fallback），命中窗口窄；无线上 profile 数据前属于过早优化。
 
 ### 7.3 Component 嵌套 Component
-见 [component_design.md §1.2](./component_design.md#12-约束defparser--deflinker-静态校验)。
+见 [component_design.md §1.2](./component_design.md#12-约束defparser-deflinker-静态校验)。
 
 ### 7.4 运行时反射
 所有代码走源生成器；不用 `MakeGenericType` / `Emit` / `Expression.Compile`；IL2CPP AOT 安全。
 
 升级触发条件：baseline 字节占比 > 30% 且玩家复联率高 / 存在 5–30 秒短断线不 reap entity 的业务需求 / deflate 后 baseline 仍触顶带宽上限。届时接回不需破坏协议（`event_seq` 已承担定序）。
-

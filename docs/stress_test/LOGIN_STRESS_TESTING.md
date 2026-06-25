@@ -1,6 +1,6 @@
 # Atlas 登录链路压测说明
 
-> 更新时间: 2026-05-23
+> 状态: 当前工具说明；本地测量结果以最新 `.tmp/login-stress/<timestamp>/` 为准
 > 适用范围: LoginApp / BaseApp / BaseAppMgr / DBApp 的端到端登录压测与极端短线重登压测
 
 ---
@@ -23,7 +23,8 @@
 
 ### 2.1 集群拉起脚本
 
-- `tools/cluster_control/run_login_stress.py`
+- `tools/bin/run_login_stress.{bat,sh}`，实际逻辑在
+  `tools/cluster_control/run_login_stress.py`
 
 作用:
 
@@ -50,7 +51,7 @@
 执行压测前应确保:
 
 1. 已完成目标配置的构建
-   - 默认脚本使用 `build/debug-windows`
+   - 默认脚本使用 `build/debug`
 
 2. 以下程序存在于构建输出目录:
    - `machined`
@@ -61,9 +62,9 @@
    - `atlas_tool`
    - `login_stress`
 
-3. C# Runtime 存在:
+3. C# runtime 存在:
    - `runtime/atlas_server.runtimeconfig.json`
-   - `build/.../Atlas.Runtime.dll`
+   - `bin/debug/Atlas.Runtime.dll`
 
 4. 当前机器允许本地占用以下端口段:
    - `20013` LoginApp 外部端口
@@ -85,8 +86,7 @@
 - 先看成功率和基本延迟
 
 ```powershell
-python tools\cluster_control\run_login_stress.py `
-  --build-dir build/debug-windows `
+tools\bin\run_login_stress.bat `
   --config Debug `
   --clients 200 `
   --account-pool 200 `
@@ -112,8 +112,7 @@ python tools\cluster_control\run_login_stress.py `
 - 观察单进程内状态机是否能收敛
 
 ```powershell
-python tools\cluster_control\run_login_stress.py `
-  --build-dir build/debug-windows `
+tools\bin\run_login_stress.bat `
   --config Debug `
   --clients 800 `
   --account-pool 200 `
@@ -141,8 +140,7 @@ python tools\cluster_control\run_login_stress.py `
 - 当前是最高优先级问题场景
 
 ```powershell
-python tools\cluster_control\run_login_stress.py `
-  --build-dir build/debug-windows `
+tools\bin\run_login_stress.bat `
   --config Debug `
   --clients 3200 `
   --account-pool 800 `
@@ -183,7 +181,7 @@ python tools\cluster_control\run_login_stress.py `
 
 说明:
 
-- `run_login_stress.py` 会把 `source-ip` 按 worker 自动切分
+- `run_login_stress` 会把 `source-ip` 按 worker 自动切分
 - 如果本地压测受 LoginApp 限速影响，优先检查:
   - 是否配置了足够的 source IP
   - 是否需要把压测源网段加入 `trusted_cidr`
@@ -400,12 +398,10 @@ python tools\cluster_control\run_login_stress.py `
 
 ---
 
-## 9. 当前已知高压样本
+## 9. 本地产物
 
-截至 2026-04-12，可参考以下产物目录:
-
-- `.tmp/login-stress/20260412-145327`
-- `.tmp/login-stress/20260412-145720`
+每次运行会在 `.tmp/login-stress/<timestamp>/` 生成日志、临时数据库和运行配置。
+需要排查高压样本时，以最新一次运行目录为准。
 
 ---
 
@@ -418,6 +414,6 @@ python tools\cluster_control\run_login_stress.py `
 3. 跑单 BaseApp 的短线重登压测
 4. 跑多 BaseApp 的极限短线重登压测
 5. 检查 `logs/` 与 `db/atlas_login_stress.sqlite3`
-6. 再更新专项问题记录文档
+6. 按需把新基线数字回填到本说明
 
 这样可以避免一上来只看极端压测，把基础功能回归和多进程极限问题混在一起。

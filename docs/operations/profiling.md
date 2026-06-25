@@ -1,5 +1,8 @@
 # Atlas Profiling
 
+> 状态: 当前 profiling 运维 runbook。`profile` preset 会部署 Tracy viewer/CLI；
+> 具体性能结论以本地最新 capture 为准。
+>
 这是抓取运行中 Atlas 服务器集群（以及适用时 Unity 客户端）性能 trace
 的运维 runbook。下面布局的设计依据见
 [`docs/optimization/profiler_tracy_integration.md`](../optimization/profiler_tracy_integration.md)。
@@ -15,14 +18,17 @@ memory tab、锁竞争——见 [`tracy_usage.md`](tracy_usage.md)。
 | `profile` | 开，RelWithDebInfo | 生产形态的性能测试——优化后代码 + Tracy zone + 符号信息 |
 | `hybrid` | 开（RelWithDebInfo） | 不需要 release 级代码生成的快速性能验证 |
 
-需要 Tracy 工具（GUI viewer + CLI 几件套）跟着构建落到
-`bin/<build_dir>/tools/` 时，加 `-DATLAS_BUILD_TRACY_VIEWER=ON` —— 详见
-[`tracy_usage.md`](tracy_usage.md) 的"拿 viewer"小节。
+`profile` preset 已默认把 Tracy 工具（GUI viewer + CLI 几件套）构建 /
+部署到 `bin/profile/`。其他 preset 需要这些工具时，直接 CMake configure
+时显式加 `-DATLAS_BUILD_TRACY_VIEWER=ON`；详见 [`tracy_usage.md`](tracy_usage.md)
+的"拿 viewer"小节。
 
 ```bash
-# 生产形态的性能 trace
-cmake --preset profile
-cmake --build build/profile --config RelWithDebInfo
+# Windows
+tools\bin\build.bat profile
+
+# Linux / macOS / Git Bash
+tools/bin/build.sh profile
 ```
 
 `release` preset 用 `ATLAS_ENABLE_PROFILER=OFF` 构建，这把每一个
@@ -65,7 +71,7 @@ CellApp 0 始终在 9000），通过 Tracy 的编译期 `TRACY_DATA_PORT` 定义
 | Plot | 来源 | 含义 |
 |---|---|---|
 | `TickWorkMs` | `ServerApp::AdvanceTime` | 每 tick 工作时间。尖峰跟慢 tick 日志告警相关。 |
-| `BytesOut` | `Channel::Send` | 每包出方向大小。值大常跟 `Witness::Update::Pump` 关联。 |
+| `BytesOut` | `Channel::Send` | 每包出方向大小。值大常跟 `Witness::Update::PerBandPump` 关联。 |
 | `BytesIn` | `Channel::OnDataReceived` | 每包入方向大小。 |
 
 Per-pool 内存流出现在 **Memory** tab——`TimerNode` 是其中之一；后续在
@@ -73,10 +79,43 @@ Per-pool 内存流出现在 **Memory** tab——`TimerNode` 是其中之一；�
 
 ### 集群级 trace
 
-machined 起来的 4 进程集群（`atlas_cellapp` × 2、`atlas_baseapp`、
-`atlas_loginapp`）会有 4 个 Tracy listener 落在相邻端口。viewer 一次
-attach 一个；切换之间时间轴状态独立干净。今天**没有**单窗口集群视图
-——那是集成计划 Phase 5b 有意延后的 OTel 分布式 trace 工作。
+`run_world_stress` 拉起的本地集群默认包含 `loginapp`、`dbapp`、
+`baseappmgr`、`cellappmgr`，再按参数启动 N 个 `baseapp` / `cellapp` worker。
+每个启用 profiler 的进程都有自己的 Tracy listener，端口按 Tracy 规则从
+8086 起自动让位。viewer 一次 attach 一个；切换之间时间轴状态独立干净。
+今天**没有**单窗口集群视图——OTel 分布式 trace 仍在当前 profiling
+baseline 外。
+
+### 基线捕获与比较
+
+标准 profile baseline 用仓库 wrapper 跑，默认 200 client / 120 s，并把
+每个服务端进程的 `.tracy` 捕获写到 `.tmp/prof/baseline/`：
+
+```bash
+# Windows
+tools\bin\run_baseline_profile.bat
+
+# Linux / macOS / Git Bash
+tools/bin/run_baseline_profile.sh
+```
+
+wrapper 只是 `run_world_stress.py` 的固定参数集；可以直接追加
+`--clients`、`--account-pool`、`--cellapp-count` 等覆盖默认场景。脚本通过
+`tracy-capture` 连接每个目标进程的 listener，默认捕获
+`loginapp,dbapp,baseappmgr,baseapp,cellappmgr,cellapp`。
+
+对比两个 CellApp capture 时用：
+
+```bash
+# Windows
+tools\bin\compare_tracy.bat .tmp\prof\baseline\cellapp_old.tracy .tmp\prof\baseline\cellapp_new.tracy
+
+# Linux / macOS / Git Bash
+tools/bin/compare_tracy.sh .tmp/prof/baseline/cellapp_old.tracy .tmp/prof/baseline/cellapp_new.tracy
+```
+
+`compare_tracy` 调 `tracy-csvexport` 导出聚合 CSV，只比较当前工程关心的
+CellApp zones；默认阈值是 10%，可用 `--threshold` 调整。
 
 ## 抓客户端 trace（Unity Profiler）
 
@@ -94,7 +133,8 @@ Atlas Unity 客户端把同一组 zone 名通过 `ProfilerMarker` 路由出去�
 Zone 名通过 `Atlas.Diagnostics.ProfilerNames` 跟服务器对齐——比如
 客户端的 `ClientSession.DispatchPropertyUpdate` 跟服务器为同一个
 逻辑 property delta 触发的 `Channel::Send` 在两边时间戳上能对齐。
-domain reload 注意事项见 `Atlas.Client.Unity/README.md`。
+domain reload 注意事项见
+[`Atlas.Client.Unity/README.md`](../../src/csharp/Atlas.Client.Unity/README.md)。
 
 ## C# 堆与 GC
 
@@ -123,13 +163,12 @@ cmake -B build/profile-std \
 ```
 
 两个配置同时 target `RelWithDebInfo`，互不覆盖各自的 `bin/` 输出
-——build 目录名就是 bin 目录名（见 patch 0009）。两个都跑起来，
-Tracy trace 并排比对。
+——build 目录名就是 bin 目录名。两个都跑起来，Tracy trace 并排比对。
 
 > **既存 build 目录不会自动跟到新默认。** CMake 一旦把
 > `ATLAS_HEAP_ALLOCATOR` 写进 cache，之后即便仓库默认值改了，那个
 > build dir 还会用 cached 值。要让旧 build dir 跟上：要么
-> `cmake --preset <name> --fresh`（CMake 3.24+），要么删掉
+> `cmake --preset <name> --fresh`（CMake 3.28+），要么删掉
 > `build/<name>/CMakeCache.txt` 重新 configure，要么显式
 > `-DATLAS_HEAP_ALLOCATOR=mimalloc` 覆盖一次。
 
@@ -140,11 +179,11 @@ Tracy trace 并排比对。
 | Tracy viewer 一帧都没有 | `release` preset（profiler 关），或进程还没 tick |
 | C# zone 缺、C++ zone 在 | `Profiler.SetBackend(new TracyProfilerBackend())` 还没被 `Lifecycle.DoEngineInit` 调到 |
 | Plot 一直是 0 | plot 值只在 callsite 被执行时才上报；`TickWorkMs` 这种 tick-driver 的 plot 至少要让 work bracket 跑过一次 |
-| `Witness::Update::Pump` 是空的 | 没有 witness peer——通过 stress 框架加载真实实体 |
+| `Witness::Update::PerBandPump` 是空的 | 没有 witness peer——通过 stress 框架加载真实实体 |
 
-## 未来工作（不在当前 phase）
+## 当前边界
 
-- **跨进程 span 关联（OTel）**：集成计划里的 Phase 5b，没启动。所需的
+- **跨进程 span 关联（OTel）**：尚未接入。所需的
   wire-format envelope 改动会动到每一个 `bundle.cc` 消费者。
 - **每进程确定性 Tracy 端口**：今天的 auto-fallback 对开发够用。生产
   部署想要每个 CellApp 实例稳定端口的话，要么走 Tracy 编译期重编，

@@ -1,7 +1,7 @@
 # Phase 12: 客户端 SDK
 
 **Status:** ✅ 已落地。`atlas_net_client.dll` 单 `on_deliver` C API
-(ABI 0x02020000)、`Atlas.Client` 实体管理 + `AvatarFilter` peer 路径、
+(ABI 0x02050000)、`Atlas.Client` 实体管理 + `AvatarFilter` peer 路径、
 `Atlas.Client.Desktop`（`AtlasClient` / `LoginClient`）、Unity
 `AtlasNetworkManager` 和控制台 `atlas_client.exe` 已共用
 `ClientSession.DeliverFromServer` 解码。FakeCluster / RealCluster 集成测试
@@ -23,7 +23,7 @@ API 通过 P/Invoke 暴露给 C#；本文档负责 C# 侧 `Atlas.Client`（实�
 **核心优势：**
 
 - 客户端与服务端共享 `Atlas.Shared`（`SpanReader/Writer`、Entity 基类、
-  MailboxTarget、MessageIds）；实体定义、序列化、RPC 代理由
+  `Atlas.Core.RpcTarget`、MessageIds）；实体定义、序列化、RPC 代理由
   `Atlas.Generators.Def` 在编译期统一生成
 - 客户端复用服务端 C++ RUDP 实现（通过原生 DLL），杜绝 C#/C++ 双实现
   协议漂移
@@ -36,7 +36,7 @@ API 通过 P/Invoke 暴露给 C#；本文档负责 C# 侧 `Atlas.Client`（实�
 - P/Invoke 层下沉到 `Atlas.Client.Desktop`，`Atlas.Client` 保持
   netstandard2.1 / Unity 友好（无 `UnityEngine` 引用、无平台 P/Invoke），
   桌面与 Unity 通过各自 backend 接入。
-- 协议结构直接消费 `baseapp_messages.h` / `loginapp_messages.h` /
+- 协议结构直接消费 `baseapp_messages.h` / `login_messages.h` /
   `dbapp_messages.h`，不另起 C# 侧 `Protocol/` namespace。
 - Source Generator 在 `ATLAS_CLIENT` 宏下生成 `ApplyReplicatedDelta` /
   `Deserialize` / exposed RPC 发送存根 / `client_methods` 接收分发，
@@ -60,7 +60,8 @@ API 通过 P/Invoke 暴露给 C#；本文档负责 C# 侧 `Atlas.Client`（实�
    `velocity × |diff|^curvePower` 收敛（`curvePower = 2.0`）+ 线性插值 +
    外推限制。
 5. **初期不实现** — IDAlias / 位置压缩 / CacheStamps / DataDownload /
-   Vehicle / 客户端预测 / 断线重连。
+   Vehicle / 断线重连；owner movement predictor 已由 Phase 14 在 SDK 和 MVP
+   客户端侧补齐。
 
 ## LoginClient / AtlasClient
 
@@ -118,7 +119,9 @@ await client.ConnectAsync("login.example.com", 20013, user, pwHash, ct);
 
 ## 当前边界
 
-- 仍未实现 IDAlias、位置压缩、CacheStamps、DataDownload、Vehicle 和客户端预测。
+- 仍未实现 IDAlias、位置压缩、CacheStamps、DataDownload、Vehicle 和完整 session
+  resume；owner 预测已由 Phase 14 的 `OwnerMovementPredictor` /
+  `AtlasNetMovementPredictStep` 接入 Unity / UE MVP。
 - 断线重连仍由样例层 `LoginFlow` 做重新登录；SDK 尚未提供完整 session resume。
 - Unity bot 命令行只控制 bot index / duration / movement pattern；host / port 仍来自
   MVP `Bootstrap` 默认配置。

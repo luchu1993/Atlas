@@ -16,18 +16,20 @@
 namespace atlas {
 
 // ReadDataTypeRef reads [kind byte][body]; ReadDataTypeRefBody reads only
-// the body with kind supplied by the caller. The split exists because the
-// top-level kind of a container property is already carried by
-// PropertyDescriptor::data_type; repeating it on the wire would waste one
-// byte per container property.
+// the body because container records already carry the top-level kind.
 namespace {
 auto ReadDataTypeRef(BinaryReader& reader, std::size_t depth) -> std::optional<DataTypeRef>;
 auto ReadDataTypeRefBody(BinaryReader& reader, PropertyDataType kind, std::size_t depth)
     -> std::optional<DataTypeRef>;
 
-// Shared property-record reader. RegisterType (entity body) and
-// RegisterComponent (component schema) emit identical property records;
-// keeping one reader prevents the two paths from drifting.
+constexpr uint32_t kRpcReplyBit = 1u << 31;
+
+[[nodiscard]] constexpr uint32_t CanonicalRpcId(uint32_t rpc_id) {
+  return rpc_id & ~kRpcReplyBit;
+}
+
+// RegisterType and RegisterComponent emit identical property records; keeping
+// one reader prevents the two paths from drifting.
 bool ReadPropertyRecord(BinaryReader& reader, PropertyDescriptor& prop, std::string_view owner) {
   auto prop_name = reader.ReadString();
   auto data_type = reader.Read<uint8_t>();
@@ -62,9 +64,8 @@ bool ReadPropertyRecord(BinaryReader& reader, PropertyDescriptor& prop, std::str
   prop.identifier = *id_flag != 0;
   prop.reliable = *reliable_flag != 0;
 
-  // Container properties carry `[DataTypeRef body] [PackedInt max_size]`.
-  // The body skips its leading kind byte because prop.data_type already
-  // pins the top-level kind; saving one byte per container property.
+  // Container records carry `[DataTypeRef body] [PackedInt max_size]`; the
+  // body skips its leading kind byte because prop.data_type already has it.
   const bool is_container = prop.data_type == PropertyDataType::kList ||
                             prop.data_type == PropertyDataType::kDict ||
                             prop.data_type == PropertyDataType::kStruct;
@@ -266,16 +267,18 @@ const EntityTypeDescriptor* EntityDefRegistry::FindById(uint16_t type_id) const 
 }
 
 bool EntityDefRegistry::ValidateRpc(uint16_t type_id, uint32_t rpc_id) const {
-  auto it = rpc_to_type.find(rpc_id);
+  const auto canonical_id = CanonicalRpcId(rpc_id);
+  auto it = rpc_to_type.find(canonical_id);
   if (it == rpc_to_type.end()) return false;
   return types[it->second].type_id == type_id;
 }
 
 const RpcDescriptor* EntityDefRegistry::FindRpc(uint32_t rpc_id) const {
-  auto it = rpc_to_type.find(rpc_id);
+  const auto canonical_id = CanonicalRpcId(rpc_id);
+  auto it = rpc_to_type.find(canonical_id);
   if (it == rpc_to_type.end()) return nullptr;
   for (const auto& rpc : types[it->second].rpcs) {
-    if (rpc.rpc_id == rpc_id) return &rpc;
+    if (rpc.rpc_id == canonical_id) return &rpc;
   }
   return nullptr;
 }
@@ -474,9 +477,7 @@ bool EntityDefRegistry::RegisterStruct(const std::byte* data, int32_t len) {
                       desc.name);
   }
 
-  // Collision handling: allow re-register of the same (id, name) as hot-reload,
-  // but reject name/id mismatch which almost certainly means a bug in the
-  // generator.
+  // Same (id, name) may be re-registered; mismatched pairs are generator bugs.
   if (auto it = struct_id_index.find(desc.id); it != struct_id_index.end()) {
     if (structs[it->second].name != desc.name) {
       ATLAS_LOG_ERROR("register_struct: id {} already bound to '{}', rejecting '{}'", desc.id,
@@ -494,10 +495,8 @@ bool EntityDefRegistry::RegisterStruct(const std::byte* data, int32_t len) {
                       desc.name, structs[it->second].id, desc.id);
       return false;
     }
-    // An (id, name) pair that matches both would have returned in the id
-    // branch above. Only the id-new / name-duplicate case reaches here,
-    // which the `structs[it->second].id != desc.id` check catches and
-    // rejects. No matching-match fallthrough is possible.
+    // A matching (id, name) pair returns in the id branch above.
+    // Only id-new/name-duplicate reaches here, and that is rejected.
   }
 
   auto idx = structs.size();
@@ -545,9 +544,8 @@ bool EntityDefRegistry::RegisterComponent(const std::byte* data, int32_t len) {
   }
   desc.name = std::move(*name_result);
 
-  // Empty base_name (`""`) means "no inheritance". Resolution to a concrete
-  // ComponentDescriptor* happens at attach time, not here, because the base
-  // may be registered after this descriptor in a single startup batch.
+  // Empty base_name means no inheritance; concrete resolution happens later.
+  // A startup batch may register the base after this descriptor.
   auto base_name_result = reader.ReadString();
   if (!base_name_result) {
     ATLAS_LOG_ERROR("register_component: failed to read base_name for '{}'", desc.name);
@@ -707,9 +705,8 @@ auto EntityDefRegistry::RegisterFromBinaryBuffer(std::span<const std::byte> buf)
 
   LoadedCounts out;
 
-  // Section order: structs -> components -> types. References resolve in
-  // this order: types reference component_type_id (must exist), and
-  // components / entity properties may reference struct_id (must exist).
+  // Section order is structs -> components -> types.
+  // Later sections may reference ids registered by earlier sections.
   auto struct_count_result = reader.ReadPackedInt();
   if (!struct_count_result) {
     return Error{ErrorCode::kInvalidArgument,

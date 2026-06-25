@@ -6,8 +6,10 @@ team / fog-of-war specs land.
 
 ## What this would be
 
-AoI today is a pure distance check: every entity within radius is
-visible at full fidelity. Many designs need cheaper variants:
+AoI visibility admission today is distance-based: entities inside the
+observer radius are considered visible. Replication fidelity is then
+shaped by the existing LOD bands and bandwidth budget. Many designs
+need cheaper variants:
 
 - **Fog of war** — enemies invisible until scouted by allies.
 - **Stealth / invisibility** — selective per-observer hiding.

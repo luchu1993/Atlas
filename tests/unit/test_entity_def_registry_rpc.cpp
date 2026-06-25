@@ -1,23 +1,5 @@
-// Tests for RpcDescriptor direction/exposed metadata via the binary
-// descriptor path (EntityDefRegistry::RegisterType).
-//
-// BaseApp relies on RpcDescriptor::Direction() and RpcDescriptor::exposed
-// being populated correctly so it can:
-//   - reject client→Base RPCs whose direction isn't 0x03
-//   - reject client→Cell RPCs whose direction isn't 0x02
-//   - reject non-exposed RPCs (exposed == kNone)
-//   - enforce OwnClient vs AllClients cross-entity rules
-//
-// These tests synthesize a minimal binary descriptor matching the wire format
-// emitted by Atlas.Generators.Def.TypeRegistryEmitter, feed it through
-// RegisterType, and assert the registry returns the expected fields.
-//
-// Direction is encoded in the packed rpc_id (bits 23:22). RpcIdEmitter uses:
-//   - client_methods → 0x00
-//   - cell_methods   → 0x02
-//   - base_methods   → 0x03
-// This test locks those bindings so a regression in either the C# generator
-// or the C++ parser would fail loud.
+// Covers RpcDescriptor accessors and registry metadata parsed from generator
+// binary descriptors.
 
 #include <gtest/gtest.h>
 
@@ -28,9 +10,8 @@ namespace atlas {
 
 namespace {
 
-// Encode a minimal descriptor matching TypeRegistryEmitter.EmitRegistrar.
-// type_id is 16-bit, rpc list is shaped {name, rpc_id, param_count,
-// [param_types], exposed}.
+// Encodes the minimal TypeRegistryEmitter descriptor shape needed by these
+// tests: {type header, rpc list, compression tail}.
 struct RpcSpec {
   std::string name;
   uint32_t rpc_id;
@@ -60,11 +41,13 @@ auto MakeDescriptor(std::string_view type_name, uint16_t type_id, bool has_cell,
   return w.Detach();
 }
 
-// Pack direction/typeIndex/methodIndex into an rpc_id the same way
-// TypeRegistryEmitter does: (direction << 22) | (typeIndex << 8) | methodIndex.
-constexpr uint32_t PackRpcId(uint8_t direction, uint16_t type_index, uint8_t method_index) {
-  return (static_cast<uint32_t>(direction) << 22) | (static_cast<uint32_t>(type_index) << 8) |
-         static_cast<uint32_t>(method_index);
+constexpr uint32_t kReplyBit = 1u << 31;
+
+// Pack the rpc_id layout emitted by RpcIdEncoder, with reply bit left clear.
+constexpr uint32_t PackRpcId(uint8_t direction, uint16_t type_index, uint8_t method_index,
+                             uint8_t slot_idx = 0) {
+  return (static_cast<uint32_t>(slot_idx) << 24) | (static_cast<uint32_t>(direction) << 22) |
+         (static_cast<uint32_t>(type_index) << 8) | static_cast<uint32_t>(method_index);
 }
 
 class RegistryRpcTest : public ::testing::Test {
@@ -74,6 +57,18 @@ class RegistryRpcTest : public ::testing::Test {
 };
 
 }  // namespace
+
+TEST(RpcDescriptorTest, SlotIdxIgnoresReplyBit) {
+  RpcDescriptor desc;
+  desc.rpc_id = kReplyBit | PackRpcId(/*direction=*/0x02, /*type_index=*/100,
+                                      /*method_index=*/7, /*slot_idx=*/3);
+
+  EXPECT_EQ(desc.SlotIdx(), 3);
+  EXPECT_EQ(desc.Direction(), 0x02);
+  EXPECT_EQ(desc.TypeIndex(), 100);
+  EXPECT_EQ(desc.MethodIndex(), 7);
+  EXPECT_TRUE(desc.IsComponentRpc());
+}
 
 TEST_F(RegistryRpcTest, CellMethodDirectionExtracted) {
   const uint16_t kTypeId = 100;
@@ -97,6 +92,26 @@ TEST_F(RegistryRpcTest, CellMethodDirectionExtracted) {
   EXPECT_TRUE(EntityDefRegistry::Instance().IsExposed(kCellRpcId));
 }
 
+TEST_F(RegistryRpcTest, ReplyBitUsesCanonicalRpcDescriptor) {
+  const uint16_t kTypeId = 104;
+  const uint32_t kCellRpcId = PackRpcId(/*direction=*/0x02, kTypeId, /*method=*/1);
+  const uint32_t kReplyRpcId = kReplyBit | kCellRpcId;
+
+  RpcSpec rpc{"MoveTo", kCellRpcId, ExposedScope::kAllClients, {}};
+  auto blob = MakeDescriptor("Avatar", kTypeId, true, true, std::span{&rpc, 1});
+
+  ASSERT_TRUE(
+      EntityDefRegistry::Instance().RegisterType(blob.data(), static_cast<int32_t>(blob.size())));
+
+  const auto* desc = EntityDefRegistry::Instance().FindRpc(kReplyRpcId);
+  ASSERT_NE(desc, nullptr);
+  EXPECT_EQ(desc->rpc_id, kCellRpcId);
+  EXPECT_TRUE(EntityDefRegistry::Instance().ValidateRpc(kTypeId, kReplyRpcId));
+  EXPECT_EQ(EntityDefRegistry::Instance().GetExposedScope(kReplyRpcId),
+            ExposedScope::kAllClients);
+  EXPECT_TRUE(EntityDefRegistry::Instance().IsExposed(kReplyRpcId));
+}
+
 TEST_F(RegistryRpcTest, BaseMethodDirectionExtracted) {
   const uint16_t kTypeId = 101;
   const uint32_t kBaseRpcId = PackRpcId(/*direction=*/0x03, kTypeId, /*method=*/1);
@@ -117,9 +132,8 @@ TEST_F(RegistryRpcTest, BaseMethodDirectionExtracted) {
 
 TEST_F(RegistryRpcTest, ClientMethodDirectionExtracted) {
   const uint16_t kTypeId = 102;
-  // client_methods normally are not exposed (client is the CALLEE, not caller),
-  // but the direction bits must still be present so the registry can reject
-  // attempts to invoke them via ClientBaseRpc/ClientCellRpc channels.
+  // Client methods are callee-side but still carry direction bits, so server
+  // ingress can reject attempts to invoke them through client RPC channels.
   const uint32_t kClientRpcId = PackRpcId(/*direction=*/0x00, kTypeId, /*method=*/1);
 
   RpcSpec rpc{"OnDamage", kClientRpcId, ExposedScope::kNone, {}};
@@ -157,9 +171,8 @@ TEST_F(RegistryRpcTest, UnknownRpcIdReturnsNullptr) {
   EXPECT_FALSE(EntityDefRegistry::Instance().IsExposed(0xDEADBEEF));
 }
 
-// ValidateRpc couples rpc_id to the registered type — cross-entity RPC calls
-// (where the client sends rpc_id belonging to entity A but targets entity B)
-// must be rejectable via this helper.
+// ValidateRpc couples rpc_id to the registered type so cross-entity calls can
+// be rejected by the BaseApp ingress path.
 TEST_F(RegistryRpcTest, ValidateRpcRejectsWrongType) {
   const uint16_t kTypeA = 200;
   const uint16_t kTypeB = 201;

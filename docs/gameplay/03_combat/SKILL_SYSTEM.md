@@ -4,7 +4,8 @@
 >
 > **读者**：工程（必读）、战斗策划（必读）、动画师（§11 相关）、工具开发（§13 相关）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，尚未落地完整 Skill runtime / DSL / timeline。当前工程
+> 只有 Phase 14 `MovementCommand` 使用 `skill_id` 承载第一批技能位移意图。
 >
 > **前置文档**：`OVERVIEW.md`、`00_foundations/DETERMINISM_CONTRACT.md`
 >
@@ -547,7 +548,7 @@ Graph(.asset) ──[Unity Editor 工具]──► DSL(.txt) ──[build]──
 
 这保证了无论是否用 Graph，**运行时执行路径唯一**（bytecode 解释器），避免双轨复杂度。
 
-详细设计延后至 `SKILL_GRAPH_EDITOR.md`（未来文档）。
+Graph 编辑器设计在启动该工具时再补；当前仓库不保留占位文档。
 
 ---
 
@@ -564,8 +565,8 @@ skill_id | name       | mode        | custom_handler
 
 Script 模式下：
 - **基础数值仍走 Excel**（伤害系数、冷却、MP）
-- **执行逻辑走自定义 C# 类**，位于 `src/scripts/skills/`
-- 由 CoreCLR 脚本层热加载（支持不停服更新）
+- **执行逻辑走自定义 C# handler 类型**，随未来 gameplay 脚本程序集加载
+- 由 CoreCLR 脚本层热加载；具体程序集布局在 Skill runtime 落地时确定
 - 必须实现 `ISkillHandler`：
 
 ```csharp
@@ -739,7 +740,7 @@ data/source/
 - `time_ms` 在 Timeline 内不得重复过多（同 time_ms 超过 8 个事件告警）
 - Dynamic skill 必须有 SkillStates 且包含 `InitialState`
 - 所有 DSL 片段必须编译通过
-- `custom_handler` 引用必须在 `src/scripts/skills/` 找到对应类
+- `custom_handler` 引用必须解析到已加载 gameplay 脚本程序集中的 handler 类型
 
 **违例阻塞 build**，不是警告。
 
@@ -776,37 +777,41 @@ data/source/
 
 ### 11.3 命中判定 & Lag Compensation
 
-- `SpawnHitbox` 产生 Hitbox 实体，进入 `HitValidation` 系统
+本节描述 Skill runtime 落地后的目标集成；当前仓库只有 position history、
+`RewindSphereHit` 和 `PhysicsQuery` 等基础件，没有 `HitboxInstance` /
+`HitValidation` runtime。
+
+- 目标上 `SpawnHitbox` 产生 Hitbox 实体，进入 `HitValidation` 系统
 - Hitbox 在 lifetime 内每 tick 扫描目标
 - PvP 语境下 Hitbox 扫描走延迟补偿路径（详见 `02_sync/LAG_COMPENSATION.md`）
 - 命中时触发 Hitbox 的 `OnHit` DSL（参数包含 target、damage_scale 等）
 
 ### 11.4 Animation（Unity 客户端）
 
-**单向**：
+**目标单向流**：
 - Skill timeline 的 `PlayAnim` action → 发送 `AnimCommand` 给客户端 Animator
 - Client 收到 → 切 Animator state
 - **Animation Notify 不回驱动 Skill 事件**（动作-网络解耦原则）
 
-**动画驱动位移**：
+**目标动画驱动位移**：
 - 构建期从 AnimationClip 提取位移曲线（root motion），存为 curve data
 - Skill 的 `Dash` action 引用该曲线
 - 运行时服务端 + 客户端用同一曲线，天然同步
 
 ### 11.5 AI
 
-- AI 是 skill 的**消费者**，通过 `SkillSystem.Cast(caster, skill_id, target)` 释放
-- AI 决策逻辑在行为树 / 状态机（独立系统，见 `04_ai/`）
+- 目标 AI 是 skill 的**消费者**，通过 `SkillSystem.Cast(caster, skill_id, target)` 释放
+- 目标 AI 决策逻辑在行为树 / 状态机（独立系统，见 `04_ai/`）
 - Boss 特殊技能走 custom_handler 获得最大灵活度
 
 ### 11.6 网络同步
 
-**三类事件广播**：
+**目标三类事件广播**：
 - `SkillStart { instance_id, caster, skill_id, target, level, start_tick, seed }`
 - `SkillStateChange { instance_id, new_state, entry_tick }`
 - `SkillEnd { instance_id, reason }`
 
-**客户端预测**：
+**目标客户端预测**：
 - 客户端立即创建本地 SkillInstance
 - 服务端 `SkillStart` ack 后对照
 - 一致 → 继续；不一致 → 服务端权威替换
@@ -873,7 +878,8 @@ data/source/
 
 ### 13.1 单元测试
 
-每个 Action / DSL 函数 / State Machine 模式有单元测试，例如：
+Skill runtime 落地后，每个 Action / DSL 函数 / State Machine 模式都要有
+单元测试，例如：
 
 ```csharp
 [Test]
@@ -894,14 +900,15 @@ public void SpawnHitbox_DealsDamageOnEnemyInRange() {
 
 ### 13.2 端同测试（强制）
 
-每新增 Action / DSL 函数：
+Skill runtime 落地后，每新增 Action / DSL 函数：
 - 服务端仿真与客户端仿真跑 1000 次随机场景
 - 最终状态 diff 必须为空
 - 违反 → PR 不得合并
 
 ### 13.3 Timeline 可视化
 
-Unity Editor 工具（详见 `09_tools/FRAME_DATA_EDITOR.md`）：
+目标 Unity Editor 工具（详见
+[`09_tools/FRAME_DATA_EDITOR.md`](../09_tools/FRAME_DATA_EDITOR.md)）：
 - 读取 SkillTimeline 数据
 - 时间轴 Gantt 图展示所有事件
 - 实时预览：在 Editor 内播放技能，看 Animator / VFX / Hitbox 同步
@@ -909,7 +916,8 @@ Unity Editor 工具（详见 `09_tools/FRAME_DATA_EDITOR.md`）：
 
 ### 13.4 战斗回放
 
-- 录制：`SkillSystem` 记录每个 instance 的 `(start_tick, state_changes, random_seeds, inputs)` 事件流
+- 录制：目标 `SkillSystem` 记录每个 instance 的 `(start_tick, state_changes,
+  random_seeds, inputs)` 事件流
 - 回放：加载记录 → 以同种子重建 instance → 验证状态复现
 - 用于：bug 复现、平衡 review、反作弊审计
 
@@ -963,7 +971,9 @@ GAS 是为 UE5 Replication 设计的，假设"客户端是游戏的一部分权�
 
 ### Q4: Buff 给的属性加成如何影响 Skill 内的伤害公式？
 
-`caster.atk_power` 这个 DSL 变量在求值时**走 StatCache**（见 `STAT_AND_DAMAGE.md`），已经包含所有 active buff 的 modifier 聚合。Skill 无需知道 buff 细节。
+目标语义是：`caster.atk_power` 这个 DSL 变量在求值时**走 StatCache**
+（见 `STAT_AND_DAMAGE.md`），StatCache 聚合 active buff 的 modifier。当前
+仓库尚未落地通用 Buff / StatCache runtime。
 
 ### Q5: 施法打断后 Exit Actions 会触发吗？
 
@@ -996,11 +1006,12 @@ Timeline 事件的可选 `condition_dsl_ref` 字段支持简单情况。
 
 ### Q9: 技能动画里的 root motion 能用吗？
 
-**不用 Unity 运行时 root motion**（非确定），而是：
+**不用 Unity 运行时 root motion**（非确定）。目标流程是：
 - 在构建期从 AnimationClip 提取 root motion 为曲线数据
 - Skill Dash action 引用该曲线
 - 运行时服务端+客户端都用同一曲线数据
 - 表现上看起来像 root motion，实际是 curve-driven movement
+当前仓库尚未提供 root-motion 提取工具。
 
 ### Q10: 我发现一个 Action 组合不了我想要的效果，怎么办？
 

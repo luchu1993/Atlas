@@ -270,8 +270,9 @@ def verify_atdf_matches_cluster(defs_bin: Path, config: str, exe: Path) -> None:
     source of def_mismatch at login."""
     cluster_dll = REPO_ROOT / "bin" / config.lower() / "Atlas.Mvp.Cell.dll"
     if not cluster_dll.exists():
+        build_cmd = f"tools\\bin\\build.bat {config.lower()} or tools/bin/build.sh {config.lower()}"
         info(f"cluster dll {cluster_dll} missing; skipping digest verify "
-             f"(run build.py {config.lower()} first to enable this check)")
+             f"(run {build_cmd} first to enable this check)")
         return
     out = run_capture([str(exe), "--digest-only", str(cluster_dll)])
     cluster_digest = ""
@@ -283,12 +284,14 @@ def verify_atdf_matches_cluster(defs_bin: Path, config: str, exe: Path) -> None:
         fail(f"DefDump --digest-only produced no digest for {cluster_dll}")
     staged_digest = read_atdf_digest(defs_bin)
     if cluster_digest != staged_digest:
+        build_cmd = f"tools\\bin\\build.bat {config.lower()} or tools/bin/build.sh {config.lower()}"
         fail(f"ATDF digest mismatch:\n"
              f"  staged   {staged_digest}\n"
              f"  cluster  {cluster_digest}\n"
              f"  source   {cluster_dll}\n"
-             f"Rebuild the cluster (python tools/build.py {config.lower()}) AND "
-             f"re-run build_mvp_ue.py without --skip-defs so both sides regenerate.")
+             f"Rebuild the cluster ({build_cmd}) AND re-run "
+             f"tools\\bin\\build_mvp_ue.bat or tools/bin/build_mvp_ue.sh without "
+             f"--skip-defs so both sides regenerate.")
     info(f"ATDF digest verified against cluster ({cluster_digest[:16]}…)")
 
 

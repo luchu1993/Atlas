@@ -1,8 +1,8 @@
 # Script PublishReplicationAll — GC Pressure
 
 **Status:** ✅ Shipped (round 1 — codegen boxing eliminated). Further
-reductions (batch P/Invoke, dirty-skip) are deferred until business
-complexity grows; see [Deferred work](#deferred-work) below.
+reductions (batch P/Invoke, dirty-entity indexing) are deferred until
+business complexity grows; see [Deferred work](#deferred-work) below.
 **Subsystem:** `src/csharp/Atlas.Runtime/Entity/EntityManager.cs`,
 `src/csharp/Atlas.Runtime/Core/Lifecycle.cs`,
 `src/csharp/Atlas.Generators.Def/Emitters/PropertyCodec.cs`,
@@ -61,13 +61,16 @@ saving: ~50 % of mean `PublishReplicationAll` time at 100+ entities.
 Cost: stable managed/native memory layout for the entry struct, plus
 a batched-reception path on the C++ side.
 
-### Skip unchanged entities
+### Dirty-entity index
 
-`PublishReplicationAll` short-circuits at the publish step when the
-delta is empty, but serialization still runs. Move the dirty check
-ahead of `BuildAndConsumeReplicationFrame` so static entities skip
-entirely. Saving is proportional to the static-entity fraction —
-80 %+ in social hubs / PvE towns, much less in dense PvP.
+`BuildAndConsumeReplicationFrame` already computes `hasEvent` /
+`hasVolatile` first and returns `false` before serializing when an
+entity has no dirty property, component, or volatile state. The
+remaining static-entity cost is the `EntityManager` scan, writer
+reset, and virtual call. If that appears in a future capture, maintain
+a dirty entity set so static entities skip the pump entirely. Saving
+is proportional to the static-entity fraction — 80 %+ in social hubs
+/ PvE towns, much less in dense PvP.
 
 ## Caveats
 

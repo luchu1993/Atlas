@@ -1,5 +1,8 @@
 # Atlas Engine
 
+> 状态：当前项目入口说明。更细的阶段完成度以
+> [`docs/roadmap/README.md`](docs/roadmap/README.md) 为准。
+>
 Atlas 是一个基于 **C++20** 与 **C# (.NET)** 的分布式 MMO 服务器框架。它采用类似 BigWorld 的 Login、Base、Cell、Database 与 Manager 多进程拆分，同时通过嵌入式 CoreCLR 运行托管玩法逻辑。
 
 **[English](README.md)**
@@ -14,11 +17,15 @@ Atlas 面向大型、长线在线世界：服务器需要跨进程扩展，模�
 - Base/Cell 实体模型、Mailbox RPC 与生成式 C# 实体代码。
 - CellApp 空间模拟，包括基于 Witness 的 AoI、Ghost 实体、BSP 分区与 offload 协调。
 - 面向服务端玩法脚本的嵌入式 .NET 运行时。
-- C# 客户端运行时，提供桌面与 Unity 集成表面。
+- C# 客户端运行时，提供桌面与 Unity 集成表面；UE MVP 另有 C++ 插件 /
+  客户端接入路径。
 - 运行时加载的 XML 与 SQLite 数据库插件。
+- DBAppMgr range 分片、worker 重建式 manager HA，以及对 CellAppMgr /
+  BaseAppMgr / DBAppMgr 的 Reviver 监督。
 - Tracy instrumentation、基线压测驱动与 trace 对比工具。
 
-MySQL、DBAppMgr 与 Reviver 已在代码树中占位，但还不是完整的生产功能。
+MySQL 后端仍是占位。DB 副本、shard auto-rebalance 和完整 session resume
+不属于当前生产基线。
 
 ## MVP Unity 示例
 
@@ -36,7 +43,7 @@ tools\bin\setup_mvp_unity.bat
 tools\bin\run_mvp_cluster.bat
 ```
 
-在 Unity Hub 中打开 `samples/mvp/UnityClient` 后点击 Play。客户端代码拆成 `Assets/Scripts/Runtime` 与 `Assets/Scripts/Editor` 两个 asmdef，Runtime 下按 app、world、views、UI、input、projectiles、debug overlays 模块归类。需要打包 standalone player 时运行 `tools\bin\build_mvp_unity.bat`；如果 Unity 工程缺少版本文件，脚本会自动扫描本机已安装的 Unity Editor。
+在 Unity Hub 中打开 `samples/mvp/UnityClient` 后点击 Play。客户端代码拆成 `Assets/Scripts/Runtime` 与 `Assets/Scripts/Editor` 两个 asmdef，Runtime 下按 app、camera、world、views、UI、input、projectiles、debug overlays 模块归类。需要打包 standalone player 时运行 `tools\bin\build_mvp_unity.bat`；脚本会按 `ProjectSettings/ProjectVersion.txt` 解析 Unity Editor，也可用 `--unity` / `UNITY_EXE` 覆盖编辑器路径。
 
 ![Atlas MVP Unity 示例](docs/mvp/mvp_unity.gif)
 
@@ -47,21 +54,24 @@ Client
   │
   ▼
 LoginApp ──► BaseAppMgr ──► BaseApp ◄──► CellApp
-                         │               │
-                         ▼               ▼
-                       DBApp         CellAppMgr
-                         │
-                    XML / SQLite
+   │                         │             │
+   └──────────────┐          │             ▼
+                  ▼          ▼         CellAppMgr
+                DBAppMgr ─► DBApp
+                              │
+                         XML / SQLite
 ```
 
 | 进程 | 职责 |
 |---|---|
 | `machined` | 本机服务注册、心跳目标与 Birth/Death 通知中心。 |
+| `Reviver` | 监督 manager 进程，并通过 worker 重建恢复拉起新实例。 |
 | `LoginApp` | 面向客户端的登录网关。 |
 | `BaseAppMgr` | BaseApp 注册、选择与集群协调。 |
 | `BaseApp` | Base 实体所有权、客户端代理状态、Mailbox 路由、持久化转交与脚本运行。 |
 | `CellAppMgr` | CellApp 注册、空间几何、BSP 分区与 offload 协调。 |
 | `CellApp` | 空间实体、移动、Witness 更新、AoI、Ghost 与脚本运行。 |
+| `DBAppMgr` | DBApp 注册、range shard table 权威与 shard table 恢复。 |
 | `DBApp` | 通过配置的数据库后端异步持久化实体。 |
 
 服务器进程共享一套小型框架层级：
@@ -162,16 +172,17 @@ tools\bin\build_linux.bat --with-tests --label "unit|integration"
 ## 测试
 
 ```bash
-cd build/debug
-ctest --build-config Debug --label-regex unit --output-on-failure
-ctest --build-config Debug --label-regex integration --output-on-failure
-ctest --build-config Debug -R test_math --output-on-failure
+ctest --test-dir build/debug -C Debug --label-regex unit --output-on-failure
+ctest --test-dir build/debug -C Debug --label-regex integration --output-on-failure
+ctest --test-dir build/debug -C Debug -R test_math --output-on-failure
 ```
 
 C# 测试：
 
 ```bash
-dotnet test tests/csharp
+dotnet test tests/csharp/Atlas.Runtime.Tests/Atlas.Runtime.Tests.csproj --configuration Debug
+dotnet test tests/csharp/Atlas.Generators.Tests/Atlas.Generators.Tests.csproj --configuration Debug
+dotnet test tests/csharp/Atlas.Client.Tests/Atlas.Client.Tests.csproj --configuration Debug
 ```
 
 提交 C++ 修改前，运行单元测试并对改动的 C++ 文件执行 clang-format：
@@ -271,7 +282,7 @@ tools\bin\build_mvp_unity.bat
 </entity>
 ```
 
-属性的 `scope` 决定哪些观察者能看到写入：`all_clients`、`own_client`、`other_clients`、`cell_public`、`cell_public_and_own`、`base`、`base_and_client`。`persistent="true"` 接入 DBApp 持久化；`reliable="true"` 走可靠通道下发 delta。
+属性的 `scope` 决定哪些观察者能看到写入：`all_clients`、`own_client`、`other_clients`、`cell_public`、`cell_public_and_own`、`base`、`base_and_client`。`persistent="true"` 接入 DBApp 持久化；`reliable="true"` 当前只保留在描述符中，属性 delta 目前全部走可靠通道。
 
 服务端 — 给生成属性赋值会向 scope 内每个观察者发出 delta；`Client.<Method>(...)` 是强类型 stub，自动路由到对应的客户端 RPC。
 
@@ -307,13 +318,24 @@ public partial class Avatar : ClientEntity
 
 ```bash
 tools\bin\build.bat profile
+tools\bin\run_baseline_profile.bat
+```
+
+```bash
+tools/bin/build.sh profile
 tools/bin/run_baseline_profile.sh
 ```
 
 对比 CellApp 捕获：
 
 ```bash
-python tools/profile/compare_tracy.py \
+tools\bin\compare_tracy.bat ^
+  .tmp\prof\baseline\cellapp_<old>.tracy ^
+  .tmp\prof\baseline\cellapp_<new>.tracy
+```
+
+```bash
+tools/bin/compare_tracy.sh \
   .tmp/prof/baseline/cellapp_<old>.tracy \
   .tmp/prof/baseline/cellapp_<new>.tracy
 ```

@@ -1,5 +1,7 @@
 # 延期事项 / 后续决策
 
+> 状态: 当前延期事项清单。条目未代表已承诺排期，只有对应工程启动时才转入实现文档。
+>
 ## 已延期
 
 ### 战斗代码共享(诉求 C)
@@ -25,8 +27,10 @@ PIE 单 world OK(per-world subsystem 隔离)。但发布的无缝大世界:
 
 ### Hot Reload / PIE 多客户端调试
 
-每个 PIE 实例独立 `atlas_net_client` 句柄,需要给 native DLL 加 instance ID。
-**何时处理**:根据 UE 多客户端调试体验需要立项。
+native DLL 已按 `AtlasNetContext` 分实例；`FAtlasNetClient` 用
+`ContextRegistry` 把静态回调路由回对应 client。剩余问题是 PIE 多客户端
+热重载 / 重启时的调试体验与自动化流程。
+**何时处理**:需要稳定 UE 多客户端调试时立项。
 
 ### RPC Reply Latent UFUNCTION 暴露
 

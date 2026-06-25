@@ -4,7 +4,7 @@
 > 抽象与默认实现、X-macro 单一定义源、主线程模型、TLS / 双 Assembly
 > 解决方案均在 `main` 上工作并有测试覆盖;Provider 特化目前仅
 > `BaseApp` / `CellApp`,DBApp / Reviver / DBAppMgr 不是当前脚本宿主(详见
-> [README.md §7](README.md#7-完成状态))。
+> [README.md §6](README.md#6-完成状态))。
 
 C# 脚本层与 C++ 引擎之间的双向调用、进程差异化与主线程语义建立在三件
 基础设施之上。本文记录这三条决策的"是什么"与"为什么",以及踩过的两个
@@ -19,8 +19,8 @@ C# 端 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找,无需
 
 落地点:
 
-- CMake 目标:`build/<preset>/src/lib/clrscript/Debug/atlas_engine.dll`(或
-  Linux `.so`)。
+- CMake 目标:`bin/<preset>/atlas_engine.dll`(Windows)或
+  `bin/<preset>/libatlas_engine.so`(Linux)。
 - 导出宏:`src/lib/clrscript/clr_export.h` 定义
   `ATLAS_NATIVE_API = extern "C" + ATLAS_EXPORT`;`ATLAS_ENGINE_EXPORTS`
   由 `atlas_engine` 目标内部设置。
@@ -29,10 +29,10 @@ C# 端 `[LibraryImport("atlas_engine")]` 走标准 DLL 查找,无需
 
 ## 2. INativeApiProvider 进程级适配
 
-`atlas_*` 导出函数统一通过 `src/lib/clrscript/clr_native_api_defs.h` 的
+`Atlas*` 导出函数统一通过 `src/lib/clrscript/clr_native_api_defs.h` 的
 X-macro 一次性展开函数声明和实现，最终转发到 `INativeApiProvider`。
 每个服务端可执行文件在
-`ClrHost::Initialize` 之前注册自己的 Provider,`atlas_*` 函数体一行
+`ClrHost::Initialize` 之前注册自己的 Provider,`Atlas*` 函数体一行
 `GetNativeApiProvider().XXX(...)` 转发。
 
 抽象:`src/lib/clrscript/native_api_provider.h` 中 `class INativeApiProvider`

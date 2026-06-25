@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Atlas.Client;
 using Atlas.Client.Desktop;
 using Atlas.Client.IntegrationTests.Native;
@@ -55,19 +56,19 @@ public sealed class AvatarFilterFakeClusterTests : IDisposable
         }
     }
 
-    private void ConnectAndAuth()
+    private async Task ConnectAndAuth()
     {
         var task = _client.ConnectAsync("127.0.0.1", _cluster.LoginAppPort, "alice", "pwd-hash");
         DriveUntil(() => task.Status != AtlasTaskStatus.Pending, timeoutMs: 8000);
         Assert.Equal(AtlasTaskStatus.Succeeded, task.Status);
-        task.GetAwaiter().GetResult();
+        await task;
         Assert.Equal(AtlasNetState.Connected, _client.State);
     }
 
     [Fact]
-    public void EntityEnterEnvelopeCreatesPeerWithFilter()
+    public async Task EntityEnterEnvelopeCreatesPeerWithFilter()
     {
-        ConnectAndAuth();
+        await ConnectAndAuth();
 
         const uint kPeerEid = 1234;
         Assert.True(_cluster.PushEntityEnter(eid: kPeerEid, typeId: 999,
@@ -85,9 +86,9 @@ public sealed class AvatarFilterFakeClusterTests : IDisposable
     }
 
     [Fact]
-    public void VolatilePositionUpdateGrowsFilterRing()
+    public async Task VolatilePositionUpdateGrowsFilterRing()
     {
-        ConnectAndAuth();
+        await ConnectAndAuth();
 
         const uint kPeerEid = 5678;
         Assert.True(_cluster.PushEntityEnter(eid: kPeerEid, typeId: 999,

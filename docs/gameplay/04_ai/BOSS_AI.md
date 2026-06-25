@@ -4,7 +4,7 @@
 >
 > **读者**：Boss 战斗设计（必读）、动画师（§6 必读）、特效美术（§7 必读）、工程（§4、§9 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计。当前尚未落地 Boss AI / encounter runtime。
 >
 > **前置文档**：`OVERVIEW.md`、`AI_ARCHITECTURE.md`、`SKILL_SYSTEM.md`（custom_handler）、`COMBAT_FEEL.md`
 >
@@ -206,7 +206,7 @@ Boss 战测试用：
 - **录像回放**：详细查看每阶段切换
 - **遥测**：上线后看玩家通关率，太低 / 太高都需调整
 
-参见 `09_tools/COMBAT_REPLAY.md`（待写）。
+当前尚无独立 combat replay 工具文档；Boss 战回放需求归工具专题后续补。
 
 ---
 
@@ -467,7 +467,7 @@ Boss 难度来自：
 ### 10.4 难度调优 hot fix
 
 发现 boss 数据失衡（上线后玩家反馈卡 boss）：
-- 紧急 hotfix（参见 `10_liveops/HOTFIX_PLAYBOOK.md`，待写）
+- 紧急 hotfix（当前尚无独立 liveops hotfix playbook）
 - 通常调数值（伤害 / HP）
 - 重大问题（机制 bug）需要版本升级
 
@@ -680,7 +680,7 @@ Atlas 不阻止外部攻略，但**游戏内**也提供：
   - `SKILL_SYSTEM.md §8`（custom_handler）
   - `COMBAT_FEEL.md §4`（cinematic camera）
   - `ANIMATION_INTEGRATION.md`（boss 动画）
-  - `09_tools/COMBAT_REPLAY.md`（boss 战回放，待写）
+  - 当前尚无独立 combat replay 工具文档（boss 战回放）
 
 ---
 

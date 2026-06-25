@@ -4,7 +4,7 @@
 >
 > **读者**：工程、策划、美术、QA、管理层。所有岗位都需要对"什么算达标"达成共识。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标验收标准。P3 Combat Feel go/no-go 尚未执行。
 >
 > **前置文档**：`OVERVIEW.md`
 >
@@ -427,8 +427,8 @@ P3 阶段只有 1 个职业（见 OVERVIEW P3 交付物）。所有场景都用�
 - **相关文档**：
   - `OVERVIEW.md`（§10 门控 引用本文）
   - `03_combat/COMBAT_FEEL.md`（打击感技术实现）
-  - `05_client/CLIENT_PREDICTION.md`（网络质感技术依据）
-  - `09_tools/COMBAT_REPLAY.md`（测试录屏工具）
+  - `02_sync/MOVEMENT_SYNC.md`（预测 / 和解 / 远端插值技术依据）
+  - 当前尚无独立 combat replay 工具文档；测试录屏流程归本验收标准维护。
 
 ---
 
@@ -474,7 +474,7 @@ P3 阶段只有 1 个职业（见 OVERVIEW P3 交付物）。所有场景都用�
 | 玩家反馈 | 可能根因 | 定位方向 |
 |---|---|---|
 | "打击没力" | Hit pause 太短或缺失 | `COMBAT_FEEL.md` hit pause 参数 |
-| "感觉有延迟" | 输入链路过长 or 预测策略保守 | `CLIENT_PREDICTION.md` |
+| "感觉有延迟" | 输入链路过长 or 预测策略保守 | `MOVEMENT_SYNC.md` |
 | "挥空" | 命中判定过于严格 or lag comp 窗口小 | `HIT_VALIDATION.md` |
 | "敌人跳来跳去" | 远端插值抖动 | `MOVEMENT_SYNC.md` 远端策略 |
 | "连招打不出" | 取消窗口时间轴错 or 输入缓冲太短 | `SKILL_SYSTEM.md` 时间轴 |
@@ -482,7 +482,7 @@ P3 阶段只有 1 个职业（见 OVERVIEW P3 交付物）。所有场景都用�
 | "大招没有大招感" | VFX/camera/音效分层没做 | 美术 + 音效 |
 | "打死 boss 没爽感" | 击杀事件反馈弱 | 慢镜头/爆炸/奖励提示组合 |
 | "PvP 打不中人" | Lag comp 窗口不合理 | `LAG_COMPENSATION.md` |
-| "PvP 掉线感严重" | 协议层抖动处理差 | `NETWORK_PROTOCOL.md` |
+| "PvP 掉线感严重" | 协议层抖动处理差 | `MOVEMENT_SYNC.md` 的 ack / correction 与 transport impairment 验证 |
 
 ---
 

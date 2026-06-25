@@ -380,14 +380,14 @@ auto ClientApp::Authenticate(const Address& baseapp_addr, const SessionKey& sess
   return true;
 }
 
-void ClientApp::OnRpcMessage(uint32_t rpc_id, uint64_t trace_id, const std::byte* payload,
-                             int32_t len) {
+void ClientApp::OnRpcMessage(EntityID entity_id, uint32_t rpc_id, uint64_t trace_id,
+                             const std::byte* payload, int32_t len) {
   if (!native_provider_ || !native_provider_->DispatchRpcFn()) {
     ATLAS_LOG_WARNING("Client: received RPC but no dispatcher registered");
     return;
   }
-  native_provider_->DispatchRpcFn()(player_entity_id_, rpc_id,
-                                    reinterpret_cast<const uint8_t*>(payload), len, trace_id);
+  native_provider_->DispatchRpcFn()(entity_id, rpc_id, reinterpret_cast<const uint8_t*>(payload),
+                                    len, trace_id);
 }
 
 void ClientApp::RegisterMessageHandlers() {
@@ -466,16 +466,18 @@ void ClientApp::RegisterMessageHandlers() {
         }
 
         if (msg_id == baseapp::kClientRpcMessageId) {
+          auto entity_id = reader.Read<EntityID>();
           auto rpc_id = reader.Read<uint32_t>();
           auto trace_id = reader.Read<uint64_t>();
-          if (!rpc_id || !trace_id) {
+          if (!entity_id || !rpc_id || !trace_id) {
             ATLAS_LOG_WARNING("Client: RPC envelope header truncated");
             return;
           }
           const auto rem = reader.Remaining();
           auto args = reader.ReadBytes(rem);
           if (!args) return;
-          OnRpcMessage(*rpc_id, *trace_id, args->data(), static_cast<int32_t>(args->size()));
+          OnRpcMessage(*entity_id, *rpc_id, *trace_id, args->data(),
+                       static_cast<int32_t>(args->size()));
           return;
         }
 

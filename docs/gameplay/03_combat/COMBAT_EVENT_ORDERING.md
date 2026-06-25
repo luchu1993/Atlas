@@ -4,7 +4,7 @@
 >
 > **读者**：工程（必读）、网络工程师（§4、§7 必读）、战斗策划（§3、§9 了解）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，完整战斗事件队列与客户端事件缓冲尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`DETERMINISM_CONTRACT.md`、`SKILL_SYSTEM.md`、`BUFF_SYSTEM.md`、`HIT_VALIDATION.md`、`STAT_AND_DAMAGE.md`
 >
@@ -295,7 +295,7 @@ public sealed class CombatEvent {
 
 - `CausedBy` 长度 ≤ 8（足够大多数场景）
 - 链深度按级联限制 4
-- 不形成环（已通过反重入防御）
+- 不形成环（目标通过反重入防御保证）
 
 ---
 
@@ -481,7 +481,8 @@ A 杀死 B 的同时被 B 反击致死：
 ### 9.3 移动与战斗的同步
 
 战斗事件的位置参考是**事件时间戳对应的位置**：
-- `LagCompensation` 已处理（位置历史）
+- 目标 `LagCompensation` runtime 使用位置历史回溯命中；当前仓库只提供
+  position history / `RewindSphereHit` 基础件，完整战斗事件队列尚未落地
 - 客户端渲染战斗事件时用渲染时间对应的位置（远端实体的当前插值位置）
 
 不需要事件本身携带位置——位置由实体当前展示位置决定。

@@ -4,7 +4,7 @@
 >
 > **读者**：动画师（必读）、战斗策划（必读）、客户端工程（必读）、技术美术（§4 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计。完整动画状态机、root motion 提取和战斗动画工具链尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`COMBAT_FEEL.md`、`SKILL_SYSTEM.md`、`UNITY_INTEGRATION.md`
 >
@@ -226,7 +226,8 @@ frame_30fps  →  time_ms = frame * 33.33  →  round to int
   frame 15 →  500 ms
 ```
 
-策划在 Excel 配 `time_ms`，Frame Data Editor 同时显示帧数（参见 `09_tools/FRAME_DATA_EDITOR.md §3.4`）。
+策划在 Excel 配 `time_ms`，Frame Data Editor 同时显示帧数（参见
+[`09_tools/FRAME_DATA_EDITOR.md §3.4`](../09_tools/FRAME_DATA_EDITOR.md#34-时间标尺)）。
 
 ### 5.4 动画师工作流
 
@@ -278,7 +279,8 @@ frame_30fps  →  time_ms = frame * 33.33  →  round to int
 
 ### 6.2 构建期提取曲线
 
-参见 `MOVEMENT_SYNC.md §8` + `09_tools/FRAME_DATA_EDITOR.md §7.2`。
+参见 `MOVEMENT_SYNC.md §8` +
+[`09_tools/FRAME_DATA_EDITOR.md §7.2`](../09_tools/FRAME_DATA_EDITOR.md#72-root-motion-提取)。
 
 ```
 Maya 制作动画包含位移（root bone movement）
@@ -670,7 +672,7 @@ Atlas 走类似路线：写实人体比例 + 风格化动作（动作幅度 1.2�
   - `BUFF_SYSTEM.md`（状态对动画的影响）
   - `MOVEMENT_SYNC.md §8`（动画驱动位移）
   - `HIT_VALIDATION.md §3.5`（骨骼跟随）
-  - `09_tools/FRAME_DATA_EDITOR.md §7`（动画师工作流）
+  - [`09_tools/FRAME_DATA_EDITOR.md §7`](../09_tools/FRAME_DATA_EDITOR.md#7-动画师工作流)（动画师工作流）
 
 ---
 

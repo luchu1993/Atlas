@@ -1,5 +1,9 @@
 # SpaceData
 
+> 状态：当前实现。SpaceData runtime cache、cellapp owner 广播、client
+> typed API、snapshot init 和 key update/delete envelope 已落地；引擎层不做
+> SpaceData 持久化，持久状态仍应放在 space-owner entity 属性上。
+>
 > 关联：[BigWorld SpaceData 参考](../bigworld_ref/) · [property_sync_design.md](../property_sync/property_sync_design.md) · [bsp_tree](../../src/server/cellappmgr/bsp_tree.h)
 
 SpaceData 是 **per-space 全局 key→bytes 字典**，由 cellapp 维护，绕过 entity AoI 推送给 space 内所有 client。BigWorld 风格 `setSpaceData` 的等价物。典型用法：NPC 总数、boss 阶段、世界 buff 等不绑定到具体 entity 的全局状态。
@@ -153,7 +157,7 @@ var count = session.SpaceDataManager.GetInt32(spaceId, SpaceDataKeys.NpcCount);
 | value 类型 | python pickle | python pickle | typed bytes (LE 编码) |
 | owner 模型 | CellAppMgr authority | 每 cellapp 独立写本地副本（**脑裂**） | BSP primary cell cellapp (owner-cell 直连广播) |
 | 持久化 | space entity properties | space entity properties (脚本约定) | space entity properties (`CellSpaceEntity`) |
-| Hot-standby cellappmgr | ✓ (14.4) | ✗ | ✗ (Atlas cellappmgr 是独立 epic) |
-| 跨 cellapp 一致性 | cellappmgr 中转 (total-order) | **未实现** | owner-cell 直连 (RUDP FIFO) |
+| CellAppMgr HA | hot-standby | ✗ | worker-rebuild recovery (Phase 13) |
+| 跨 cellapp 一致性 | cellappmgr 中转 (total-order) | 无全局一致性模型 | owner-cell 直连 (RUDP FIFO) |
 
 Atlas 选 BigWorld 哲学 + owner-cell 直连优化（省一跳 cellappmgr 中转，热路径 FIFO 由 RUDP channel 保证）。

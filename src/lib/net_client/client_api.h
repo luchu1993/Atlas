@@ -11,10 +11,8 @@
 extern "C" {
 #endif
 
-// Layout: [MAJOR:8][MINOR:8][PATCH:16]. Create rejects MAJOR mismatch
-// or caller MINOR > our MINOR.
-//
-// 0x02050000: transport impairment hook for movement prediction validation.
+// ABI layout: [MAJOR:8][MINOR:8][PATCH:16]; Create rejects major mismatch or newer caller minor.
+// 0x02050000 adds transport impairment hooks for movement prediction validation.
 #define ATLAS_NET_ABI_VERSION 0x02050000u
 
 #define ATLAS_NET_OK 0
@@ -95,7 +93,7 @@ typedef enum AtlasDisconnectReason {
   ATLAS_DISCONNECT_INTERNAL = 2,
 } AtlasDisconnectReason;
 
-// LOGOUT fires on_disconnect with reason=3; USER is silent.
+// LOGOUT fires on_disconnect with callback reason=3; USER is silent.
 ATLAS_NET_API int32_t AtlasNetDisconnect(AtlasNetContext* ctx, AtlasDisconnectReason reason);
 
 // Test hook: applies bidirectional RUDP latency/loss to current and future
@@ -166,9 +164,8 @@ ATLAS_NET_API uint16_t AtlasNetMovementCorrectionFlag(float distance_m);
 // All payload pointers are views; copy before returning.
 typedef void (*AtlasDisconnectFn)(AtlasNetContext* ctx, int32_t reason);
 
-// Every server-bound message lands here once authentication completes. msg_id is the
-// raw wire id (0xF001 / 0xF002 / 0xF003 / 0xF004 / login + auth ids handled internally
-// fire their dedicated callbacks instead). Payload is a view valid only for the call.
+// Every server-bound message lands here after auth: raw wire id 0xF001..0xF007;
+// login/auth use dedicated callbacks. Payload is valid only for the call.
 typedef void (*AtlasDeliverFromServerFn)(AtlasNetContext* ctx, uint16_t msg_id,
                                          const uint8_t* payload, int32_t len);
 

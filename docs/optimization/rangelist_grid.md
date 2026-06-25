@@ -1,7 +1,8 @@
 # RangeList Grid Acceleration
 
-**Status:** 🔵 Deferred — `Space::Tick` is 0.019 % of cellapp CPU at
-200 cli. Not on any visible critical path.
+**Status:** 🔵 Deferred — the last retained optimization profile had
+`Space::Tick` at 0.019 % of cellapp CPU. Revisit only if a fresh
+capture puts RangeList work on a visible critical path.
 **Subsystem:** `src/lib/space/range_list.h`
 
 ## What this would be

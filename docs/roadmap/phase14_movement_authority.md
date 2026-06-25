@@ -14,15 +14,13 @@ contract 与最小回归命令集见 [`phase14_status.md`](phase14_status.md)。
 
 ## 工作上下文
 
-继续工作时先确认本地 `git status`；不要重置与当前任务无关的用户改动。UE
-源码根目录为 `E:\UE\UnrealEngine`。现行 wire contract 与最小回归命令集放在
-[`phase14_status.md`](phase14_status.md)；本文件只承载目标 / 验收 / 里程碑 /
-决策日志 / 红线，不重复 status。
+继续工作时以 [`phase14_status.md`](phase14_status.md) 的最小回归命令集为准；
+UE 验证通过 `--ue-root <UE_ROOT>` 指向本地 UE 源码构建。本文件只承载目标 /
+验收 / 里程碑 / 决策日志 / 红线，不重复 status。
 
-## 里程碑驱动的下一步
+## 当前后续边界
 
-独立开发节奏，串行推进；每个里程碑独立可合入、可跑、可回滚，
-工作量上限 3 天。完成一个再开下一个，避免提前把 6 个月的决策一次拍死。
+14.1–14.4 主线已闭环；后续只在具体产品需求或 backend 改动触发时扩展。
 
 ### 14.2 Jolt query backend（里程碑）
 
@@ -36,7 +34,9 @@ Jolt cache chunking、moving platform、ladder、跨 cell 物理。）
 ### 之后
 
 按遇到再做：大地图 streaming、Jolt cache chunking、moving platform、ladder、跨 cell 物理、
-完整 data-driven skill timeline、pathfinding。**不提前规划**。
+完整 data-driven skill timeline。服务端导航 v1 已在
+[`docs/navigation/navigation_architecture.md`](../navigation/navigation_architecture.md)
+落地，后续边界不归 Phase 14 提前规划。
 
 ## 决策日志
 
@@ -78,7 +78,8 @@ Jolt cache chunking、moving platform、ladder、跨 cell 物理。）
 - 服务端是位置、碰撞、grounded 状态和技能位移的唯一权威。
 - 玩家客户端有 0 延迟本地响应，通过输入历史、replay 和 visual offset
   吸收服务端纠正。
-- NPC 与玩家共用 CharacterMotor，只是输入来源从客户端输入变成 AI intent。
+- NPC 与玩家共用 `movement_sim::Step` 和 `CellMovementSystem`，只是输入来源从
+  客户端输入变成 AI intent。
 - 远端实体继续走服务端位置快照；第一阶段复用现有 `AvatarFilter`，Hermite
   插值和高级 jitter buffer 后置。
 - 移动输入与 `.def` RPC 分离，避免高频输入占用可靠 RPC 通道。
@@ -93,7 +94,7 @@ Jolt cache chunking、moving platform、ladder、跨 cell 物理。）
 - `atlas_net_client` 已复用服务端 RUDP，实现 reliable / unreliable 发送。
 - `Atlas.Client` 已有实体管理和 owner/peer 区分，peer 位置走 `AvatarFilter`。
 
-已替换 / 待替换的 MVP 行为：
+已替换的 MVP 行为：
 
 - Unity `PlayerInputController` 和 UE `UAtlasPlayerInputController` 已发送
   `AtlasMovementInputFrame`，并按 `MovementStateAck` replay 未确认输入。
@@ -113,7 +114,7 @@ Jolt cache chunking、moving platform、ladder、跨 cell 物理。）
 
 ### `atlas_movement_sim`
 
-新增 `src/lib/movement_sim/` 静态库：
+已新增 `src/lib/movement_sim/` 静态库：
 
 ```cpp
 namespace atlas::movement {
@@ -162,7 +163,7 @@ cache chunking 后置。
 
 ### 服务端状态归属
 
-移动状态在 CellApp C++ 侧管理，建议放在 `MovementStateStore`，按
+移动状态在 CellApp C++ 侧管理，已落在 `MovementStateStore`，按
 `EntityID` 索引。`CellEntity` 继续保存复制和 AoI 所需的 pose；每个
 server tick 由 MovementSystem 写回 `CellEntity.SetPositionAndDirection`
 和 `SetOnGround`。
@@ -213,7 +214,7 @@ channel 注入每向延迟和 datagram loss。
 
 ### Client -> BaseApp
 
-新增 `ClientMovementInput`，unreliable immediate。payload 包含：
+已新增 `ClientMovementInput`，unreliable immediate。payload 包含：
 
 ```text
 u32 target_entity_id
@@ -233,7 +234,7 @@ BaseApp 只做边界校验：
 
 ### BaseApp -> CellApp
 
-新增 `ClientMovementInputForward`，unreliable immediate。payload 包含：
+已新增 `ClientMovementInputForward`，unreliable immediate。payload 包含：
 
 ```text
 u32 source_entity_id
@@ -252,7 +253,7 @@ CellApp 校验：
 
 ### CellApp -> owner client
 
-新增 `MovementStateAck`，latest-wins，建议每 3 个 server tick 发送一次：
+已新增 `MovementStateAck`，latest-wins，默认每 3 个 server tick 发送一次：
 
 ```text
 u32 entity_id
@@ -263,11 +264,11 @@ u16 correction_flags
 ```
 
 Ack 丢失无害，下一次 ack 覆盖旧状态。不要复用 `0xF001` AoI envelope；
-新增 client-facing wire id，避免污染 `ClientSession.DispatchAoIEnvelope`。
+已新增 client-facing wire id，避免污染 `ClientSession.DispatchAoIEnvelope`。
 CellApp -> BaseApp 的内部 ack 额外携带 `cell_epoch`；BaseApp 丢弃低于
 当前 `CellEpoch` 的旧 ack，不把迁移前状态转发给 owner。
 
-新增 `MovementCorrectionReport`，client -> BaseApp，unreliable immediate：
+已新增 `MovementCorrectionReport`，client -> BaseApp，unreliable immediate：
 
 ```text
 u32 target_entity_id
@@ -288,7 +289,7 @@ CellApp 推荐顺序：
 ```text
 1. 接收网络输入，MovementInputBuffer 去重入队
 2. C# OnTick：AI / 技能脚本产生 movement intent
-3. MovementSystem：玩家输入、NPC intent、基础 CharacterMotor
+3. MovementSystem：玩家输入、NPC intent、`movement_sim::Step`
 4. 写回 CellEntity pose，记录 position history
 5. Projectile / Skill / Trigger 查询
 6. PublishReplicationFrame，Witness / Ghost pump 发送位置和属性
@@ -396,8 +397,8 @@ Phase 14.1 完成条件：
 
 Phase 14.2 完成条件：
 
-- CharacterMotor 使用 PhysicsQuery 做 capsule sweep、ground probe、
-  depenetration、slope limit、step up、snap to ground。
+- `movement_sim::Step` 通过 `PhysicsCharacterQuery` 使用 `PhysicsQuery` 做
+  capsule sweep、ground probe、depenetration、slope limit、step up、snap to ground。
 - Jolt 类型不泄露到 gameplay / server / script 边界。
 - Test backend 覆盖 box / plane KCC 状态机和 raycast，不依赖 Jolt runtime。
 
@@ -412,7 +413,7 @@ Phase 14.4 当前完成条件：
 
 | 层级 | 覆盖 |
 |---|---|
-| unit | InputFrame codec、Predictor replay、CharacterMotor flat / static query、correction tier |
+| unit | InputFrame codec、Predictor replay、movement_sim flat / static query、correction tier |
 | integration | BaseApp auth stamp、CellApp Real-only input、ack stale drop、offload stale input drop |
 | client | Unity / UE owner predictor、peer AvatarFilter 不回归、disconnect 清状态 |
 | stress | 50/100/400 moving entities，输入丢包、乱序、burst、RUDP 延迟 / loss |

@@ -8,15 +8,15 @@ DBApp 集成补强已覆盖当前主链路；MySQL 后端尚未实现。
 
 ## 目标
 
-把数据库层收敛成可持续演进的**单 DBApp 架构**：
+把 Phase 7 层面的数据库能力收敛成可持续演进的**单 DBApp 架构**：
 
 - `DBApp` 作为唯一数据库代理进程，隔离 `BaseApp` / `LoginApp` 与底层存储
-- `IDatabase` 屏蔽 XML / SQLite / MySQL 差异
+- `IDatabase` 屏蔽已落地 XML / SQLite 后端差异，并保留 MySQL 接入面
 - 实体 CRUD、`lookup_by_name`、`checkout / clear_checkout`、`auto_load`
   语义稳定
 - 支撑当前登录主链路与 `checkin / checkout / relogin rollback` 场景
 
-## 状态分子阶段
+## 状态子阶段
 
 | 子阶段 | 主题 | 状态 |
 |---|---|---|
@@ -68,7 +68,7 @@ CheckinEntity / DeleteEntity[Ack] / LookupEntity[Ack] / AbortCheckout[Ack]
 busy_timeout_ms / foreign_keys`、`db_mysql_*` 系列字段。开发推荐
 `db_type: sqlite`，最小 fallback `xml`，正式预选 `mysql`。
 
-## 当前剩余工作
+## 已落地与剩余工作
 
 ### P7.3 — DBApp 集成补强 ✅
 
@@ -91,5 +91,6 @@ busy_timeout_ms / foreign_keys`、`db_mysql_*` 系列字段。开发推荐
 **不负责：** 多 LoginApp / LoginAppMgr 设计、登录入口负载均衡、BaseApp 重复
 登录状态机、CellApp / Space 持久化策略。
 
-**不进入当前范围：** 多 DBApp / DBAppMgr / 分片 / Rendezvous Hash /
-MongoDB 主线 / 大规模 schema migration 框架 / 外部认证系统替代。
+**不进入当前范围：** 多 DBApp / DBAppMgr / 分片（已归 Phase 15）/
+Rendezvous Hash / MongoDB 主线 / 大规模 schema migration 框架 /
+外部认证系统替代。

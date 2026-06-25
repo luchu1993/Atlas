@@ -595,7 +595,7 @@ struct ReplicatedBaselineFromCell {
 static_assert(NetworkMessage<ReplicatedBaselineFromCell>);
 
 // Periodic owner-snapshot to client (client-facing ID 0xF002). Reliable;
-// recovers any property lost on the unreliable delta path.
+// refreshes owner-scope state after AoI entry, migration, or app-layer gaps.
 struct ReplicatedBaselineToClient {
   EntityID entity_id{kInvalidEntityID};
   std::vector<std::byte> snapshot;

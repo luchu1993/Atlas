@@ -4,7 +4,7 @@
 >
 > **读者**：工程（必读）、战斗策划（必读）、数值策划（§5 必读）。
 >
-> **状态**：草案 v0.1 — 待团队评审。
+> **状态**：目标设计，完整 Buff runtime 尚未落地。
 >
 > **前置文档**：`OVERVIEW.md`、`00_foundations/DETERMINISM_CONTRACT.md`、`03_combat/SKILL_SYSTEM.md`
 >
@@ -876,7 +876,9 @@ public sealed class ClientBuffInstance {
 
 客户端 buff UI 显示的剩余时长 = `(ExpireTick - client_estimated_server_tick) × tick_ms`。
 
-`client_estimated_server_tick` 由时间同步协议维护（见 `NETWORK_PROTOCOL.md`），每 2 秒一次校准样本，EMA 平滑。
+`client_estimated_server_tick` 是目标客户端时间同步服务提供的估计值。当前移动路径已通过
+`MovementStateAck` / `MovementCommand` 携带 `server_tick`；通用 buff UI 时间同步服务尚未
+落地成独立协议。
 
 ---
 

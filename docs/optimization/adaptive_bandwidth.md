@@ -34,7 +34,7 @@ trade-off is one tick of allocation lag for unmodelled enter bursts.
 | `witness_per_peer_bytes` | 200 | ~30 B position + ~50 B property delta + ~120 B amortised enter snapshot under churn |
 | `witness_total_outbound_cap_bytes` | 4 MB/tick (≈ 60 MB/s @ 15 Hz) | NIC-shaped; 1 GbE caps at 125 MB/s gross with 50 % headroom for framing / retransmit / other server traffic |
 | `witness_min_per_observer_budget_bytes` | 1024 | Floor so a sparse observer still has room for the next Enter |
-| `witness_max_per_observer_budget_bytes` | 16384 | Ceiling so a single dense PvP observer can't monopolise the NIC |
+| `witness_max_per_observer_budget_bytes` | 65536 | Ceiling so a single dense PvP observer can't monopolise the NIC |
 
 ## Tuning cookbook
 
