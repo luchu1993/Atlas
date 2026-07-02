@@ -2286,9 +2286,11 @@ TEST_F(CellAppHandlersTest, OnSpaceDataSnapshot_OverwritesAndMarksInitialized) {
 
 TEST_F(CellAppHandlersTest, PrimaryHandoffAddCellAcksAfterSpaceDataSnapshot) {
   InterfaceTable table;
-  RecordingChannel owner_ch(dispatcher_, table, Address(0x7F000001u, 30001));
+  // The registry owns channels through IntrusivePtr, so it must hold a heap
+  // RecordingChannel; a stack one would be released after this frame returns.
+  auto owner_ch = make_intrusive<RecordingChannel>(dispatcher_, table, Address(0x7F000001u, 30001));
   RecordingChannel mgr_ch(dispatcher_, table, Address(0x7F000001u, 20001));
-  app_.PeerRegistryForTest().InsertForTest(Address(0x7F000001u, 30001), &owner_ch);
+  app_.PeerRegistryForTest().InsertForTest(Address(0x7F000001u, 30001), owner_ch.get());
 
   cellappmgr::AddCellToSpace add;
   add.space_id = 7;
@@ -2301,7 +2303,7 @@ TEST_F(CellAppHandlersTest, PrimaryHandoffAddCellAcksAfterSpaceDataSnapshot) {
   auto* space = app_.FindSpace(7);
   ASSERT_NE(space, nullptr);
   EXPECT_FALSE(space->IsDataInitialized());
-  const auto requests = SpaceDataSnapshotRequests(owner_ch);
+  const auto requests = SpaceDataSnapshotRequests(*owner_ch);
   ASSERT_EQ(requests.size(), 1u);
   EXPECT_EQ(requests[0].space_id, 7u);
   EXPECT_TRUE(AddCellToSpaceAcks(mgr_ch).empty());
@@ -2318,6 +2320,8 @@ TEST_F(CellAppHandlersTest, PrimaryHandoffAddCellAcksAfterSpaceDataSnapshot) {
   ASSERT_EQ(acks.size(), 1u);
   EXPECT_EQ(acks[0].space_id, 7u);
   EXPECT_EQ(acks[0].cell_id, 1u);
+
+  app_.PeerRegistryForTest().Erase(Address(0x7F000001u, 30001));
 }
 
 TEST_F(CellAppHandlersTest, OnSpaceDataSnapshotRequest_NonOwnerIsNoop) {
