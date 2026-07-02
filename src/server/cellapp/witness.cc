@@ -473,9 +473,8 @@ auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
       cache.lod_enter_phase = enter_idx % far_interval;
     }
 
-    // SendEntityLeave can re-entrantly destroy a peer, whose HandleAoILeave
-    // push_backs here and reallocates mid-loop; drain a snapshot and let any
-    // re-entrant ids fall to the next tick.
+    // SendEntityLeave may re-enter HandleAoILeave, which push_backs and
+    // reallocates this mid-loop; drain a snapshot, deferring new ids a tick.
     std::vector<EntityID> gone = std::move(pending_gone_ids_);
     pending_gone_ids_.clear();
     for (auto id : gone) {
