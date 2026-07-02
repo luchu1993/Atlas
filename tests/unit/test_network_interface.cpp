@@ -582,9 +582,8 @@ TEST_F(NetworkInterfaceTest, RudpRateLimitOnlyAdmitsFirstSourcePerPoll) {
   dispatcher_.ProcessOnce();
   EXPECT_EQ(ni_.ChannelCount(), 1u);
 
-  // After lifting the rate limit, a fresh datagram from a new source address
-  // must create a second channel. The burst above may have drained the OS
-  // buffer via the time-based read loop, so we send a new packet here.
+  // Rate limit lifted: a new source must open a second channel. Resend in the
+  // poll loop so a datagram lost to the burst-saturated buffer still lands.
   ni_.SetRateLimit(0);
   auto extra_sender = Socket::CreateUdp();
   ASSERT_TRUE(extra_sender.HasValue());
@@ -592,10 +591,14 @@ TEST_F(NetworkInterfaceTest, RudpRateLimitOnlyAdmitsFirstSourcePerPoll) {
   std::array<std::byte, 9> extra_pkt{};
   extra_pkt[0] = std::byte{rudp::kFlagHasSeq};
   extra_pkt[4] = std::byte{1};
-  ASSERT_TRUE(extra_sender->SendTo(extra_pkt, ni_.RudpAddress()).HasValue());
 
   ASSERT_TRUE(poll_until(
-      dispatcher_, [&] { return ni_.ChannelCount() > 1u; }, std::chrono::milliseconds(500)));
+      dispatcher_,
+      [&] {
+        (void)extra_sender->SendTo(extra_pkt, ni_.RudpAddress());
+        return ni_.ChannelCount() > 1u;
+      },
+      std::chrono::milliseconds(2000)));
 }
 
 TEST_F(NetworkInterfaceTest, RudpServerDefaultProfileKeepsCongestionControl) {
