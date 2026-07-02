@@ -139,9 +139,9 @@ struct EntitySlotDescriptor {
 
 struct EntityTypeDescriptor {
   std::string name;
-  uint16_t type_id;
-  bool has_cell;
-  bool has_client;
+  uint16_t type_id{0};
+  bool has_cell{false};
+  bool has_client{false};
   std::vector<PropertyDescriptor> properties;
   std::vector<RpcDescriptor> rpcs;
   std::vector<EntitySlotDescriptor> slots;
