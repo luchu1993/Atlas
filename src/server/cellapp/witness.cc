@@ -473,7 +473,12 @@ auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
       cache.lod_enter_phase = enter_idx % far_interval;
     }
 
-    for (auto id : pending_gone_ids_) {
+    // SendEntityLeave can re-entrantly destroy a peer, whose HandleAoILeave
+    // push_backs here and reallocates mid-loop; drain a snapshot and let any
+    // re-entrant ids fall to the next tick.
+    std::vector<EntityID> gone = std::move(pending_gone_ids_);
+    pending_gone_ids_.clear();
+    for (auto id : gone) {
       auto it = aoi_map_.find(id);
       if (it == aoi_map_.end()) continue;
       // Same id may appear twice (left -> re-entered -> left); after the
@@ -484,7 +489,6 @@ auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
     }
 
     pending_enter_ids_ = std::move(deferred);
-    pending_gone_ids_.clear();
   }
 
   // Per-band pump: collect eligible peers into a band-scoped scratch,
