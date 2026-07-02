@@ -288,7 +288,8 @@ void ClientSession::InstallDefaultHandler() {
       });
   (void)network_.InterfaceTable().RegisterTypedHandler<::atlas::baseapp::MovementStateAckToClient>(
       [this](const Address&, Channel*, const ::atlas::baseapp::MovementStateAckToClient& msg) {
-        BinaryWriter writer(::atlas::baseapp::MovementStateAckToClient::Descriptor().fixed_length);
+        BinaryWriter writer(static_cast<std::size_t>(
+            ::atlas::baseapp::MovementStateAckToClient::Descriptor().fixed_length));
         msg.Serialize(writer);
         auto data = writer.Data();
         callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
@@ -296,32 +297,32 @@ void ClientSession::InstallDefaultHandler() {
                               reinterpret_cast<const uint8_t*>(data.data()),
                               static_cast<int32_t>(data.size()));
       });
-  (void)network_.InterfaceTable().RegisterTypedHandler<
-      ::atlas::baseapp::MovementCommandStartToClient>(
-      [this](const Address&, Channel*,
-             const ::atlas::baseapp::MovementCommandStartToClient& msg) {
-        BinaryWriter writer(
-            ::atlas::baseapp::MovementCommandStartToClient::Descriptor().fixed_length);
-        msg.Serialize(writer);
-        auto data = writer.Data();
-        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
-                              ::atlas::baseapp::kClientMovementCommandStartMessageId,
-                              reinterpret_cast<const uint8_t*>(data.data()),
-                              static_cast<int32_t>(data.size()));
-      });
-  (void)network_.InterfaceTable().RegisterTypedHandler<
-      ::atlas::baseapp::MovementCommandEndToClient>(
-      [this](const Address&, Channel*,
-             const ::atlas::baseapp::MovementCommandEndToClient& msg) {
-        BinaryWriter writer(
-            ::atlas::baseapp::MovementCommandEndToClient::Descriptor().fixed_length);
-        msg.Serialize(writer);
-        auto data = writer.Data();
-        callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
-                              ::atlas::baseapp::kClientMovementCommandEndMessageId,
-                              reinterpret_cast<const uint8_t*>(data.data()),
-                              static_cast<int32_t>(data.size()));
-      });
+  (void)network_.InterfaceTable()
+      .RegisterTypedHandler<::atlas::baseapp::MovementCommandStartToClient>(
+          [this](const Address&, Channel*,
+                 const ::atlas::baseapp::MovementCommandStartToClient& msg) {
+            BinaryWriter writer(static_cast<std::size_t>(
+                ::atlas::baseapp::MovementCommandStartToClient::Descriptor().fixed_length));
+            msg.Serialize(writer);
+            auto data = writer.Data();
+            callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                                  ::atlas::baseapp::kClientMovementCommandStartMessageId,
+                                  reinterpret_cast<const uint8_t*>(data.data()),
+                                  static_cast<int32_t>(data.size()));
+          });
+  (void)network_.InterfaceTable()
+      .RegisterTypedHandler<::atlas::baseapp::MovementCommandEndToClient>(
+          [this](const Address&, Channel*,
+                 const ::atlas::baseapp::MovementCommandEndToClient& msg) {
+            BinaryWriter writer(static_cast<std::size_t>(
+                ::atlas::baseapp::MovementCommandEndToClient::Descriptor().fixed_length));
+            msg.Serialize(writer);
+            auto data = writer.Data();
+            callbacks_.on_deliver(reinterpret_cast<AtlasNetContext*>(this),
+                                  ::atlas::baseapp::kClientMovementCommandEndMessageId,
+                                  reinterpret_cast<const uint8_t*>(data.data()),
+                                  static_cast<int32_t>(data.size()));
+          });
 
   network_.InterfaceTable().SetDefaultHandler(
       [this](const Address&, Channel*, MessageID id, BinaryReader& reader) {
