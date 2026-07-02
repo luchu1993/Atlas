@@ -121,10 +121,10 @@ public sealed class RealClusterFixture : IDisposable
 
     private static string ResolveRepoRoot()
     {
-        // BaseDirectory has trailing slash → first GetDirectoryName is no-op,
-        // so the 8-hop budget walks bin/<config>/<tfm>/ back to the repo root.
+        // Walk up from bin/[platform/]<config>/<tfm>/ to the cluster_control
+        // marker; the platform subdir (x64 on Windows) varies the depth.
         var dir = AppContext.BaseDirectory;
-        for (int i = 0; i < 8 && dir is not null; i++)
+        while (dir is not null)
         {
             if (Directory.Exists(Path.Combine(dir, "tools", "cluster_control")))
                 return dir;
