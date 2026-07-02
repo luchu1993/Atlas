@@ -42,7 +42,9 @@ jobs:
           sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
 
       - name: Configure
-        run: cmake --preset debug
+        # ATLAS_BUILD_NET_CLIENT=ON builds libatlas_net_client, the P/Invoke
+        # target the real-cluster client tests load at runtime.
+        run: cmake --preset debug -DATLAS_BUILD_NET_CLIENT=ON
 
       - name: Build
         run: cmake --build build/debug --config Debug
