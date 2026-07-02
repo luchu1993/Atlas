@@ -473,11 +473,11 @@ auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
       cache.lod_enter_phase = enter_idx % far_interval;
     }
 
-    // SendEntityLeave may re-enter HandleAoILeave, which push_backs and
-    // reallocates this mid-loop; drain a snapshot, deferring new ids a tick.
-    std::vector<EntityID> gone = std::move(pending_gone_ids_);
-    pending_gone_ids_.clear();
-    for (auto id : gone) {
+    // SendEntityLeave may re-enter HandleAoILeave, which push_backs here;
+    // drain the entry-time prefix by index (realloc-safe), deferring the rest.
+    const std::size_t gone_count = pending_gone_ids_.size();
+    for (std::size_t i = 0; i < gone_count; ++i) {
+      const EntityID id = pending_gone_ids_[i];
       auto it = aoi_map_.find(id);
       if (it == aoi_map_.end()) continue;
       // Same id may appear twice (left -> re-entered -> left); after the
@@ -486,6 +486,7 @@ auto Witness::Update(uint32_t max_packet_bytes) -> Witness::UpdateStats {
       bill(SendEntityLeave(it->first));
       aoi_map_.erase(it);
     }
+    pending_gone_ids_.erase(pending_gone_ids_.begin(), pending_gone_ids_.begin() + gone_count);
 
     pending_enter_ids_ = std::move(deferred);
   }
