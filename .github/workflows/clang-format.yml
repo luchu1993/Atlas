@@ -48,7 +48,7 @@ jobs:
           if [ -z "$base" ] || echo "$base" | grep -Eq '^0+$'; then
             base="$(git rev-list --max-parents=0 HEAD)"
           fi
-          output="$(git clang-format --diff "$base" "${{ github.sha }}" -- src tests)"
+          output="$(git clang-format --diff "$base" "${{ github.sha }}" --extensions c,cc,cpp,cxx,h,hh,hpp,hxx -- src tests)"
           echo "$output"
           if [ -n "$output" ] && ! echo "$output" | grep -Eq "clang-format did not modify any files|no modified files to format"; then
             echo "::error::clang-format would modify changed lines"

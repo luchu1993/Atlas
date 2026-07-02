@@ -107,8 +107,7 @@ TEST_F(RegistryRpcTest, ReplyBitUsesCanonicalRpcDescriptor) {
   ASSERT_NE(desc, nullptr);
   EXPECT_EQ(desc->rpc_id, kCellRpcId);
   EXPECT_TRUE(EntityDefRegistry::Instance().ValidateRpc(kTypeId, kReplyRpcId));
-  EXPECT_EQ(EntityDefRegistry::Instance().GetExposedScope(kReplyRpcId),
-            ExposedScope::kAllClients);
+  EXPECT_EQ(EntityDefRegistry::Instance().GetExposedScope(kReplyRpcId), ExposedScope::kAllClients);
   EXPECT_TRUE(EntityDefRegistry::Instance().IsExposed(kReplyRpcId));
 }
 
