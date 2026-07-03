@@ -241,10 +241,13 @@ if(ATLAS_DB_MYSQL)
   set(CONC_WITH_UNIT_TESTS OFF CACHE BOOL "" FORCE)
   set(WITH_CURL OFF CACHE BOOL "" FORCE)
   set(CONC_WITH_MSI OFF CACHE BOOL "" FORCE)
+  # A non-empty INSTALL_PLUGINDIR keeps the connector's INSTALL(TARGETS) rules
+  # valid for any plugin left dynamic (e.g. zstd on Linux). We never run install
+  # and only build the static mariadbclient, so those .so plugins are never made.
+  set(INSTALL_PLUGINDIR "lib/mariadb/plugin" CACHE STRING "" FORCE)
   # Compile the MySQL auth plugins we need statically into libmariadb (self-
   # contained client) and drop the MariaDB-specific ones (parsec/ed25519/gssapi)
-  # — parsec also mis-orders the WinSock headers under MSVC. Dynamic plugins
-  # would need install rules FetchContent can't satisfy (empty INSTALL_PLUGINDIR).
+  # — parsec also mis-orders the WinSock headers under MSVC.
   set(CLIENT_PLUGIN_DIALOG STATIC CACHE STRING "" FORCE)
   set(CLIENT_PLUGIN_CACHING_SHA2_PASSWORD STATIC CACHE STRING "" FORCE)
   set(CLIENT_PLUGIN_SHA256_PASSWORD STATIC CACHE STRING "" FORCE)
