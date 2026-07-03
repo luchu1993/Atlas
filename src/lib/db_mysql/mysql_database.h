@@ -84,6 +84,14 @@ class MysqlDatabase : public IDatabase {
   [[nodiscard]] auto Connect(const DatabaseConfig& config) -> Result<void>;
   [[nodiscard]] auto EnsureSchema() -> Result<void>;
   [[nodiscard]] auto ExecSql(std::string_view sql) -> Result<void>;
+  [[nodiscard]] auto BeginTxn() -> Result<void>;
+  void Commit();
+  void Rollback();
+  // Conditional-UPDATE checkout tail shared by CheckoutEntity/ByName: takes an
+  // already-fetched, not-checked-out row inside an open transaction.
+  void CheckoutCommit(DatabaseID dbid, uint16_t type_id, EntityRow row,
+                      const CheckoutInfo& new_owner, int64_t now_ms,
+                      std::function<void(GetResult)> callback);
   [[nodiscard]] auto FetchByDbid(DatabaseID dbid, uint16_t type_id) -> Result<EntityRow>;
   [[nodiscard]] auto FetchByName(uint16_t type_id, std::string_view identifier)
       -> Result<EntityRow>;

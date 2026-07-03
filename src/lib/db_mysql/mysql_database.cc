@@ -461,52 +461,274 @@ void MysqlDatabase::LookupByName(uint16_t type_id, const std::string& identifier
       [cb = std::move(callback), result = std::move(result)]() mutable { cb(std::move(result)); });
 }
 
-// ── P7.4.3 stubs: checkout / auto-load / dbid range / id counter ────────────
-namespace {
-constexpr std::string_view kNotImpl = "MysqlDatabase: not implemented (P7.4.3)";
-}  // namespace
+auto MysqlDatabase::BeginTxn() -> Result<void> {
+  return ExecSql("START TRANSACTION");
+}
 
-void MysqlDatabase::CheckoutEntity(DatabaseID, uint16_t, const CheckoutInfo&,
+void MysqlDatabase::Commit() {
+  if (auto r = ExecSql("COMMIT"); !r) {
+    ATLAS_LOG_ERROR("MysqlDatabase: COMMIT failed: {}", r.Error().Message());
+  }
+}
+
+void MysqlDatabase::Rollback() {
+  (void)ExecSql("ROLLBACK");
+}
+
+void MysqlDatabase::CheckoutCommit(DatabaseID dbid, uint16_t type_id, EntityRow row,
+                                   const CheckoutInfo& new_owner, int64_t now_ms,
                                    std::function<void(GetResult)> callback) {
   GetResult result;
-  result.error = std::string(kNotImpl);
-  FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+  // Conditional on checked_out = 0; a concurrent checkout that already flipped
+  // it leaves 0 rows changed, which we treat as a conflict and re-fetch.
+  auto upd = ExecSql(
+      std::format("UPDATE entities SET checked_out = 1, checkout_ip = {}, checkout_port = {}, "
+                  "checkout_app_id = {}, checkout_eid = {}, updated_at_ms = {} "
+                  "WHERE dbid = {} AND type_id = {} AND checked_out = 0",
+                  new_owner.base_addr.Ip(), new_owner.base_addr.Port(), new_owner.app_id,
+                  new_owner.entity_id, now_ms, static_cast<uint64_t>(dbid), type_id));
+  if (!upd) {
+    Rollback();
+    result.error = std::string(upd.Error().Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  if (mysql_affected_rows(conn_) != 1) {
+    Rollback();
+    auto refreshed = FetchByDbid(dbid, type_id);
+    if (refreshed && refreshed->found && refreshed->checked_out_by.has_value()) {
+      result.success = true;
+      result.data = std::move(refreshed->data);
+      result.checked_out_by = refreshed->checked_out_by;
+    } else {
+      result.error = "checkout conflict";
+    }
+    FireOrDefer([cb = std::move(callback), result = std::move(result)]() mutable {
+      cb(std::move(result));
+    });
+    return;
+  }
+  Commit();
+  result.success = true;
+  result.data = std::move(row.data);
+  FireOrDefer(
+      [cb = std::move(callback), result = std::move(result)]() mutable { cb(std::move(result)); });
 }
 
-void MysqlDatabase::CheckoutEntityByName(uint16_t, const std::string&, const CheckoutInfo&,
+void MysqlDatabase::CheckoutEntity(DatabaseID dbid, uint16_t type_id, const CheckoutInfo& new_owner,
+                                   std::function<void(GetResult)> callback) {
+  GetResult result;
+  if (!started_ || conn_ == nullptr) {
+    result.error = "mysql backend not started";
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  const auto now = UnixTimeMs();
+  if (auto begin = BeginTxn(); !begin) {
+    result.error = std::string(begin.Error().Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  auto row_result = FetchByDbid(dbid, type_id);
+  if (!row_result) {
+    Rollback();
+    result.error = std::string(row_result.Error().Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  auto row = std::move(*row_result);
+  if (!row.found) {
+    Rollback();
+    result.error = std::format("checkout: entity ({},{}) not found", type_id, dbid);
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  if (row.checked_out_by.has_value()) {
+    Rollback();
+    result.success = true;
+    result.data = std::move(row.data);
+    result.checked_out_by = row.checked_out_by;
+    FireOrDefer([cb = std::move(callback), result = std::move(result)]() mutable {
+      cb(std::move(result));
+    });
+    return;
+  }
+  CheckoutCommit(dbid, type_id, std::move(row), new_owner, now, std::move(callback));
+}
+
+void MysqlDatabase::CheckoutEntityByName(uint16_t type_id, const std::string& identifier,
+                                         const CheckoutInfo& new_owner,
                                          std::function<void(GetResult)> callback) {
   GetResult result;
-  result.error = std::string(kNotImpl);
-  FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+  if (!started_ || conn_ == nullptr) {
+    result.error = "mysql backend not started";
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  const auto now = UnixTimeMs();
+  if (auto begin = BeginTxn(); !begin) {
+    result.error = std::string(begin.Error().Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  auto lookup = FetchByName(type_id, identifier);
+  if (!lookup) {
+    Rollback();
+    result.error = std::string(lookup.Error().Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  auto row = std::move(*lookup);
+  if (!row.found) {
+    Rollback();
+    result.error = std::format("checkout_by_name: '{}' not found", identifier);
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  if (row.checked_out_by.has_value()) {
+    Rollback();
+    result.success = true;
+    result.data = std::move(row.data);
+    result.checked_out_by = row.checked_out_by;
+    FireOrDefer([cb = std::move(callback), result = std::move(result)]() mutable {
+      cb(std::move(result));
+    });
+    return;
+  }
+  const auto resolved_dbid = row.data.dbid;
+  CheckoutCommit(resolved_dbid, type_id, std::move(row), new_owner, now, std::move(callback));
 }
 
-void MysqlDatabase::ClearCheckout(DatabaseID, uint16_t, std::function<void(bool)> callback) {
-  FireOrDefer([cb = std::move(callback)]() mutable { cb(false); });
+void MysqlDatabase::ClearCheckout(DatabaseID dbid, uint16_t type_id,
+                                  std::function<void(bool)> callback) {
+  bool cleared = false;
+  if (started_ && conn_ != nullptr) {
+    auto upd = ExecSql(
+        std::format("UPDATE entities SET checked_out = 0, checkout_ip = 0, checkout_port = 0, "
+                    "checkout_app_id = 0, checkout_eid = 0, updated_at_ms = {} "
+                    "WHERE dbid = {} AND type_id = {} AND checked_out = 1",
+                    UnixTimeMs(), static_cast<uint64_t>(dbid), type_id));
+    if (upd) cleared = mysql_affected_rows(conn_) > 0;
+  }
+  FireOrDefer([cb = std::move(callback), cleared]() mutable { cb(cleared); });
 }
 
-void MysqlDatabase::ClearCheckoutsForAddress(const Address&, std::function<void(int)> callback) {
-  FireOrDefer([cb = std::move(callback)]() mutable { cb(0); });
+void MysqlDatabase::ClearCheckoutsForAddress(const Address& base_addr,
+                                             std::function<void(int)> callback) {
+  int cleared = 0;
+  if (started_ && conn_ != nullptr) {
+    auto upd = ExecSql(
+        std::format("UPDATE entities SET checked_out = 0, checkout_ip = 0, checkout_port = 0, "
+                    "checkout_app_id = 0, checkout_eid = 0, updated_at_ms = {} "
+                    "WHERE checked_out = 1 AND checkout_ip = {} AND checkout_port = {}",
+                    UnixTimeMs(), base_addr.Ip(), base_addr.Port()));
+    if (upd) cleared = static_cast<int>(mysql_affected_rows(conn_));
+  }
+  FireOrDefer([cb = std::move(callback), cleared]() mutable { cb(cleared); });
 }
 
 void MysqlDatabase::GetAutoLoadEntities(std::function<void(std::vector<EntityData>)> callback) {
-  FireOrDefer([cb = std::move(callback)]() mutable { cb({}); });
+  std::vector<EntityData> result;
+  if (started_ && conn_ != nullptr) {
+    static constexpr std::string_view kSql =
+        "SELECT dbid, type_id, `blob`, identifier FROM entities WHERE auto_load = 1 "
+        "ORDER BY type_id, dbid";
+    if (mysql_real_query(conn_, kSql.data(), static_cast<unsigned long>(kSql.size())) == 0) {
+      if (MYSQL_RES* res = mysql_store_result(conn_); res != nullptr) {
+        while (MYSQL_ROW row = mysql_fetch_row(res)) {
+          const unsigned long* len = mysql_fetch_lengths(res);
+          EntityData data;
+          data.dbid = static_cast<DatabaseID>(std::strtoull(row[0], nullptr, 10));
+          data.type_id = static_cast<uint16_t>(std::strtoul(row[1], nullptr, 10));
+          if (row[2] != nullptr && len[2] > 0) {
+            const auto* bytes = reinterpret_cast<const std::byte*>(row[2]);
+            data.blob.assign(bytes, bytes + len[2]);
+          }
+          if (row[3] != nullptr) data.identifier.assign(row[3], len[3]);
+          result.push_back(std::move(data));
+        }
+        mysql_free_result(res);
+      }
+    }
+  }
+  FireOrDefer(
+      [cb = std::move(callback), result = std::move(result)]() mutable { cb(std::move(result)); });
 }
 
-void MysqlDatabase::SetAutoLoad(DatabaseID, uint16_t, bool) {}
+void MysqlDatabase::SetAutoLoad(DatabaseID dbid, uint16_t type_id, bool auto_load) {
+  if (!started_ || conn_ == nullptr) return;
+  (void)ExecSql(std::format(
+      "UPDATE entities SET auto_load = {}, updated_at_ms = {} WHERE dbid = {} AND type_id = {}",
+      auto_load ? 1 : 0, UnixTimeMs(), static_cast<uint64_t>(dbid), type_id));
+}
 
-void MysqlDatabase::GetMaxDbidInRange(DatabaseID, DatabaseID,
+void MysqlDatabase::GetMaxDbidInRange(DatabaseID low, DatabaseID high,
                                       std::function<void(DbidRangeResult)> callback) {
   DbidRangeResult result;
-  result.error = std::string(kNotImpl);
+  if (!started_ || conn_ == nullptr) {
+    result.error = "mysql backend not started";
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  if (high <= low) {
+    result.success = true;
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+
+  auto sql = std::format("SELECT MAX(dbid) FROM entities WHERE dbid >= {} AND dbid < {}",
+                         static_cast<uint64_t>(low), static_cast<uint64_t>(high));
+  if (mysql_real_query(conn_, sql.data(), static_cast<unsigned long>(sql.size())) != 0) {
+    result.error = std::string(MysqlError("MysqlDatabase: max dbid query failed").Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  MYSQL_RES* res = mysql_store_result(conn_);
+  if (res == nullptr) {
+    result.error = std::string(MysqlError("MysqlDatabase: max dbid store_result failed").Message());
+    FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
+    return;
+  }
+  result.success = true;
+  if (MYSQL_ROW row = mysql_fetch_row(res); row != nullptr && row[0] != nullptr) {
+    result.max_dbid = static_cast<DatabaseID>(std::strtoull(row[0], nullptr, 10));
+  }
+  mysql_free_result(res);
   FireOrDefer([cb = std::move(callback), result]() mutable { cb(result); });
 }
 
 void MysqlDatabase::LoadEntityIdCounter(std::function<void(EntityID next_id)> callback) {
-  FireOrDefer([cb = std::move(callback)]() mutable { cb(1); });
+  EntityID next_id = 1;
+  if (started_ && conn_ != nullptr) {
+    static constexpr std::string_view kSql =
+        "SELECT next_id FROM atlas_entity_id_counter WHERE id = 1";
+    if (mysql_real_query(conn_, kSql.data(), static_cast<unsigned long>(kSql.size())) == 0) {
+      if (MYSQL_RES* res = mysql_store_result(conn_); res != nullptr) {
+        if (MYSQL_ROW row = mysql_fetch_row(res); row != nullptr && row[0] != nullptr) {
+          next_id = static_cast<EntityID>(std::strtoull(row[0], nullptr, 10));
+        }
+        mysql_free_result(res);
+      }
+    }
+  }
+  FireOrDefer([cb = std::move(callback), next_id]() { cb(next_id); });
 }
 
-void MysqlDatabase::SaveEntityIdCounter(EntityID, std::function<void(bool success)> callback) {
-  FireOrDefer([cb = std::move(callback)]() mutable { cb(false); });
+void MysqlDatabase::SaveEntityIdCounter(EntityID next_id,
+                                        std::function<void(bool success)> callback) {
+  // The counter row is seeded in EnsureSchema, so a successful UPDATE means it
+  // was applied; MySQL reports 0 changed rows when the value is unchanged, so
+  // affected_rows can't be used as the success signal here.
+  bool ok = false;
+  if (started_ && conn_ != nullptr) {
+    if (ExecSql(std::format("UPDATE atlas_entity_id_counter SET next_id = {} WHERE id = 1",
+                            static_cast<uint64_t>(next_id)))) {
+      ok = true;
+    }
+  }
+  FireOrDefer([cb = std::move(callback), ok]() { cb(ok); });
 }
 
 }  // namespace atlas
