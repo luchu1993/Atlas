@@ -498,6 +498,16 @@ atlas_add_test(NAME test_sqlite_database
   DEPS atlas_db_sqlite atlas_entitydef atlas_platform
 )
 
+# Runs only when the MySQL backend is built; skips itself unless a server is
+# reachable (ATLAS_TEST_MYSQL + connection), so it is inert without one.
+if(ATLAS_DB_MYSQL)
+  atlas_add_test(NAME test_mysql_database
+    SOURCES test_mysql_database.cpp
+    DEPS atlas_db_mysql atlas_entitydef atlas_platform
+  )
+  target_include_directories(test_mysql_database PRIVATE "${ATLAS_MARIADB_INCLUDE_DIR}")
+endif()
+
 atlas_add_test(NAME test_coro_task
   SOURCES test_coro_task.cpp
   DEPS atlas_coro

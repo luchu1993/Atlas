@@ -1,0 +1,82 @@
+name: MySQL Backend
+
+# Validates the atlas_db_mysql backend against a real server. Gated behind
+# ATLAS_DB_MYSQL, so it only runs from this workflow (the default CI leaves the
+# backend off). MariaDB is used as the service: the connector's native auth
+# path keeps the setup simple, and the SQL is portable to MySQL 8.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'src/lib/db_mysql/**'
+      - 'src/lib/db/**'
+      - 'tests/unit/test_mysql_database.cpp'
+      - 'tests/unit/CMakeLists.txt'
+      - 'cmake/Dependencies.cmake'
+      - '.github/workflows/mysql-backend.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/lib/db_mysql/**'
+      - 'src/lib/db/**'
+      - 'tests/unit/test_mysql_database.cpp'
+      - 'cmake/Dependencies.cmake'
+      - '.github/workflows/mysql-backend.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  mysql:
+    name: MariaDB service
+    runs-on: ubuntu-24.04
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: atlas_root
+          MARIADB_DATABASE: atlas_test
+          MARIADB_USER: atlas
+          MARIADB_PASSWORD: atlas
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Install GCC 13 + Ninja + OpenSSL headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-13 ninja-build libssl-dev
+          sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-13 100
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-13 100
+
+      - name: Configure
+        run: cmake --preset debug -DATLAS_DB_MYSQL=ON
+
+      - name: Build MySQL backend test
+        run: cmake --build build/debug --config Debug --target test_mysql_database --parallel 2
+
+      - name: Run MySQL backend contract test
+        working-directory: build/debug
+        env:
+          ATLAS_TEST_MYSQL: '1'
+          ATLAS_TEST_MYSQL_HOST: 127.0.0.1
+          ATLAS_TEST_MYSQL_PORT: '3306'
+          ATLAS_TEST_MYSQL_USER: atlas
+          ATLAS_TEST_MYSQL_PASSWORD: atlas
+          ATLAS_TEST_MYSQL_DATABASE: atlas_test
+        run: ctest --build-config Debug -R test_mysql_database --output-on-failure
