@@ -1,7 +1,7 @@
 # Phase 7: DBApp + 数据库层
 
-**Status:** 🚧 主体已落地（XML / SQLite 后端可用，SQLite 为默认）；
-DBApp 集成补强已覆盖当前主链路；MySQL 后端尚未实现。
+**Status:** ✅ 主体已落地（XML / SQLite / MySQL 后端可用，SQLite 为开发默认，
+MySQL 为正式部署预选）；DBApp 集成补强已覆盖当前主链路。
 **前置依赖:** Phase 5、Phase 6、脚本层 EntityDef 元数据（[`docs/scripting/`](../scripting/)）
 **BigWorld 参考:** `server/dbapp/`, `lib/db_storage/idatabase.hpp`,
 `lib/db_storage_xml/`
@@ -23,7 +23,7 @@ DBApp 集成补强已覆盖当前主链路；MySQL 后端尚未实现。
 | P7.1 | 基线收敛 | ✅ |
 | P7.2 | SQLite backend 落地并切为默认 | ✅ |
 | P7.3 | DBApp 集成补强（登录回滚 / BaseApp 故障路径） | ✅ |
-| P7.4 | MySQL backend 进入正式实现 | ⬜ |
+| P7.4 | MySQL backend 正式实现（MariaDB Connector/C + 线程池 + CI 真机验证） | ✅ |
 
 ## 设计
 
@@ -77,11 +77,20 @@ busy_timeout_ms / foreign_keys`、`db_mysql_*` 系列字段。开发推荐
 `auto_load` 也有回归测试；DBApp watcher 已注册。后续新增数据库行为时
 继续补齐多后端契约一致性验证。
 
-### P7.4 — MySQL backend ⬜
+### P7.4 — MySQL backend ✅
 
-`src/lib/db_mysql/CMakeLists.txt` 仅占位；`ATLAS_DB_MYSQL` 默认 OFF。
-范围：实现完整源码、建表 / 索引 / 事务，对齐 SQLite 的数据模型与语义。
-完成标准：消息面与 SQLite/XML 完全一致，差异只体现在性能 / 运维。
+`atlas_db_mysql` 插件基于 **MariaDB Connector/C**（`FetchContent`，`ATLAS_DB_MYSQL`
+默认 OFF；MySQL 8 与 MariaDB 协议兼容）。数据模型与语义对齐 SQLite：InnoDB
+建表、`X'..'` 十六进制字面量二进制绑定、事务化 checkout（条件 UPDATE +
+affected-rows 竞争检测）、dbid range、id counter。
+
+`deferred` 模式（DBApp 驱动方式）下走**工作线程池**：每 worker 独立连接、按实体
+hash 保序、结果经 `ProcessResults()` 回主线程，DB 往返不阻塞 tick 循环；连接
+`MYSQL_OPT_RECONNECT` 自愈掉线。非 deferred 走 bootstrap 连接内联。`SupportsMultiDbapp()`
+返回 true（事务 checkout 在共享 DB 下安全，为 Phase 15 铺路）。
+
+验证：`test_mysql_database` 契约测试镜像 SQLite 的 9 项断言，`MySQL Backend`
+工作流起 MariaDB 服务容器真机跑通（同步内联与线程池两条路径均覆盖）。
 
 ## 边界
 

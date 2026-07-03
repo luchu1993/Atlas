@@ -13,7 +13,7 @@ Generator + 热重载)已落地,详见
 |---|---|---|---|---|
 | 5 | 服务器框架基类 | ✅ | ServerApp 主循环、消息接口注册、Watcher | [phase05](phase05_server_framework.md) |
 | 6 | machined 进程管理 | ✅ | 服务发现、进程注册、心跳监控、atlas_tool watch/set-watch/shutdown | [phase06](phase06_machined.md) |
-| 7 | DBApp + 数据库层 | 🚧 SQLite 默认 / MySQL ⬜ | IDatabase / SQLite/XML 后端 / DB watcher | [phase07](phase07_dbapp.md) |
+| 7 | DBApp + 数据库层 | ✅ | IDatabase / SQLite·XML·MySQL 后端 / DB watcher；MySQL 线程池 + CI 真机验证 | [phase07](phase07_dbapp.md) |
 | 8 | BaseApp 实体宿主 | ✅ | Base/Proxy 实体、客户端代理、WriteToDB | [phase08](phase08_baseapp.md) |
 | 9 | LoginApp + BaseAppMgr | ✅ | 登录流程、SessionKey、负载分配、端到端延迟观测 | [phase09](phase09_login_flow.md) |
 | 10 | CellApp 空间模拟 | ✅ | Space、RangeList、AOI/Witness、Controller；持续优化在 docs/optimization | [phase10](phase10_cellapp.md) |
