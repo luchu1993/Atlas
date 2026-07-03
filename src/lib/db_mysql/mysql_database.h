@@ -3,6 +3,8 @@
 
 #include <deque>
 #include <functional>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -30,6 +32,11 @@ class MysqlDatabase : public IDatabase {
   void PutEntity(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
                  std::span<const std::byte> blob, const std::string& identifier,
                  std::function<void(PutResult)> callback) override;
+
+  void PutEntityWithPassword(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
+                             std::span<const std::byte> blob, const std::string& identifier,
+                             const std::string& password_hash,
+                             std::function<void(PutResult)> callback) override;
 
   void GetEntity(DatabaseID dbid, uint16_t type_id,
                  std::function<void(GetResult)> callback) override;
@@ -66,10 +73,36 @@ class MysqlDatabase : public IDatabase {
   void ProcessResults() override;
 
  private:
+  struct EntityRow {
+    bool found{false};
+    EntityData data;
+    std::string password_hash;
+    bool auto_load{false};
+    std::optional<CheckoutInfo> checked_out_by;
+  };
+
   [[nodiscard]] auto Connect(const DatabaseConfig& config) -> Result<void>;
   [[nodiscard]] auto EnsureSchema() -> Result<void>;
   [[nodiscard]] auto ExecSql(std::string_view sql) -> Result<void>;
+  [[nodiscard]] auto FetchByDbid(DatabaseID dbid, uint16_t type_id) -> Result<EntityRow>;
+  [[nodiscard]] auto FetchByName(uint16_t type_id, std::string_view identifier)
+      -> Result<EntityRow>;
+  [[nodiscard]] auto QueryRow(std::string_view sql) -> Result<EntityRow>;
+  // row is a MYSQL_ROW (char**); lengths a MYSQL result length array. Typed as
+  // char**/unsigned long* so the header stays free of the connector include.
+  [[nodiscard]] auto ReadRow(char** row, const unsigned long* lengths) const -> EntityRow;
   [[nodiscard]] auto MysqlError(std::string_view prefix) const -> Error;
+  [[nodiscard]] auto ConstraintErrorKind() const -> DatabaseErrorKind;
+  // Binary/identifier values go into SQL as X'..' hex literals: byte-exact and
+  // injection-proof without escaping. Empty identifier maps to NULL.
+  [[nodiscard]] static auto HexLiteral(std::span<const std::byte> data) -> std::string;
+  [[nodiscard]] static auto IdentifierLiteral(std::string_view identifier) -> std::string;
+  // Shared insert/update path; write_password gates the password_hash column so
+  // PutEntity leaves it untouched while PutEntityWithPassword sets it.
+  void PutInternal(DatabaseID dbid, uint16_t type_id, WriteFlags flags,
+                   std::span<const std::byte> blob, const std::string& identifier,
+                   bool write_password, const std::string& password_hash,
+                   std::function<void(PutResult)> callback);
   void FireOrDefer(std::function<void()> cb);
 
   st_mysql* conn_{nullptr};
