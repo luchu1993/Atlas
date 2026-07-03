@@ -209,7 +209,7 @@ atlas_set_output_dir(""
 # DB plugin DLLs share the flat output dir. ARCHIVE (import lib) collides
 # with the static lib of the same name if both land in the same dir, so
 # the plugin's import lib stays under the build tree.
-foreach(_plugin IN ITEMS atlas_db_sqlite_plugin atlas_db_xml_plugin)
+foreach(_plugin IN ITEMS atlas_db_sqlite_plugin atlas_db_xml_plugin atlas_db_mysql_plugin)
   if(TARGET ${_plugin})
     foreach(_cfg IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
       string(TOUPPER "${_cfg}" _CFG)

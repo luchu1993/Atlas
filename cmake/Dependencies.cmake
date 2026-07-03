@@ -230,3 +230,62 @@ if(NOT TARGET sqlite3)
     target_compile_options(sqlite3 PRIVATE -w)
   endif()
 endif()
+
+# ── MariaDB Connector/C 3.4.9 (MySQL backend, gated by ATLAS_DB_MYSQL) ───────
+# LGPL client lib, linked only into the atlas_db_mysql plugin (a shared lib, so
+# the LGPL boundary stays dynamic). Cloned via git for its bundled zlib
+# submodule (GitHub tarballs omit submodules). SSL/curl off for the first cut;
+# TLS + caching_sha2 auth are a later hardening step.
+if(ATLAS_DB_MYSQL)
+  set(WITH_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+  set(CONC_WITH_UNIT_TESTS OFF CACHE BOOL "" FORCE)
+  set(WITH_CURL OFF CACHE BOOL "" FORCE)
+  set(CONC_WITH_MSI OFF CACHE BOOL "" FORCE)
+  # Compile the MySQL auth plugins we need statically into libmariadb (self-
+  # contained client) and drop the MariaDB-specific ones (parsec/ed25519/gssapi)
+  # — parsec also mis-orders the WinSock headers under MSVC. Dynamic plugins
+  # would need install rules FetchContent can't satisfy (empty INSTALL_PLUGINDIR).
+  set(CLIENT_PLUGIN_DIALOG STATIC CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_CACHING_SHA2_PASSWORD STATIC CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_SHA256_PASSWORD STATIC CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_MYSQL_CLEAR_PASSWORD STATIC CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_PVIO_SHMEM STATIC CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_CLIENT_ED25519 OFF CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_PARSEC OFF CACHE STRING "" FORCE)
+  set(CLIENT_PLUGIN_AUTH_GSSAPI_CLIENT OFF CACHE STRING "" FORCE)
+  # TLS is mandatory in the connector: Schannel is built into Windows, OpenSSL
+  # on Unix (libssl-dev on CI). caching_sha2 auth needs it in production anyway.
+  if(WIN32)
+    set(WITH_SSL SCHANNEL CACHE STRING "" FORCE)
+  else()
+    set(WITH_SSL OPENSSL CACHE STRING "" FORCE)
+  endif()
+  # Reuse Atlas's already-built zlib so the connector's bundled copy doesn't
+  # redefine the zlibstatic target.
+  set(WITH_EXTERNAL_ZLIB ON CACHE BOOL "" FORCE)
+  set(ZLIB_FOUND TRUE CACHE BOOL "" FORCE)
+  set(ZLIB_LIBRARY zlibstatic CACHE STRING "" FORCE)
+  set(ZLIB_LIBRARIES zlibstatic CACHE STRING "" FORCE)
+  set(ZLIB_INCLUDE_DIR "${zlib_SOURCE_DIR};${zlib_BINARY_DIR}" CACHE STRING "" FORCE)
+  FetchContent_Declare(
+    mariadb_connector_c
+    GIT_REPOSITORY https://github.com/mariadb-corporation/mariadb-connector-c.git
+    GIT_TAG v3.4.9
+    EXCLUDE_FROM_ALL
+    SYSTEM
+  )
+  FetchContent_MakeAvailable(mariadb_connector_c)
+  # mariadbclient doesn't export its public headers as INTERFACE includes, so
+  # surface them for the atlas_db_mysql backend. mariadb_version.h/ma_config.h
+  # are generated into the build tree, so both dirs are needed.
+  set(ATLAS_MARIADB_INCLUDE_DIR
+      "${mariadb_connector_c_SOURCE_DIR}/include"
+      "${mariadb_connector_c_BINARY_DIR}/include"
+      CACHE INTERNAL "MariaDB Connector/C public headers")
+  # The connector defines these only at top level (guarded by NOT IS_SUBPROJECT),
+  # so as a FetchContent subproject <windows.h> pulls the legacy <winsock.h> and
+  # clashes with winsock2. Re-apply them to the object lib that holds its sources.
+  if(WIN32 AND TARGET mariadb_obj)
+    target_compile_definitions(mariadb_obj PRIVATE WIN32_LEAN_AND_MEAN NOGDI)
+  endif()
+endif()
