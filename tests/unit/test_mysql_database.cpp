@@ -2,10 +2,13 @@
 
 #include <mysql.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -139,6 +142,16 @@ class MysqlDatabaseTest : public ::testing::Test {
     EntityDefRegistry::Instance().clear();
   }
 
+  // Deferred-mode results arrive off the worker pool, so pump ProcessResults
+  // until the callback fires (or the timeout trips).
+  void pump_until(const std::function<bool()>& done, int timeout_ms = 5000) {
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (!done() && std::chrono::steady_clock::now() < deadline) {
+      db_.ProcessResults();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+  }
+
   MysqlDatabase db_;
   DatabaseConfig cfg_;
 };
@@ -245,17 +258,25 @@ TEST_F(MysqlDatabaseTest, AutoLoadAndDeferredCallbacks) {
   db_.SetDeferredMode(true);
 
   PutResult put;
+  bool put_done = false;
   db_.PutEntity(kInvalidDBID, 1, WriteFlags::kCreateNew | WriteFlags::kAutoLoadOn,
-                make_blob("auto"), "carol", [&](PutResult r) { put = std::move(r); });
+                make_blob("auto"), "carol", [&](PutResult r) {
+                  put = std::move(r);
+                  put_done = true;
+                });
 
-  EXPECT_FALSE(put.success);
-  db_.ProcessResults();
+  EXPECT_FALSE(put.success);  // delivered only through ProcessResults
+  pump_until([&] { return put_done; });
   ASSERT_TRUE(put.success) << put.error;
 
   std::vector<EntityData> entities;
-  db_.GetAutoLoadEntities([&](std::vector<EntityData> rows) { entities = std::move(rows); });
+  bool load_done = false;
+  db_.GetAutoLoadEntities([&](std::vector<EntityData> rows) {
+    entities = std::move(rows);
+    load_done = true;
+  });
   EXPECT_TRUE(entities.empty());
-  db_.ProcessResults();
+  pump_until([&] { return load_done; });
   ASSERT_EQ(entities.size(), 1u);
   EXPECT_EQ(entities[0].identifier, "carol");
 }
